@@ -269,7 +269,7 @@ def fetch_child_review_gate_outcome(
     """Forge経由で子Issueのコメントを取得し、OutcomeLookupResultを返す。"""
     try:
         comments = forge.list_comments(issue_number)
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - boundary: report gate lookup failure instead of treating it as approval
         print(
             f"Warning: Failed to fetch comments for child issue #{issue_number}: {error}",
             file=sys.stderr,

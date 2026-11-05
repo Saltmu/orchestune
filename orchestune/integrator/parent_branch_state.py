@@ -63,7 +63,7 @@ def is_current_parent_branch_merged(
         if "404" in detail or "not found" in detail:
             try:
                 branch_still_exists = forge.branch_exists(parent_branch)
-            except Exception as branch_check_error:
+            except Exception as branch_check_error:  # noqa: BLE001 - boundary: report branch lookup failure without assuming the branch is absent
                 print(
                     f"Warning: Failed to verify existence of parent branch "
                     f"'{parent_branch}': {branch_check_error}",

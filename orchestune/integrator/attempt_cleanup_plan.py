@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -81,7 +82,11 @@ class AttemptCleanupPlan:
             return restore_attempt(self._forge, self._trust, self._parent, pr)
         except ForgeAuthError:
             raise
-        except Exception:  # noqa: BLE001 - an unreadable attempt is not cleaned
+        except Exception as error:  # noqa: BLE001 - boundary: unreadable attempt evidence must hold destructive cleanup
+            print(
+                f"Warning: could not restore cleanup state for PR #{pr.number}: {error}",
+                file=sys.stderr,
+            )
             return None
 
     def open_attempts(self) -> list[tuple[PrRecord, OpenAttempt]]:

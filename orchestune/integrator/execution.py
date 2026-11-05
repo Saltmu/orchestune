@@ -48,6 +48,7 @@ from orchestune.integrator.timeout_retry import (
     ESCALATION_MARKER,
     OUTCOME_FAILED,
     OUTCOME_SUCCESS,
+    BudgetReadError,
     BudgetState,
     BudgetVerdict,
     EventWriteUnconfirmed,
@@ -449,7 +450,7 @@ class ExecutionState:
         try:
             with self.scope.cleanup_phase():
                 state = self.store.load()
-        except (Exception, ExecutionInterrupt):
+        except (BudgetReadError, ExecutionInterrupt):
             return 1
         if state.verdict is BudgetVerdict.INDETERMINATE:
             return 1
@@ -491,7 +492,7 @@ class ExecutionState:
             apply_human_review_escalation(
                 self.parent_issue_number, labels, "\n".join(lines), forge=forge
             )
-        except (Exception, ExecutionCommandTimeout, ExecutionDeadlineExceeded) as error:
+        except (Exception, ExecutionCommandTimeout, ExecutionDeadlineExceeded) as error:  # noqa: BLE001 - boundary: report failed human escalation while preserving the execution result
             print(
                 f"Warning: failed to escalate parent #{self.parent_issue_number} to "
                 f"human review: {error}",

@@ -491,7 +491,7 @@ class IntegrationMerger:
             self.rollback_to(captured_pre_merge_sha)
         try:
             handle_failure(task, f"Unexpected error during merge/test: {error}")
-        except Exception as handle_error:
+        except Exception as handle_error:  # noqa: BLE001 - boundary: report failure to record the original task failure
             print(
                 f"Warning: Failed to record failure for {task.subtask_id}: "
                 f"{handle_error}",
@@ -586,7 +586,7 @@ class IntegrationMerger:
             raise self._abort_for_timeout(
                 error, pre_merge_sha, Target(task.issue_number, task.subtask_id)
             ) from error
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - boundary: rollback and record unexpected merge failures as failed tasks
             self._handle_unexpected_merge_error(
                 task, error, pre_merge_sha, apply, progress
             )
@@ -785,7 +785,7 @@ class IntegrationMerger:
             return pre_merge_sha
         try:
             ci_ok, reason, output = self._verify_ci_and_rollback(pre_merge_sha, target)
-        except Exception:
+        except Exception:  # noqa: BLE001 - cleanup: abort merge and restore the pre-merge tree before reraising
             self.abort_merge()
             self.rollback_to(pre_merge_sha)
             raise

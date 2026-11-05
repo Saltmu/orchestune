@@ -227,7 +227,7 @@ def _prepare_final_pr(
                 summaries=summaries,
                 reviewer=reviewer,
             )
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - boundary: report advisory review failure without discarding the prepared PR
             # An advisory failure cannot discard the already prepared final PR.
             print(f"Warning: final acceptance review #{pr}: {error}", file=sys.stderr)
             review = {"status": "failed", "reason": "request_failed"}

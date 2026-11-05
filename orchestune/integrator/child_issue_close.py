@@ -139,7 +139,7 @@ class RetryChildIssueCloseStep(IntegrationComponent):
             return False
         try:
             ctx.forge.close_issue(task.issue_number, "completed", comment=comment)
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - boundary: report child close failure and defer parent completion
             print(
                 f"Warning: Failed to retry closing issue #{task.issue_number}: {error}",
                 file=sys.stderr,
@@ -226,7 +226,7 @@ class RetryChildIssueCloseStep(IntegrationComponent):
     def _label_recovered(ctx: IntegrationContext, task: Task) -> _ReceiptRecovery:
         try:
             ctx.forge.add_label(task.issue_number, "integration:included")
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - boundary: report label recovery failure without claiming recovery
             print(
                 "Warning: Failed to label receipt-recovered issue "
                 f"#{task.issue_number}: {error}",
@@ -243,7 +243,7 @@ class RetryChildIssueCloseStep(IntegrationComponent):
             return ctx.forge.is_merge_commit_reachable_from(
                 proof.source_sha, ctx.base_branch.removeprefix("origin/")
             )
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - boundary: report proof lookup failure and keep the child unverified
             print(
                 "Warning: Failed to validate receipt proof for "
                 f"#{proof.issue_number}: {error}",

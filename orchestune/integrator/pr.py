@@ -64,7 +64,7 @@ def ensure_integration_pr(
         return forge.create_pull_request(
             head=temp_branch, base=base, title=title, body=body
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - boundary: report PR creation failure to the integration step
         print(f"Warning: Failed to ensure integration PR: {e}", file=sys.stderr)
         return None
 
@@ -113,7 +113,7 @@ def _update_reused_integration_pr(
 ) -> None:
     try:
         forge.update_pull_request(number, title=title, body=body)
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - boundary: report update failure while retaining the existing PR
         print(
             f"Warning: Failed to update integration PR #{number}: {error}",
             file=sys.stderr,
@@ -137,7 +137,7 @@ def _migrate_legacy_parent_final_pr(
         return False
     try:
         forge.update_pull_request(pr.number, title=pr.title, body=migrated_body)
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - boundary: raise the migration-specific failure after reporting it
         print(
             f"Error: Failed to migrate legacy final PR #{pr.number}; it still "
             f"contains an active parent closing reference: {error}",
@@ -219,7 +219,7 @@ def ensure_parent_final_pr(
         )
     except ParentFinalPrMigrationError:
         raise
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - boundary: report final PR creation failure to the caller
         print(f"Warning: Failed to ensure parent final PR: {e}", file=sys.stderr)
         return None
 
@@ -273,7 +273,7 @@ def mark_parent_final_pr_pending(
                 body,
             )
         return existing.number
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - boundary: report pending-marker failure for a later retry
         print(
             f"Warning: Failed to mark the parent final PR of "
             f"#{parent_issue_number} as pending: {e}",
@@ -295,7 +295,7 @@ def _final_pr_summaries(
     if children is None:
         try:
             children = find_children_by_parent(forge, parent_issue_number).issues
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - boundary: report summary lookup failure and defer final PR rendering
             print(
                 f"Warning: Failed to discover children of #{parent_issue_number} "
                 f"while building the final integration PR body: {error}",

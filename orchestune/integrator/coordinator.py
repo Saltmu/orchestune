@@ -287,7 +287,7 @@ def _get_pending_review_labels(
 ) -> tuple[str, ...] | None:
     try:
         return forge.get_issue_labels(issue_number)
-    except Exception as error:  # noqa: BLE001 - transient forge failure
+    except Exception as error:  # noqa: BLE001 - boundary: report transient forge failure and retry pending review later
         print(
             f"Warning: failed to poll labels for issue {issue_number}: {error}",
             file=sys.stderr,
@@ -325,7 +325,7 @@ def _finalize_pending_review(
                 on_label_applied=lambda: consumed.add(entry.issue_number),
             )
             timed_out.append(entry.issue_number)
-    except Exception as error:  # noqa: BLE001 - leave entry pending for retry
+    except Exception as error:  # noqa: BLE001 - boundary: leave the pending entry intact when finalization fails
         print(
             f"Warning: failed to finalize not-needed review for issue "
             f"{entry.issue_number}: {error}",

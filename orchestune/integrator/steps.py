@@ -102,7 +102,7 @@ def _retry_file_lock(lock_path, attempts: int = 3) -> Iterator[None]:
 
     try:
         yield
-    except BaseException as error:
+    except BaseException as error:  # noqa: BLE001 - cleanup: must release the shared file lock on BaseException before reraising
         lock.__exit__(type(error), error, error.__traceback__)
         raise
     else:
@@ -163,7 +163,7 @@ class PrepareTasksStep(IntegrationComponent):
                     raise ctx.execution.timeout_abort(
                         error, "PrepareTasksStep", write_step=True, before_start=False
                     ) from error
-                except Exception as error:
+                except Exception as error:  # noqa: BLE001 - boundary: report malformed child metadata and exclude it from merging
                     print(
                         "Warning: Failed to comment on unparsable done issue "
                         f"#{task.issue_number}: {error}",
@@ -261,7 +261,7 @@ class MergeAndTestStep(IntegrationComponent):
             if report["status"] == IntegrationStatus.SUCCESS and ctx.config.apply:
                 set_new_attempt_identity(ctx)
             return report
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - boundary: turn preparation failure into a visible integration report
             return {
                 "status": IntegrationStatus.FAILURE,
                 "error": f"Error during merge and test: {error}",
@@ -383,7 +383,7 @@ class EnsureIntegrationPrStep(IntegrationComponent):
                 "status": IntegrationStatus.SUCCESS,
                 "integration_pr_number": pr_number,
             }
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - boundary: turn preparation failure into a visible integration report
             print(f"Warning: failed to ensure integration PR: {error}", file=sys.stderr)
             return {"status": IntegrationStatus.SUCCESS, "integration_pr_number": None}
 
@@ -566,7 +566,7 @@ def clear_parent_branch_stale_marker(ctx: IntegrationContext) -> None:
                 ctx.config.parent_issue_number, _PARENT_BRANCH_STALE_LABEL
             )
             return
-        except Exception as label_error:
+        except Exception as label_error:  # noqa: BLE001 - boundary: retain the last failure and report stale-marker cleanup errors
             last_error = label_error
             if attempt + 1 < _CLEAR_STALE_MARKER_ATTEMPTS:
                 time.sleep(0.05 * (attempt + 1))
@@ -654,7 +654,7 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                         if label in current_labels
                     ),
                 )
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 - boundary: report label restoration failure for operator recovery
                 print(
                     f"Warning: Failed to restore status:blocked-human-review on parent issue #{parent_issue_number}: {error}",
                     file=sys.stderr,
@@ -670,7 +670,7 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
             has_matching_comment = has_matching_review_gate_comment(
                 parent_comments, decision.digest
             )
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - boundary: report review-gate side-effect failures without marking work complete
             print(
                 f"Warning: Failed to list comments on parent issue #{parent_issue_number} "
                 f"while checking review gate idempotency: {error}",
@@ -680,7 +680,7 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
         current_labels: tuple[str, ...] = ()
         try:
             current_labels = ctx.forge.get_issue_labels(parent_issue_number)
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - boundary: report review-gate side-effect failures without marking work complete
             print(
                 f"Warning: Failed to get labels for parent issue #{parent_issue_number}: {error}",
                 file=sys.stderr,
@@ -700,7 +700,7 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                 comment=comment,
                 forge=ctx.forge,
             )
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - boundary: report review-gate side-effect failures without marking work complete
             print(
                 f"Warning: Failed to escalate parent issue #{parent_issue_number} "
                 f"to status:blocked-human-review: {error}",
@@ -811,7 +811,7 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
         try:
             if ctx.forge.branch_exists(ctx.temp_branch):
                 ctx.forge.delete_branch(ctx.temp_branch)
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - boundary: report temp-branch deletion failure and keep the cleanup pending
             print(
                 f"Warning: Failed to delete remote branch '{ctx.temp_branch}': {error}",
                 file=sys.stderr,
@@ -836,7 +836,7 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                     receipt.fetched_commit_oid, base_branch_name
                 ):
                     return False
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 - boundary: report verification failure instead of accepting unverified integration
                 print(
                     "Warning: Failed to verify whether fetched commit "
                     f"{receipt.fetched_commit_oid} was already integrated into "
@@ -867,7 +867,7 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                         "人間による確認が必要です。"
                     ),
                 )
-            except Exception as comment_error:
+            except Exception as comment_error:  # noqa: BLE001 - boundary: report a failed diagnostic comment without masking merge failure
                 print(
                     "Warning: Failed to comment on merge failure for issue "
                     f"#{task.issue_number}: {comment_error}",
@@ -929,7 +929,7 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                     ),
                     forge=ctx.forge,
                 )
-            except Exception as escalation_error:
+            except Exception as escalation_error:  # noqa: BLE001 - boundary: preserve the stale-parent hold if escalation cannot be confirmed
                 all_escalations_succeeded = False
                 print(
                     "Warning: Failed to escalate issue "
@@ -955,7 +955,7 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                     f"第三者による先行pushのためnon-fast-forwardで拒否されました（{error}）。親ブランチへの部分マージは残っていません。次回のディスパッチサイクルで自動的に再試行されます。"
                 ),
             )
-        except Exception as comment_error:
+        except Exception as comment_error:  # noqa: BLE001 - boundary: report failed stale-parent notice delivery
             print(
                 f"Warning: Failed to comment on merge failure for parent issue #{ctx.config.parent_issue_number}: {comment_error}",
                 file=sys.stderr,
@@ -968,7 +968,7 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
             return _PARENT_BRANCH_STALE_LABEL in ctx.forge.get_issue_labels(
                 parent_issue_number
             )
-        except Exception as label_error:
+        except Exception as label_error:  # noqa: BLE001 - boundary: treat failed status lookup as unknown, not as a current branch
             print(
                 f"Warning: Failed to read labels for parent issue #{ctx.config.parent_issue_number}: {label_error}",
                 file=sys.stderr,
@@ -980,14 +980,14 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
         parent_issue_number = ctx.config.parent_issue_number
         try:
             ctx.forge.ensure_labels((_PARENT_BRANCH_STALE_LABEL_SPEC,))
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - boundary: report each status or notice write failure for recovery
             print(
                 f"Warning: Failed to ensure parent-branch-stale label exists: {error}",
                 file=sys.stderr,
             )
         try:
             ctx.forge.add_label(parent_issue_number, _PARENT_BRANCH_STALE_LABEL)
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - boundary: report each status or notice write failure for recovery
             print(
                 f"Warning: Failed to mark parent issue #{ctx.config.parent_issue_number} as parent-branch-stale: {error}",
                 file=sys.stderr,
@@ -1022,7 +1022,7 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
             try:
                 ctx.forge.close_issue(task.issue_number, "completed", comment=comment)
                 closed_issues.append(task.issue_number)
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 - boundary: report child close failure while retaining integration evidence
                 print(
                     f"Warning: Failed to close issue #{task.issue_number} after auto-merge: {error}",
                     file=sys.stderr,
