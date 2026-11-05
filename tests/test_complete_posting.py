@@ -136,6 +136,54 @@ class TestPostIssueOutcome:
         assert result.comment_id == "15"
         assert result.reused is True
 
+    @pytest.mark.parametrize(
+        "error",
+        [
+            subprocess.TimeoutExpired(["gh", "api"], timeout=30),
+            ValueError("GitHub did not return an Issue comment object"),
+        ],
+    )
+    def test_timeout_or_invalid_post_response_rechecks_for_accepted_comment(
+        self, error
+    ) -> None:
+        from orchestune.complete.posting import PostingRequest, post_issue_outcome
+
+        matching = {
+            "id": 16,
+            "html_url": "https://example.test/comments/16",
+            "body": _record().render(),
+        }
+        forge = SimpleNamespace(
+            list_all_issue_comments=Mock(side_effect=[[], [matching]]),
+            create_issue_comment=Mock(side_effect=error),
+        )
+
+        result = post_issue_outcome(
+            PostingRequest(issue_number=1003, outcome_record=_record()), forge=forge
+        )
+
+        assert result.comment_id == "16"
+        assert result.reused is True
+
+    def test_execution_scope_timeout_signal_is_not_caught_for_readback(self) -> None:
+        from orchestune.complete.posting import PostingRequest, post_issue_outcome
+        from orchestune.infra.execution_deadline import ExecutionCommandTimeout
+
+        forge = SimpleNamespace(
+            list_all_issue_comments=Mock(return_value=[]),
+            create_issue_comment=Mock(
+                side_effect=ExecutionCommandTimeout("gh api", 30, "normal")
+            ),
+        )
+
+        with pytest.raises(ExecutionCommandTimeout):
+            post_issue_outcome(
+                PostingRequest(issue_number=1003, outcome_record=_record()),
+                forge=forge,
+            )
+
+        forge.list_all_issue_comments.assert_called_once_with(1003)
+
     def test_unknown_lookup_never_posts_blindly(self) -> None:
         from orchestune.complete.posting import (
             OutcomeLookupUnknownError,

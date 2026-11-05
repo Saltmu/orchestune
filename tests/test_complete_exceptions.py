@@ -2,6 +2,7 @@
 
 import logging
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
@@ -86,6 +87,25 @@ def test_follow_up_lookup_does_not_swallow_unexpected_forge_runtime_error():
 
     with pytest.raises(RuntimeError, match="adapter bug"):
         _FollowUps(BrokenForge(), frozenset())._lookup(2)
+
+
+def test_follow_up_response_validation_failure_does_not_hide_later_valid_issue():
+    from orchestune.complete.review_evidence import _FollowUps
+
+    class Forge:
+        def __init__(self):
+            self.lookups = []
+
+        def get_issue_reference(self, number):
+            self.lookups.append(number)
+            if number == 2:
+                raise ValueError("unusable Issue payload")
+            return SimpleNamespace(is_pull_request=False, state="OPEN")
+
+    forge = Forge()
+    _FollowUps(forge, frozenset()).verify("follow-up #2 and #3")
+
+    assert forge.lookups == [2, 3]
 
 
 def test_unexpected_completion_failure_is_logged_and_returned(monkeypatch, caplog):

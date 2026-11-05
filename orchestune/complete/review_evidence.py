@@ -190,17 +190,34 @@ class _FollowUps:
     own_numbers: frozenset[int]
     cache: dict[
         int,
-        IssueReference | None | ForgeError | OSError | subprocess.CalledProcessError,
+        IssueReference
+        | None
+        | ForgeError
+        | OSError
+        | ValueError
+        | subprocess.CalledProcessError,
     ] = field(default_factory=dict)
     slug: str | None = None
 
     def _lookup(
         self, number: int
-    ) -> IssueReference | None | ForgeError | OSError | subprocess.CalledProcessError:
+    ) -> (
+        IssueReference
+        | None
+        | ForgeError
+        | OSError
+        | ValueError
+        | subprocess.CalledProcessError
+    ):
         if number not in self.cache:
             try:
                 self.cache[number] = self.forge.get_issue_reference(number)
-            except (ForgeError, OSError, subprocess.CalledProcessError) as error:
+            except (
+                ForgeError,
+                OSError,
+                ValueError,
+                subprocess.CalledProcessError,
+            ) as error:
                 self.cache[number] = error
         return self.cache[number]
 
@@ -223,7 +240,9 @@ class _FollowUps:
         unknown = False
         for number in sorted(candidates - self.own_numbers):
             found = self._lookup(number)
-            if isinstance(found, ForgeError | OSError | subprocess.CalledProcessError):
+            if isinstance(
+                found, ForgeError | OSError | ValueError | subprocess.CalledProcessError
+            ):
                 unknown = True
             elif (
                 found is not None

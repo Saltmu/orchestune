@@ -128,6 +128,8 @@ def post_issue_outcome(
         ForgeError,
         OSError,
         subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        ValueError,
         OutcomePostingError,
     ) as post_error:
         try:
