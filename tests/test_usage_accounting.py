@@ -205,6 +205,19 @@ class TestDispatchTargetCollectUsage:
         target = LocalProcessDispatchTarget(log_dir=log_dir)
         assert target.collect_usage(DispatchHandle(branch_name="invalid-json")) is None
 
+    def test_local_process_collect_usage_returns_none_when_token_value_overflows(
+        self, tmp_path
+    ):
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir(parents=True)
+        (log_dir / "overflow.log").write_text(
+            '{"usage":{"input_tokens":1e999,"output_tokens":10}}\n',
+            encoding="utf-8",
+        )
+
+        target = LocalProcessDispatchTarget(log_dir=log_dir)
+        assert target.collect_usage(DispatchHandle(branch_name="overflow")) is None
+
 
 class TestDispatchStateUsagePersistence:
     def test_save_and_load_roundtrip_with_usage(self, tmp_path):

@@ -46,7 +46,7 @@ def _extract_usage_from_dict(data: Any) -> Usage | None:
             model=model,
             cost_usd=cost_usd,
         )
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
