@@ -9,7 +9,7 @@ from orchestune.complete.contracts import (
     CompletionLabelStatus,
     CompletionLabelTransitionResult,
 )
-from orchestune.forge import Forge
+from orchestune.forge import Forge, ForgeError
 from orchestune.labels import StatusLabel
 from orchestune.ledger.status_labels import PRIMARY_STATUS_LABELS
 
@@ -48,7 +48,7 @@ def _completion_observe(
     try:
         labels = tuple(forge.get_issue_labels(issue_number))
         current = generation_matches()
-    except Exception:
+    except (ForgeError, OSError, ValueError):
         return _completion_result(
             CompletionLabelStatus.UNKNOWN, target, operation="get"
         )
@@ -77,7 +77,9 @@ def _completion_mutate(
             forge.add_label(issue_number, label)
         else:
             forge.remove_label(issue_number, label)
-    except Exception:
+    # An expected Forge write failure is observed by read-back; see
+    # test_status_mutation_forge_error_is_observed_by_readback.
+    except (ForgeError, OSError):
         pass
     return _completion_observe(forge, issue_number, target, generation_matches)
 

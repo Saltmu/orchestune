@@ -65,7 +65,7 @@ def evaluate_publication_policy(
             "usage": asdict(usage) if isinstance(usage, Usage) else None,
             "config": snapshot,
         }
-    except Exception as error:
+    except (KeyError, OSError, TypeError, ValueError) as error:
         return {
             "decision": "unknown",
             "error": str(error),

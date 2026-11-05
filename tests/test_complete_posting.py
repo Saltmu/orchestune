@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from orchestune.forge import ForgeError
 from orchestune.outcome_record import OutcomeRecord
 
 
@@ -77,7 +78,7 @@ class TestPostIssueOutcome:
         forge = SimpleNamespace(
             list_all_issue_comments=Mock(side_effect=[[], [matching]]),
             create_issue_comment=Mock(
-                side_effect=RuntimeError("connection dropped after POST")
+                side_effect=ForgeError("connection dropped after POST")
             ),
         )
 
@@ -98,7 +99,7 @@ class TestPostIssueOutcome:
         )
 
         forge = SimpleNamespace(
-            list_all_issue_comments=Mock(side_effect=RuntimeError("GitHub unavailable"))
+            list_all_issue_comments=Mock(side_effect=ForgeError("GitHub unavailable"))
         )
 
         with pytest.raises(OutcomeLookupUnknownError):

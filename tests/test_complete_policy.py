@@ -110,7 +110,7 @@ def test_missing_completion_record_raises_at_entry(tmp_path):
         evaluate_publication_policy(_FlatOnly(), tmp_path, None)
 
 
-def test_missing_core_or_launch_during_usage_is_unknown_with_error(tmp_path):
+def test_missing_core_or_launch_during_usage_propagates_attribute_error(tmp_path):
     from types import SimpleNamespace
 
     from orchestune.complete.policy import evaluate_publication_policy
@@ -127,8 +127,8 @@ def test_missing_core_or_launch_during_usage_is_unknown_with_error(tmp_path):
         pid=None,
         issue_number=1,
     )
-    verdict = evaluate_publication_policy(active, tmp_path, None)
-    assert verdict["decision"] == "unknown" and verdict["error"]
+    with pytest.raises(AttributeError):
+        evaluate_publication_policy(active, tmp_path, None)
 
 
 @pytest.mark.parametrize("decision", ["unknown", "exceeded"])

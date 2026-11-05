@@ -27,6 +27,7 @@ from orchestune.complete.not_needed_review_guard import (
 from orchestune.complete.posting import PostingRequest, post_issue_outcome
 from orchestune.complete.replay import result_from_record
 from orchestune.complete.status_labels import transition_completion_status_label
+from orchestune.forge import ForgeError
 from orchestune.infra.process_utils import assert_run_state_lock_held
 from orchestune.labels import StatusLabel
 from orchestune.ledger.completion_records import CompletionReservation
@@ -120,7 +121,7 @@ def _confirm_labels(
 def _publication_labels(context: PublicationContext, issue: int) -> tuple[str, ...]:
     try:
         return tuple(context.forge.get_issue_labels(issue))
-    except Exception as error:
+    except (ForgeError, OSError) as error:
         raise CompletionJournalError(
             CompleteFailureReason.LABEL_STATE_UNKNOWN,
             "Issue labels are unavailable before publication",
@@ -146,7 +147,7 @@ def _ensure_review_hold(
         ):
             try:
                 ensure_review_pending(context.forge, record.issue_number)
-            except Exception as error:
+            except (ForgeError, OSError) as error:
                 raise CompletionJournalError(
                     CompleteFailureReason.LABEL_STATE_UNKNOWN,
                     "Review hold is unavailable before publication",

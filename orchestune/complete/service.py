@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -49,7 +50,7 @@ from orchestune.complete.publication import (
 from orchestune.complete.replay import find_replay
 from orchestune.complete.review_evidence import verify_review_evidence
 from orchestune.complete.unclaimed import complete_unclaimed, validate_unclaimed
-from orchestune.forge import GitHubForge
+from orchestune.forge import ForgeError, GitHubForge
 from orchestune.infra.git_cli import run_git
 from orchestune.labels import StatusLabel
 from orchestune.ledger.active_codec import encode_active_worktree
@@ -59,6 +60,8 @@ from orchestune.ledger.completion_records import (
 )
 from orchestune.ledger.run_state import load_run_state_readonly
 from orchestune.outcome_record import ReviewSummary
+
+logger = logging.getLogger(__name__)
 
 
 def _failure(
@@ -229,7 +232,7 @@ def _initial_issue_evidence(forge: Any, issue: int) -> dict[str, Any]:
             "labels": list(forge.get_issue_labels(issue)),
             "state": forge.get_issue_state(issue),
         }
-    except Exception as error:
+    except (ForgeError, OSError) as error:
         raise CompletionJournalError(
             CompleteFailureReason.EVIDENCE_MISSING,
             "Initial Issue evidence is unavailable",
@@ -666,7 +669,8 @@ def complete_task(
     except OutcomePostingError as error:
         message = str(error)
         reason = CompleteFailureReason.FORGE_POST_FAILED
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 boundary: complete_task returns a failure result
+        logger.exception("Unexpected completion failure")
         message = str(error)
         reason = CompleteFailureReason.INVALID_COMPLETION_STATE
     return _failure(

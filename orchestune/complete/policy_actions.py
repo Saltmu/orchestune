@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from orchestune.complete.posting import OutcomeLookupUnknownError
+from orchestune.forge import ForgeError
 from orchestune.labels import StatusLabel
 from orchestune.ledger.escalation import apply_human_review_escalation
 
@@ -22,7 +23,7 @@ class _EscalationForge:
             return
         try:
             self.forge.create_issue_comment(issue, body)
-        except Exception as error:
+        except (ForgeError, OSError) as error:
             comments = self.forge.list_all_issue_comments(issue)
             if not any(comment.get("body") == body for comment in comments):
                 raise OutcomeLookupUnknownError(
