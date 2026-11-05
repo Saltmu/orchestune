@@ -137,7 +137,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         # automation can tell "bad config" apart from other failures below.
         print(f"Error: {error}", file=sys.stderr)
         raise SystemExit(2) from error
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - boundary: convert unexpected DAG input/setup errors to a CLI exit
         print(f"Error: {error}", file=sys.stderr)
         raise SystemExit(1) from error
 
@@ -153,7 +153,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             make_output(machine=True).payload(json.dumps(dag, indent=2))
         else:
             _print_text_result(dag, make_output())
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - boundary: render unexpected DAG execution errors at the CLI edge
         print(f"Error: {error}", file=sys.stderr)
         raise SystemExit(1) from error
     raise SystemExit(0)

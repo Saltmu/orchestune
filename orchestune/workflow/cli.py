@@ -70,7 +70,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.command == "next"
             else check_gate(context, args.gate, stages=stages)
         )
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - boundary: report unexpected workflow command failures at the CLI edge
         print(f"workflow {args.command} failed: {error}", file=sys.stderr)
         return 1
     if args.json:

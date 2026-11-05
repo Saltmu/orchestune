@@ -116,7 +116,7 @@ def _fetch_labels_cached(
     forge = forge or GitHubForge()
     try:
         labels = forge.get_issue_labels(issue_number)
-    except Exception:
+    except Exception:  # noqa: BLE001 - boundary: unavailable status evidence is represented as unknown
         return cached[1] if cached is not None else None
 
     cache[issue_number] = (now, labels)

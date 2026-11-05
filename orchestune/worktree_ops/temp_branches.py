@@ -68,7 +68,7 @@ def _list_remote_temp_refs(root: Path, forge: Forge) -> tuple[str, set[str]] | N
         )
         protected_heads = {pr.head_ref for pr in forge.list_open_prs()}
         return refs.stdout, protected_heads
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - boundary: remote-ref enumeration failure prevents unsafe branch reclamation
         print(
             f"Warning: Failed to enumerate stale integration temp branches: {error}",
             file=sys.stderr,
@@ -126,7 +126,7 @@ def prune_stale_integration_temp_branches(
         try:
             forge.delete_branch(branch)
             deleted.append(branch)
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - boundary: report one failed deletion and continue processing other stale branches
             print(
                 f"Warning: Failed to delete stale integration branch '{branch}': {error}",
                 file=sys.stderr,

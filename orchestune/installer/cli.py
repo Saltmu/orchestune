@@ -200,7 +200,7 @@ def _execute_root_operation(
             error=str(e),
         )
         return res, e.exit_code
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - boundary: render unexpected installer operation failures as the existing result
         _report_error(f"Unexpected error at {root.path}: {e}")
         res = OperationResult(
             physical_root=root.path,

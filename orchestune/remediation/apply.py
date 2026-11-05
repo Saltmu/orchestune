@@ -333,13 +333,13 @@ def apply_remediation(
         )
     except _Rejected as exc:
         return RemediationResult(exc.code, str(exc))
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - boundary: convert unexpected preflight failures into the existing result contract
         return RemediationResult(2, str(exc))
     numbers: dict[str, int] = {}
     try:
         _register_children(forge, snapshot, preview, bodies, path, numbers)
         _finish(forge, spec, snapshot, numbers, raw, path, template=template)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - boundary: report partial remote registration without losing created Issue numbers
         return RemediationResult(
             4,
             f"Partial registration: {exc}. Run preview again and resume with its new token",

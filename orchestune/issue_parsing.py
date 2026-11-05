@@ -663,12 +663,7 @@ def ensure_parent_marker(body: str) -> str:
 def _body_depends_on(data: dict[str, Any] | None) -> tuple[str, ...]:
     if not data:
         return ()
-    try:
-        if isinstance(data, dict):
-            return tuple(str(d) for d in (data.get("depends_on") or []))
-    except Exception:
-        pass
-    return ()
+    return tuple(str(d) for d in (data.get("depends_on") or []))
 
 
 _EXECUTION_PROFILE_PATTERN = re.compile(r"^[a-z0-9_-]{1,32}$")

@@ -207,7 +207,7 @@ def _with_progress_diagnostic(
 ) -> tuple[int, bool, bool, bool]:
     try:
         return operation()
-    except Exception:
+    except Exception:  # noqa: BLE001 - boundary: report progress for a failed subtask operation, then preserve the original exception
         _notify(on_progress, ProvisionProgress("stopped"))
         print(
             f"Provision stopped: created={created}, reused={reused}, "

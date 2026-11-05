@@ -74,5 +74,5 @@ def merged_pr_problem(
         return "merge_unverified"
     try:
         return None if reachable(pr.merge_commit_oid, base) else "merge_unverified"
-    except Exception:
+    except Exception:  # noqa: BLE001 - boundary: failed reachability evidence must remain unverified
         return "merge_unverified"

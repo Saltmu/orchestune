@@ -84,7 +84,7 @@ def _lookup_issue_outcome(
         return OutcomeLookupResult(state=OutcomeLookupState.UNKNOWN)
     try:
         comments = forge.list_comments(issue_number)
-    except Exception:
+    except Exception:  # noqa: BLE001 - boundary: comment retrieval failure remains UNKNOWN rather than ABSENT
         return OutcomeLookupResult(state=OutcomeLookupState.UNKNOWN)
     record = parse_from_comments(comments, since=since)
     if record is None:
@@ -115,7 +115,7 @@ def task_pr_completion_status(
     forge = forge or GitHubForge()
     try:
         prs = forge.list_prs(state="all")
-    except Exception:
+    except Exception:  # noqa: BLE001 - boundary: PR listing failure leaves completion status unknown
         return "unknown"
     matching_prs = [
         pr

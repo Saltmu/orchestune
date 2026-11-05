@@ -47,7 +47,7 @@ class TrustContext:
         if not self._self_identity_resolved:
             try:
                 self._self_identity = self._forge.get_authenticated_user()
-            except Exception:
+            except Exception:  # noqa: BLE001 - boundary: identity lookup failure remains unresolved and fail-closed
                 self._self_identity = None
             self._self_identity_resolved = True
         return self._self_identity
@@ -58,7 +58,7 @@ class TrustContext:
             self._collaborators_attempted = True
             try:
                 self._collaborators = self._forge.list_notice_trusted_authors()
-            except Exception:
+            except Exception:  # noqa: BLE001 - boundary: collaborator lookup failure remains unresolved and fail-closed
                 self._collaborators = None
         return self._collaborators
 

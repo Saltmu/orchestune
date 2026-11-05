@@ -89,7 +89,7 @@ def load_manifest(skills_root: Path) -> InstallerManifest | None:
         return InstallerManifest.from_dict(data)
     except ManifestError:
         raise
-    except Exception as e:
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as e:
         raise ManifestError(f"Corrupted manifest at {manifest_path}: {e}") from e
 
 

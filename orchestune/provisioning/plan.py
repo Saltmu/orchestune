@@ -138,7 +138,7 @@ def sync_parent_decomposition_plan(
         if updated_body != parent_issue.body:
             forge.update_issue_body(parent_issue_number, updated_body)
         return True
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - boundary: plan synchronization failure is reported and returned to the caller
         print(
             f"Warning: could not sync decomposition plan into #{parent_issue_number}'s body: {error}",
             file=sys.stderr,

@@ -61,11 +61,11 @@ def compile_extra_ignore_patterns(
     # and ~500+ nested groups raise `RecursionError` (Codex review, #441).
     # `re.compile` is the only operation here, so any failure compiling
     # user-supplied config data is a config problem, not an internal bug —
-    # catch broadly rather than chase the compiler's exception types one by
-    # one.
+    # The regex compiler exposes implementation-specific exception types, so
+    # this boundary translates any compile failure into a config diagnostic.
     try:
         return tuple(re.compile(pattern) for pattern in patterns)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - boundary: convert regex compiler failures into ConfigError
         raise config_contracts.ConfigError(
             f"invalid 'dag_ignore_patterns' regex: {e}"
         ) from e

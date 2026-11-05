@@ -43,7 +43,7 @@ def probe_canonical_state(
             if lookup(canonical_branch)
             else CanonicalBranchState.ABSENT
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 - boundary: failed branch lookup is indeterminate, never absent
         return CanonicalBranchState.INDETERMINATE
 
 

@@ -172,7 +172,7 @@ def _already_notified(
     try:
         comments = forge.list_all_issue_comments(issue_number)
         return has_notice(comments, kind, pr_number, trust=trust)
-    except Exception as error:  # noqa: BLE001 - 通知はベストエフォート
+    except Exception as error:  # noqa: BLE001 - boundary: notice lookup failure is reported and prevents duplicate posting
         print(
             f"Warning: Failed to read comments on issue #{issue_number} while "
             f"checking the {kind} PR link notice for PR #{pr_number}: {error}",
@@ -198,7 +198,7 @@ def notify_pr_created(
         forge.create_issue_comment(
             issue_number, render_created_notice(pr_number, base_branch)
         )
-    except Exception as error:  # noqa: BLE001 - 通知はベストエフォート
+    except Exception as error:  # noqa: BLE001 - boundary: notice write failure is reported for later retry
         print(
             f"Warning: Failed to post the created PR link notice for PR "
             f"#{pr_number} on issue #{issue_number}: {error}",
@@ -225,7 +225,7 @@ def ensure_pr_merged_notice(
     ctx = trust or TrustContext(forge)
     try:
         comments = forge.list_all_issue_comments(issue_number)
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - boundary: notice lookup failures defer closure and are reported
         print(
             f"Warning: Failed to read comments on issue #{issue_number} while "
             f"checking the merged PR link notice for PR #{pr_number}: {error}",
@@ -249,7 +249,7 @@ def ensure_pr_merged_notice(
         forge.create_issue_comment(
             issue_number, render_merged_notice(pr_number, base_branch)
         )
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - boundary: notice write failures defer closure and are reported
         print(
             f"Warning: Failed to post the merged PR link notice for PR "
             f"#{pr_number} on issue #{issue_number}: {error}",

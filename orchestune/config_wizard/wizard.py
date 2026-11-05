@@ -205,7 +205,7 @@ def run_config_wizard(
     """Run the interactive configuration wizard."""
     try:
         doc = ConfigDocument.load(project_dir, mode=mode)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - boundary: display the load failure before preserving its original exception
         prompt.display_message(f"設定の読み込みに失敗しました: {exc}")
         raise
 

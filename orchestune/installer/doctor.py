@@ -5,7 +5,7 @@ import shutil
 import subprocess
 import sys
 
-from orchestune.installer.contracts import DiagnosticItem, PhysicalRoot
+from orchestune.installer.contracts import DiagnosticItem, ManifestError, PhysicalRoot
 from orchestune.installer.state import (
     TRANSACTIONS_DIR,
     get_installer_dir,
@@ -107,7 +107,7 @@ def _check_github_auth(gh_path: str | None, offline: bool) -> DiagnosticItem:
             status="warning",
             message="GitHub CLI authentication check timed out after 5.0 seconds",
         )
-    except Exception as e:
+    except OSError as e:
         return DiagnosticItem(
             check_name="github_auth",
             status="warning",
@@ -154,7 +154,7 @@ def _check_physical_root(root: PhysicalRoot) -> list[DiagnosticItem]:
                     message=f"Valid manifest found at {root.path} (generation {manifest.generation})",
                 )
             )
-    except Exception as e:
+    except ManifestError as e:
         items.append(
             DiagnosticItem(
                 check_name=f"root_manifest_{root.path.name}",

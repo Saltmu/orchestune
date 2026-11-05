@@ -220,7 +220,7 @@ def policy(value: t.Any):
     assert not typing_escape_names('MARKER = "typing.Any and t.cast"')
 
 
-def test_ruff_enables_slf001_and_package_scoped_ble_ignores() -> None:
+def test_ruff_enables_slf001_without_package_scoped_ble_ignores() -> None:
     config = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     lint = config["tool"]["ruff"]["lint"]
     ignores = lint["per-file-ignores"]
@@ -228,12 +228,7 @@ def test_ruff_enables_slf001_and_package_scoped_ble_ignores() -> None:
     assert "SLF001" in lint["select"]
     assert "BLE" in lint["select"]
     assert ignores["tests/**/*.py"] == ["SLF001"]
-    assert ignores["orchestune/*.py"] == ["BLE001"]
-    assert all(
-        values == ["BLE001"]
-        for pattern, values in ignores.items()
-        if pattern.startswith("orchestune/")
-    )
+    assert all("BLE001" not in values for values in ignores.values())
 
 
 def test_argparse_private_registry_has_a_line_local_reasoned_noqa() -> None:

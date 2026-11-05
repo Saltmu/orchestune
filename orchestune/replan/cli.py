@@ -113,7 +113,7 @@ def _apply(
     except ValueError as error:
         _write_lines(_stderr(), [f"Error: {error}"])
         return EXIT_CONFIRMATION
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - boundary: convert unexpected replan failures to the existing partial-result exit
         _write_lines(
             _stderr(),
             [
