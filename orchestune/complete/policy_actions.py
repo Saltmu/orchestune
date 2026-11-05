@@ -24,7 +24,13 @@ class _EscalationForge:
             return
         try:
             self.forge.create_issue_comment(issue, body)
-        except (ForgeError, OSError, subprocess.CalledProcessError) as error:
+        except (
+            ForgeError,
+            OSError,
+            subprocess.CalledProcessError,
+            subprocess.TimeoutExpired,
+            ValueError,
+        ) as error:
             comments = self.forge.list_all_issue_comments(issue)
             if not any(comment.get("body") == body for comment in comments):
                 raise OutcomeLookupUnknownError(

@@ -78,6 +78,21 @@ def test_status_mutation_subprocess_error_is_observed_by_readback():
     ) == ("status:done",)
 
 
+def test_status_mutation_timeout_is_observed_by_readback():
+    from orchestune.complete.status_labels import _completion_mutate
+
+    class UnavailableForge:
+        def add_label(self, issue_number, label):
+            raise subprocess.TimeoutExpired(["gh", "issue", "edit"], timeout=30)
+
+        def get_issue_labels(self, issue_number):
+            return ("status:done",)
+
+    assert _completion_mutate(
+        UnavailableForge(), 1, "status:done", lambda: True, "add", "status:done"
+    ) == ("status:done",)
+
+
 def test_follow_up_lookup_does_not_swallow_unexpected_forge_runtime_error():
     from orchestune.complete.review_evidence import _FollowUps
 
@@ -106,6 +121,48 @@ def test_follow_up_response_validation_failure_does_not_hide_later_valid_issue()
     _FollowUps(forge, frozenset()).verify("follow-up #2 and #3")
 
     assert forge.lookups == [2, 3]
+
+
+def test_follow_up_timeout_does_not_hide_later_valid_issue():
+    from orchestune.complete.review_evidence import _FollowUps
+
+    class Forge:
+        def __init__(self):
+            self.lookups = []
+
+        def get_issue_reference(self, number):
+            self.lookups.append(number)
+            if number == 2:
+                raise subprocess.TimeoutExpired(["gh", "api"], timeout=30)
+            return SimpleNamespace(is_pull_request=False, state="OPEN")
+
+    forge = Forge()
+    _FollowUps(forge, frozenset()).verify("follow-up #2 and #3")
+
+    assert forge.lookups == [2, 3]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        subprocess.TimeoutExpired(["gh", "api"], timeout=30),
+        ValueError("invalid response JSON"),
+    ],
+)
+def test_escalation_comment_response_failure_is_confirmed_by_readback(error):
+    from unittest.mock import Mock
+
+    from orchestune.complete.policy_actions import _EscalationForge
+
+    body = "escalation comment"
+    forge = SimpleNamespace(
+        list_all_issue_comments=Mock(side_effect=[[], [{"body": body}]]),
+        create_issue_comment=Mock(side_effect=error),
+    )
+
+    _EscalationForge(forge, body).add_comment(1, body)
+
+    assert forge.list_all_issue_comments.call_count == 2
 
 
 def test_unexpected_completion_failure_is_logged_and_returned(monkeypatch, caplog):

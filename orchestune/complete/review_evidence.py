@@ -195,7 +195,8 @@ class _FollowUps:
         | ForgeError
         | OSError
         | ValueError
-        | subprocess.CalledProcessError,
+        | subprocess.CalledProcessError
+        | subprocess.TimeoutExpired,
     ] = field(default_factory=dict)
     slug: str | None = None
 
@@ -208,6 +209,7 @@ class _FollowUps:
         | OSError
         | ValueError
         | subprocess.CalledProcessError
+        | subprocess.TimeoutExpired
     ):
         if number not in self.cache:
             try:
@@ -217,6 +219,7 @@ class _FollowUps:
                 OSError,
                 ValueError,
                 subprocess.CalledProcessError,
+                subprocess.TimeoutExpired,
             ) as error:
                 self.cache[number] = error
         return self.cache[number]
@@ -241,7 +244,12 @@ class _FollowUps:
         for number in sorted(candidates - self.own_numbers):
             found = self._lookup(number)
             if isinstance(
-                found, ForgeError | OSError | ValueError | subprocess.CalledProcessError
+                found,
+                ForgeError
+                | OSError
+                | ValueError
+                | subprocess.CalledProcessError
+                | subprocess.TimeoutExpired,
             ):
                 unknown = True
             elif (

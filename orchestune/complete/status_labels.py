@@ -80,7 +80,12 @@ def _completion_mutate(
             forge.remove_label(issue_number, label)
     # An expected Forge write failure is observed by read-back; see
     # test_status_mutation_forge_error_is_observed_by_readback.
-    except (ForgeError, OSError, subprocess.CalledProcessError):
+    except (
+        ForgeError,
+        OSError,
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+    ):
         pass
     return _completion_observe(forge, issue_number, target, generation_matches)
 
