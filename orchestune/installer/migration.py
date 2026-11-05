@@ -51,7 +51,7 @@ def _inspect_symlink_candidate(
             can_migrate=False,
             reason="Symlink points to unrelated path",
         )
-    except Exception as e:
+    except (OSError, RuntimeError) as e:
         return LegacySkillCandidate(
             skill_name=skill_name,
             path=skill_path,

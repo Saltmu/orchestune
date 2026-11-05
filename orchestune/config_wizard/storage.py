@@ -123,7 +123,7 @@ def _acquire_config_lock(project_dir: Path) -> FileLock:
     lock_file = lock_dir / "config-write.lock"
     try:
         return FileLock(lock_file, timeout=10.0)
-    except Exception as exc:
+    except (RuntimeError, ValueError) as exc:
         raise ConfigStorageError(
             f"Failed to initialize lock for '{lock_file}': {exc}"
         ) from exc

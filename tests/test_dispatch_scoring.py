@@ -146,6 +146,18 @@ class TestParseTaskFromIssue:
         issue = _issue(7, depends_on=("task-a", "task-b"))
         assert parse_task_from_issue(issue).depends_on == ("task-a", "task-b")
 
+    def test_non_iterable_depends_on_metadata_defaults_to_empty(self):
+        issue = _issue(17)
+        issue = IssueRecord(
+            number=issue.number,
+            title=issue.title,
+            body=issue.body.replace("depends_on:\n  []\n", "depends_on: 123\n"),
+            labels=issue.labels,
+            created_at=issue.created_at,
+        )
+
+        assert parse_task_from_issue(issue).depends_on == ()
+
     def test_depends_on_inline_empty_parsed_from_body(self):
         body = (
             "## Footprint\n"

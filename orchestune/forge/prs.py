@@ -141,7 +141,7 @@ class GitHubPullRequestMixin(
                 if not page_info.get("hasNextPage"):
                     break
                 after = page_info.get("endCursor")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - boundary: incomplete GraphQL pagination returns partial file evidence with a warning
             print(
                 f"Warning: failed to paginate changed files for PR #{pr_number}: {exc}",
                 file=sys.stderr,

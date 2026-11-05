@@ -102,7 +102,7 @@ def post_notice_if_changed(
     """
     try:
         previous = latest_notice_body(forge.list_comments(issue_number), kind)
-    except Exception as error:  # noqa: BLE001 - 通知はベストエフォート
+    except Exception as error:  # noqa: BLE001 - boundary: best-effort notification lookup is logged and returned as failure
         _warn(
             f"skipped the '{kind}' notice on issue #{issue_number}: "
             f"could not read existing comments ({type(error).__name__})"
@@ -116,7 +116,7 @@ def post_notice_if_changed(
 
     try:
         forge.add_comment(issue_number, render_notice(kind, body))
-    except Exception as error:  # noqa: BLE001 - 通知はベストエフォート
+    except Exception as error:  # noqa: BLE001 - boundary: best-effort notification writes are logged and returned as failure
         _warn(
             f"failed to post the '{kind}' notice on issue #{issue_number} "
             f"({type(error).__name__})"

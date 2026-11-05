@@ -64,18 +64,6 @@ max-args = 9
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["SLF001"]
-"orchestune/*.py" = ["BLE001"]
-"orchestune/config_wizard/**" = ["BLE001"]
-"orchestune/dag/**" = ["BLE001"]
-"orchestune/forge/**" = ["BLE001"]
-"orchestune/installer/**" = ["BLE001"]
-"orchestune/provisioning/**" = ["BLE001"]
-"orchestune/remediation/**" = ["BLE001"]
-"orchestune/replan/**" = ["BLE001"]
-"orchestune/scratch/**" = ["BLE001"]
-"orchestune/targets/**" = ["BLE001"]
-"orchestune/workflow/**" = ["BLE001"]
-"orchestune/worktree_ops/**" = ["BLE001"]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 15

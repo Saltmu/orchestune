@@ -819,7 +819,7 @@ def _parse_with_tree_sitter(
             return _collect_rust_names(tree, content)
         if language_name == "go":
             return _collect_go_names(tree, content)
-    except Exception:
+    except Exception:  # noqa: BLE001 - boundary: unsupported parser failures make symbol evidence unknown
         return None
     return None
 

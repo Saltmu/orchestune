@@ -77,7 +77,7 @@ def run_bootstrap(forge: RepoAdminForge | None = None, cwd: Path = Path(".")) ->
                 Level.FAILURE, f"Error initializing empty repository: {detail}"
             )
             return 1
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - boundary: convert unexpected repository bootstrap failures to the existing CLI result
             make_output(sys.stderr).message(
                 Level.FAILURE, f"Error initializing empty repository: {e}"
             )

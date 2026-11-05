@@ -244,6 +244,6 @@ def main(argv: list[str] | None = None) -> int:
         err.emit(err.text_block(""))
         err.message(Level.WARNING, "EOFが入力されました。設定は保存していません。")
         return 0
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - boundary: report unexpected wizard failures at the CLI boundary
         _report_error(f"予期しないエラー: {exc}")
         return 1

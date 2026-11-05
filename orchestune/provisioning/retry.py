@@ -181,7 +181,7 @@ class ProvisionRetryForge:
                         waited += probe_delay
                         continue
                 return self._paced(action)
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 - boundary: classify provider errors for retry and re-raise non-transient failures
                 if not _is_transient(error):
                     raise
                 uncertain = True

@@ -363,7 +363,7 @@ def _read_pr_context(
             raise ValueError("--snapshot requires backend=mcp in the explicit state")
         context.forge = forge or GitHubForge(timeout_seconds=30)
         _observe_forge(context, context.forge)
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - boundary: convert Forge/context read failures into workflow diagnostics
         context.errors["forge"] = str(error)
 
 
