@@ -361,7 +361,7 @@ def _apply_status_label(
             old_labels,
         )
         return None
-    except ForgeError as e:
+    except (ForgeError, subprocess.CalledProcessError, OSError) as e:
         return ClaimFailure(
             reason=ClaimFailureReason.LABEL_UPDATE_FAILED,
             message=f"Failed to transition label: {e}",

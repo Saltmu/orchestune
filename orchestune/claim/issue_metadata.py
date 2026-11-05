@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+
 import yaml
 
 from orchestune.claim.contracts import (
@@ -83,7 +85,7 @@ def publish_claim_ownership_to_issue(
         if new_body != issue.body:
             forge.update_issue_body(issue.number, new_body)
         return None
-    except ForgeError as e:
+    except (ForgeError, subprocess.CalledProcessError, OSError) as e:
         return ClaimFailure(
             reason=ClaimFailureReason.STATE_SAVE_FAILED,
             message=f"Failed to publish claim ownership metadata to issue #{issue.number}: {e}",

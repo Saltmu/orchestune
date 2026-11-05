@@ -7,6 +7,7 @@ This module does not import ``service``.
 from __future__ import annotations
 
 import dataclasses
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -102,7 +103,7 @@ def _evaluate_conflict_step(
     except ForgeGraphQLUnavailableError:
         # #1334: the CLI reports this as forge_unavailable, not as a conflict.
         raise
-    except ForgeError as e:
+    except (ForgeError, subprocess.CalledProcessError, OSError) as e:
         return _claim_failure(
             issue_number,
             ClaimFailure(

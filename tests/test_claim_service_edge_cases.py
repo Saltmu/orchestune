@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -17,7 +18,8 @@ from orchestune.claim.contracts import (
     ReservationKind,
 )
 from orchestune.claim.ownership import new_claim_id, new_owner_token, owner_token_digest
-from orchestune.claim.service import claim_task, resume_claim
+from orchestune.claim.service import _apply_status_label, claim_task, resume_claim
+from orchestune.forge import GitHubForge
 from orchestune.infra.process_utils import FileLockContentionError, run_state_lock
 from orchestune.labels import StatusLabel
 from orchestune.ledger.run_state import (
@@ -32,6 +34,18 @@ from tests.dispatch_test_support import make_test_active_worktree
 
 class TestAdditionalClaimServiceEdgeCases:
     """Verifies edge cases such as empty tokens, repository-wide conflicts, and stage resumption."""
+
+    def test_label_update_maps_github_cli_failure_to_claim_failure(self) -> None:
+        forge = GitHubForge()
+        with patch.object(
+            forge,
+            "_run",
+            side_effect=subprocess.CalledProcessError(1, ["gh", "issue", "edit"]),
+        ):
+            failure = _apply_status_label(forge, 112, ())
+
+        assert failure is not None
+        assert failure.reason == ClaimFailureReason.LABEL_UPDATE_FAILED
 
     def test_resume_claim_from_active_saved_skips_worktree_creation(
         self, claim_env: dict[str, Path]
