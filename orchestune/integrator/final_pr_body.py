@@ -225,7 +225,7 @@ def _outcome_from(
     """
     try:
         comments: Sequence[Mapping[str, Any]] = forge.list_comments(number)
-    except Exception as error:  # noqa: BLE001 - 一覧生成はベストエフォート
+    except Exception as error:  # noqa: BLE001 - boundary: omit degraded child rows and report the unavailable data
         print(
             f"Warning: Failed to read comments on #{number} while building the "
             f"final integration PR body; omitting the child table rather than "
@@ -307,7 +307,7 @@ def collect_child_summaries(
     ordered = sorted(children, key=lambda child: child.number)
     try:
         prs: list[PrRecord] = forge.list_prs(state="merged")
-    except Exception as error:  # noqa: BLE001 - 一覧生成はベストエフォート
+    except Exception as error:  # noqa: BLE001 - boundary: omit degraded child rows and report the unavailable data
         print(
             f"Warning: Failed to list merged PRs while building the final "
             f"integration PR body for #{parent_issue_number}; omitting the child "

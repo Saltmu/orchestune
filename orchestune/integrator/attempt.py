@@ -62,7 +62,7 @@ def mark_tasks_included(ctx: Any, subtask_ids: set[str] | None = None) -> list[s
         try:
             ctx.forge.add_label(task.issue_number, "integration:included")
             newly_included.append(subtask_id)
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - boundary: keep task preparation moving after a reported label write failure
             print(
                 "Warning: Failed to add integration:included label to "
                 f"issue #{task.issue_number}: {error}",
@@ -232,7 +232,7 @@ def find_open_attempts(forge: Forge, parent_issue_number: int) -> list[OpenAttem
     for pr in list_open_attempt_prs(forge, parent_issue_number):
         try:
             attempts.append(restore_attempt(forge, trust, parent_issue_number, pr))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - boundary: retain an unreadable open attempt as an error-bearing blocked attempt
             attempts.append(
                 OpenAttempt(
                     pr.number,
@@ -441,7 +441,7 @@ def handle_non_required_review(ctx: Any) -> tuple[bool, bool]:
         )
         ctx.semantic_review_dispatched = True
         return True, True
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - boundary: report reviewer dispatch failure and preserve the pending phase
         print(f"Warning: Failed to dispatch semantic review: {error}", file=sys.stderr)
         return True, False
 
@@ -458,7 +458,7 @@ def start_required_review(ctx: Any, fetch_outcome: Callable[[Forge, int], Any]) 
         try:
             decision = _single_fast_path(ctx, identity, fetch_outcome)
             phase = decision.phase
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - boundary: report review evaluation failure and preserve recoverable state
             print(
                 f"Warning: failed to evaluate the single-task Fast-Path: {error}",
                 file=sys.stderr,

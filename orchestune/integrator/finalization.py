@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -47,7 +48,12 @@ def ensure_integration_receipt(
     try:
         trusted_author = forge.get_authenticated_user()
         comments = forge.list_comments(proof.issue_number)
-    except Exception:
+    except Exception as error:  # noqa: BLE001 - boundary: receipt lookup or persistence failure defers destructive finalization
+        print(
+            f"Warning: could not verify integration receipt for "
+            f"#{proof.issue_number}: {error}",
+            file=sys.stderr,
+        )
         return False
     if any(_matches_receipt(comment, receipt, trusted_author) for comment in comments):
         return True
@@ -61,7 +67,12 @@ def ensure_integration_receipt(
                 notice_base_branch=notice_base_branch,
             ),
         )
-    except Exception:
+    except Exception as error:  # noqa: BLE001 - boundary: receipt lookup or persistence failure defers destructive finalization
+        print(
+            f"Warning: could not persist integration receipt for "
+            f"#{proof.issue_number}: {error}",
+            file=sys.stderr,
+        )
         return False
     return True
 
@@ -184,7 +195,11 @@ def find_integration_receipt(
     try:
         trusted_author = forge.get_authenticated_user()
         comments = forge.list_comments(issue_number)
-    except Exception:
+    except Exception as error:  # noqa: BLE001 - boundary: unavailable receipt evidence is not treated as absence
+        print(
+            f"Warning: could not read integration receipt for #{issue_number}: {error}",
+            file=sys.stderr,
+        )
         return None
     matching = _parse_matching_proofs(
         comments, trusted_author, issue_number, subtask_id, base_branch
@@ -256,7 +271,11 @@ def lookup_integration_receipt(
         if not isinstance(author, str) or not author:
             return _unavailable("receipt_lookup_failed")
         comments = forge.list_all_issue_comments(issue_number)
-    except Exception:
+    except Exception as error:  # noqa: BLE001 - boundary: report receipt evidence as unavailable
+        print(
+            f"Warning: could not read integration receipt for #{issue_number}: {error}",
+            file=sys.stderr,
+        )
         return _unavailable("receipt_lookup_failed")
     candidates = []
     for comment in comments:

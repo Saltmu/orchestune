@@ -4,11 +4,15 @@
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from orchestune.integrator.tasks import get_sorted_done_tasks
+from orchestune.integrator.tasks import (
+    build_issue_to_subtask_id_map,
+    get_sorted_done_tasks,
+)
 from orchestune.models import IssueRecord
 
 
@@ -65,6 +69,27 @@ def test_returns_empty_when_no_done_issues_using_injected_fake_forge():
     assert sorted_done == []
     assert unparsable == []
     fake_forge.list_issues_by_label.assert_called_once_with("status:done", state="all")
+
+
+def test_invalid_footprint_yaml_is_ignored_as_a_named_boundary():
+    issue = _done_issue(12, "broken")
+    issue = replace(issue, body="## Footprint\n```yaml\nsubtask_id: [\n```")
+
+    assert build_issue_to_subtask_id_map([issue]) == {}
+
+
+def test_footprint_map_does_not_swallow_unexpected_parser_failures(monkeypatch):
+    import yaml
+
+    issue = _done_issue(13, "broken")
+
+    def fail_unexpectedly(_body):
+        raise RuntimeError("unexpected parser failure")
+
+    monkeypatch.setattr(yaml, "safe_load", fail_unexpectedly)
+
+    with pytest.raises(RuntimeError, match="unexpected parser failure"):
+        build_issue_to_subtask_id_map([issue])
 
 
 def test_load_integration_tasks_classifies_dependency_states():

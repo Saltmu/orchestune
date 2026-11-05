@@ -90,6 +90,8 @@ class Repo:
         self.post_fails = False
         self.claim_status = ClaimStatus.ACQUIRED
         self.lose_claim = False
+        self.read_fails = False
+        self.release_fails = False
         self.settled = True
         self.refs_available = True
         self.ahead_of_state = False
@@ -155,6 +157,8 @@ class Repo:
         ]
 
     def list_comments(self, number: int) -> list[dict[str, Any]]:
+        if self.read_fails:
+            raise RuntimeError("comment read unavailable")
         return list(self.comments.get(int(number), []))
 
     list_all_issue_comments = list_comments
@@ -225,6 +229,8 @@ class Repo:
 
         def release(_root: Any, claim: SemanticClaim, *, now: datetime) -> PushResult:
             self.released += 1
+            if self.release_fails:
+                raise RuntimeError("release unavailable")
             return PushResult(PushStatus.PUSHED, claim)
 
         return CleanupClaims(acquire=acquire, renew=renew, release=release)
@@ -302,12 +308,31 @@ class TestHappyPath:
 
         assert repo.events == [] and len(repo.comments[PR]) == posted
 
+    def test_unreadable_attempt_is_reported_and_skipped(
+        self, repo: Repo, capsys
+    ) -> None:
+        repo.attempt()
+        repo.read_fails = True
+
+        assert repo.run() == []
+        assert "Warning: could not restore cleanup state" in capsys.readouterr().err
+
     def test_the_claim_is_held_around_the_writes_and_released(self, repo: Repo) -> None:
         repo.attempt()
 
         repo.run()
 
         assert repo.holder_claims == 1 and repo.released == 1
+
+    def test_failed_claim_release_is_reported_and_left_to_expire(
+        self, repo: Repo, capsys
+    ) -> None:
+        repo.attempt()
+        repo.release_fails = True
+
+        repo.run()
+
+        assert "Warning: failed to release cleanup claim" in capsys.readouterr().err
 
     def test_dry_run_reports_the_plan_without_any_side_effect(self, repo: Repo) -> None:
         repo.attempt()

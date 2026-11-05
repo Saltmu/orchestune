@@ -131,7 +131,7 @@ def _read_history(
     try:
         trusted_author = forge.get_authenticated_user()
         comments = forge.list_comments(proof.issue_number)
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - boundary: report unavailable child history and retry on a later cycle
         print(
             "Warning: Failed to read child-branch finalization history for "
             f"#{proof.issue_number}: {error}",
@@ -170,7 +170,7 @@ def latest_blocked_proof(
     try:
         trusted_author = forge.get_authenticated_user()
         comments = forge.list_comments(issue_number)
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - boundary: report unavailable blocked proof and keep the child held
         print(
             "Warning: Failed to read child-branch finalization history for "
             f"#{issue_number}: {error}",
@@ -220,7 +220,7 @@ def record_denial(
         }
         try:
             forge.add_comment(proof.issue_number, _render(payload))
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - boundary: report denial-record failure for later operator recovery
             print(
                 "Warning: Failed to record a refused child-branch deletion for "
                 f"#{proof.issue_number}: {error}",
@@ -267,7 +267,7 @@ def _post_parent_comment_once(
             "子ブランチを手動で削除するか、削除を拒否しているルールセット等を"
             "緩和してください。",
         )
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - boundary: report parent notice failure without claiming delivery
         print(
             "Warning: Failed to comment on parent issue "
             f"#{parent_issue_number} about child #{key['issue_number']}: {error}",
@@ -299,14 +299,14 @@ def escalate_terminal(
     spec = next(label for label in REQUIRED_LABELS if label.name == BLOCKED_LABEL)
     try:
         forge.ensure_labels((spec,))
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - boundary: report each escalation write failure and preserve retry state
         print(
             f"Warning: Failed to ensure the {BLOCKED_LABEL} label exists: {error}",
             file=sys.stderr,
         )
     try:
         forge.add_label(proof.issue_number, BLOCKED_LABEL)
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - boundary: report each escalation write failure and preserve retry state
         print(
             f"Warning: Failed to label #{proof.issue_number} {BLOCKED_LABEL}: {error}",
             file=sys.stderr,
@@ -321,7 +321,7 @@ def escalate_terminal(
             proof.issue_number,
             _render({**key, "event": EVENT_TERMINAL, "attempts": attempts}),
         )
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - boundary: report each escalation write failure and preserve retry state
         print(
             "Warning: Failed to record the terminal child-branch finalization "
             f"state for #{proof.issue_number}: {error}",
@@ -350,7 +350,7 @@ def handle_denied_deletion(
 def _remove_blocked_label(forge: Forge, issue_number: int) -> bool:
     try:
         forge.remove_label(issue_number, BLOCKED_LABEL)
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - boundary: report label removal failure and retain retry state
         print(
             f"Warning: Failed to remove {BLOCKED_LABEL} from #{issue_number}: {error}",
             file=sys.stderr,
@@ -375,7 +375,7 @@ def settle_blocked_child(
     """
     try:
         tip = read_tip()
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - boundary: keep the child held when its remote branch cannot be checked
         print(
             "Warning: Failed to read the remote branch of blocked child "
             f"#{proof.issue_number}: {error}",

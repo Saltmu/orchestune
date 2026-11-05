@@ -44,7 +44,7 @@ class AttemptCleanupEffects:
             self._forge.add_comment(number, render_notice(kind, body))
         except ForgeAuthError:
             raise
-        except Exception:
+        except Exception:  # noqa: BLE001 - boundary: reconcile an uncertain comment write by reading the remote thread
             # The answer may have been lost after the comment landed: look again
             # before deciding, and never send it twice.
             target.comments = self._forge.list_all_issue_comments(number)

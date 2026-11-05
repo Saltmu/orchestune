@@ -54,7 +54,7 @@ def build_issue_to_subtask_id_map(issues: list[IssueRecord]) -> dict[int, str]:
                     sub_id = data.get("subtask_id")
                     if sub_id:
                         issue_to_subtask_id[issue.number] = str(sub_id)
-            except Exception:
+            except yaml.YAMLError:
                 pass
     return issue_to_subtask_id
 
@@ -266,7 +266,7 @@ def _topological_order(
         return build_dag(
             subtasks, threshold=threshold, ignore_patterns=ignore_patterns
         ).topological_order
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - boundary: report DAG ordering failure and retain the stable input order
         print(f"Warning: Failed to build DAG: {error}", file=sys.stderr)
         return [task.id for task in subtasks]
 

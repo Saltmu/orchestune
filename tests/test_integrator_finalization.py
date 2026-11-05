@@ -224,7 +224,9 @@ def test_legacy_proof_api_keeps_first_match_and_ignores_notice_fields(fake_forge
 
 
 @pytest.mark.parametrize("api", ["get_authenticated_user", "list_all_issue_comments"])
-def test_lookup_failure_is_unavailable_and_wrapper_returns_none(fake_forge, api):
+def test_lookup_failure_is_logged_unavailable_and_wrapper_returns_none(
+    fake_forge, api, capsys
+):
     getattr(fake_forge, api).side_effect = RuntimeError("outage")
     result = receipts.lookup_integration_receipt(fake_forge, 1, "task-1", BASE)
     assert result.status.value == "UNAVAILABLE"
@@ -232,6 +234,7 @@ def test_lookup_failure_is_unavailable_and_wrapper_returns_none(fake_forge, api)
     assert (
         receipts.find_latest_integration_receipt(fake_forge, 1, "task-1", BASE) is None
     )
+    assert "Warning: could not read integration receipt" in capsys.readouterr().err
 
 
 def test_latest_wrapper_returns_existing_type(fake_forge):
@@ -257,9 +260,25 @@ def test_save_distinguishes_omitted_null_and_number_without_duplicates(fake_forg
     assert '"integration_pr_number": null' in comments[1]["body"]
 
 
-def test_legacy_proof_api_keeps_none_on_read_failure(fake_forge):
+def test_legacy_proof_api_keeps_none_and_logs_read_failure(fake_forge, capsys):
     fake_forge.list_comments.side_effect = RuntimeError("outage")
     assert receipts.find_integration_receipt(fake_forge, 1, "task-1", BASE) is None
+    assert "Warning: could not read integration receipt" in capsys.readouterr().err
+
+
+def test_receipt_save_failures_are_logged_and_deferred(fake_forge, capsys):
+    from orchestune.integrator.finalization import ensure_integration_receipt
+
+    fake_forge.get_authenticated_user.side_effect = RuntimeError("read outage")
+    assert not ensure_integration_receipt(fake_forge, proof(), BASE)
+    assert "could not verify integration receipt" in capsys.readouterr().err
+
+    fake_forge.get_authenticated_user.side_effect = None
+    fake_forge.get_authenticated_user.return_value = "orchestune[bot]"
+    fake_forge.list_comments.return_value = []
+    fake_forge.add_comment.side_effect = RuntimeError("write outage")
+    assert not ensure_integration_receipt(fake_forge, proof(), BASE)
+    assert "could not persist integration receipt" in capsys.readouterr().err
 
 
 def _setup_receipt_comments(fake_forge):
