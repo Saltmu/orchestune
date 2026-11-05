@@ -181,7 +181,13 @@ def _fetch_pr(forge: Any, pr_number: int) -> tuple[Any | None, bool, str | None]
     if hasattr(forge, "get_pull_request"):
         try:
             return forge.get_pull_request(pr_number), True, None
-        except (ForgeError, OSError, ValueError, subprocess.CalledProcessError) as exc:
+        except (
+            ForgeError,
+            OSError,
+            ValueError,
+            subprocess.CalledProcessError,
+            subprocess.TimeoutExpired,
+        ) as exc:
             return None, True, str(exc)
     if hasattr(forge, "list_prs"):
         try:
@@ -194,9 +200,16 @@ def _fetch_pr(forge: Any, pr_number: int) -> tuple[Any | None, bool, str | None]
                 OSError,
                 ValueError,
                 subprocess.CalledProcessError,
+                subprocess.TimeoutExpired,
             ) as exc:
                 return None, True, str(exc)
-        except (ForgeError, OSError, ValueError, subprocess.CalledProcessError) as exc:
+        except (
+            ForgeError,
+            OSError,
+            ValueError,
+            subprocess.CalledProcessError,
+            subprocess.TimeoutExpired,
+        ) as exc:
             return None, True, str(exc)
         for p in prs:
             if getattr(p, "number", None) == pr_number:

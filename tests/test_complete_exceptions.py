@@ -18,6 +18,29 @@ def test_preflight_does_not_swallow_unexpected_forge_runtime_error():
         _fetch_pr(BrokenForge(), 1)
 
 
+@pytest.mark.parametrize(
+    "lookup", ["get_pull_request", "list_prs", "list_prs_fallback"]
+)
+def test_preflight_reports_ordinary_lookup_timeout_as_unavailable(lookup):
+    from unittest.mock import Mock
+
+    from orchestune.complete.preflight import _fetch_pr
+
+    timeout = subprocess.TimeoutExpired(["gh", "pr", "view"], timeout=30)
+    if lookup == "get_pull_request":
+        forge = SimpleNamespace(get_pull_request=Mock(side_effect=timeout))
+    elif lookup == "list_prs_fallback":
+        forge = SimpleNamespace(list_prs=Mock(side_effect=[TypeError(), timeout]))
+    else:
+        forge = SimpleNamespace(list_prs=Mock(side_effect=timeout))
+
+    pr, available, error = _fetch_pr(forge, 12)
+
+    assert pr is None
+    assert available is True
+    assert "timed out" in error
+
+
 def test_status_observation_does_not_swallow_unexpected_forge_runtime_error():
     from orchestune.complete.status_labels import _completion_observe
 
