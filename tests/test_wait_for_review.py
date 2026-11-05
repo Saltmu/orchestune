@@ -1075,6 +1075,23 @@ def test_get_initial_pr_data_times_out():
                 )
 
 
+def test_get_initial_pr_data_does_not_retry_programming_errors():
+    from concurrent.futures import ThreadPoolExecutor
+
+    from scripts.wait_for_review import _get_initial_pr_data
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        with patch(
+            "scripts.wait_for_review._get_pr_data",
+            autospec=True,
+            side_effect=TypeError("unexpected response handling bug"),
+        ):
+            with pytest.raises(TypeError, match="unexpected response handling bug"):
+                _get_initial_pr_data(
+                    pr_number=540, executor=executor, timeout=10, interval=0
+                )
+
+
 def test_print_review_result_matches_id_less_findings_by_current_round_position(
     capsys,
 ):

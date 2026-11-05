@@ -285,7 +285,7 @@ def _batch_prewarm_scenarios(
         try:
             _persist(sc_dir, run)
             persisted.add(sc)
-        except Exception:
+        except Exception:  # noqa: BLE001 - boundary: test_batch_prewarm_skips_failed_cache_write keeps the successful batch entries
             continue
 
     return persisted
@@ -364,7 +364,7 @@ class ScenarioRunCache:
                 stderr=str(data.get("stderr", "")),
                 traces=(trace_path,),
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 - boundary: test_scenario_run_cache_corrupt_disk_metadata_ignored_and_recomputed pins cache-miss behavior
             return None
 
     def get(self, scenario: str) -> ModelRun:
@@ -404,7 +404,7 @@ class ScenarioRunCache:
                             ]
                             if missing:
                                 self._prewarmer(missing, self.session_dir)
-                    except Exception:
+                    except Exception:  # noqa: BLE001 - boundary: test_scenario_run_cache_prewarmer_exception_disables_and_falls_back pins direct-run fallback
                         self._prewarmer = None
 
                     cached = self._read_disk_cache(scenario_dir)

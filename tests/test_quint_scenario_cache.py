@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Sequence
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
 
+from tests import quint_scenario_cache_support as scenario_cache_support
 from tests.quint_replay import (
     MODEL,
     ModelRun,
@@ -784,3 +787,42 @@ def test_batch_prewarm_matches_run_scenario_for_ok_and_violation(
             assert normalized(batch_itf) == normalized(single_itf)
     finally:
         cache.close()
+
+
+def test_batch_prewarm_skips_failed_cache_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(scenario_cache_support.shutil, "which", lambda _: "node")
+    monkeypatch.setattr(scenario_cache_support, "quint_executable", lambda: "quint")
+    monkeypatch.setattr(
+        scenario_cache_support, "classify_run", lambda _code, _stdout: ("ok", ())
+    )
+
+    def fake_run_bounded(command: list[str], *, timeout: float):
+        del timeout
+        session_dir = Path(command[1]).parent
+        scenario_dir = session_dir / "final_apply"
+        scenario_dir.mkdir(parents=True, exist_ok=True)
+        (scenario_dir / "trace_0.itf.json").write_text("{}", encoding="utf-8")
+        (session_dir / "_batch_results.json").write_text(
+            json.dumps(
+                {
+                    "final_apply": {
+                        "right": True,
+                        "stdout": "",
+                        "stderr": "",
+                        "seconds": 0.1,
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    def fail_persist(_directory: Path, _run: ModelRun) -> None:
+        raise OSError("cache disk unavailable")
+
+    monkeypatch.setattr(scenario_cache_support, "_run_bounded", fake_run_bounded)
+    monkeypatch.setattr(scenario_cache_support, "_persist", fail_persist)
+
+    assert _batch_prewarm_scenarios(("final_apply",), tmp_path) == set()
