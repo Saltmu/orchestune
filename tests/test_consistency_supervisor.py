@@ -382,6 +382,54 @@ def test_observation_failure_becomes_report_data_instead_of_escaping() -> None:
     assert scan.diagnostics == ("observation failed: OSError: forge unavailable",)
 
 
+def test_evaluation_failure_becomes_report_data_instead_of_escaping() -> None:
+    class FailingDeriver:
+        def derive(self, observed: ObservedRepositoryState) -> DesiredRepositoryState:
+            raise TypeError("invalid observed state")
+
+    supervisor = ConsistencySupervisor(
+        repository_id="owner/repo",
+        engine=ConsistencyEngine(()),
+    )
+
+    scan = supervisor.full_scan(
+        "end",
+        observer=_SequenceObserver(_snapshot("queued")),
+        deriver=FailingDeriver(),
+    )
+
+    assert [finding.code for finding in scan.report.findings] == [
+        "supervisor.evaluation-failed"
+    ]
+    assert scan.unknown_facts[0].diagnostics == ("TypeError: invalid observed state",)
+    assert scan.diagnostics == ("evaluation failed: TypeError: invalid observed state",)
+
+
+def test_planner_failure_is_reported_and_other_planners_can_run() -> None:
+    class FailingPlanner:
+        def plan(self, report: ConsistencyReport) -> tuple[RepairCommand, ...]:
+            raise TypeError("invalid report")
+
+    successful_planner = _Planner()
+    supervisor = ConsistencySupervisor(
+        repository_id="owner/repo",
+        engine=ConsistencyEngine(
+            (_FindingInvariant("task.status", ConsistencyScope.TASK, "706"),)
+        ),
+        repair_planners=(FailingPlanner(), successful_planner),
+    )
+
+    scan = supervisor.full_scan(
+        "end",
+        observer=_SequenceObserver(_snapshot("queued")),
+        deriver=_StaticDeriver(),
+    )
+
+    assert scan.diagnostics == ("repair planning failed: TypeError: invalid report",)
+    assert successful_planner.calls == 1
+    assert len(scan.repair_candidates) == 1
+
+
 def test_cycle_report_serialization_is_stable_and_json_safe() -> None:
     supervisor = ConsistencySupervisor(
         repository_id="owner/repo",
@@ -449,6 +497,10 @@ def test_repair_mode_executes_only_allowlisted_command_and_reobserves() -> None:
 
 
 def test_repair_mode_defers_non_allowlisted_and_reports_executor_failure() -> None:
+    class FailingExecutor:
+        def execute(self, command: RepairCommand) -> RepairResult:
+            raise TypeError("invalid repair command")
+
     invariant = _FindingInvariant("task.status", ConsistencyScope.TASK, "706")
     planner = _Planner()
     supervisor = ConsistencySupervisor(
@@ -463,12 +515,15 @@ def test_repair_mode_defers_non_allowlisted_and_reports_executor_failure() -> No
         start,
         observer=_SequenceObserver(_snapshot("queued")),
         deriver=_StaticDeriver(),
-        executor=_RecordingExecutor(RepairStatus.FAILED),
+        executor=FailingExecutor(),
         allowlist=("repair.status",),
         max_passes=1,
     )
     failed = supervisor.cycle_report(mode=ConsistencyMode.REPAIR)
     assert failed.repair_outcomes[0].disposition is RepairDisposition.FAILED
+    assert failed.repair_outcomes[0].diagnostics == (
+        "TypeError: invalid repair command",
+    )
 
     deferred_supervisor = ConsistencySupervisor(
         repository_id="owner/repo",
