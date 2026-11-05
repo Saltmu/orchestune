@@ -118,7 +118,7 @@ def _gc_forge(
         return None
     try:
         return forge_factory()
-    except Exception:
+    except Exception:  # noqa: BLE001 - boundary: fail closed when optional Forge/workspace setup or GC execution is unavailable
         return None
 
 
@@ -246,7 +246,7 @@ def run_handoff_gc(
         return GcRunResult((), 0, (), 2)
     try:
         workspace = resolve_claim_workspace(explicit_state_path=request.state_path)
-    except Exception:
+    except Exception:  # noqa: BLE001 - boundary: fail closed when optional Forge/workspace setup or GC execution is unavailable
         return GcRunResult((), 0, (), 1)
     if not request.apply:
         return _preview(workspace, forge_factory)
@@ -257,7 +257,7 @@ def run_handoff_gc(
         if _run_state_lock_error(exc):
             return GcRunResult((), 0, (), 22)
         return GcRunResult((), 0, (), 1)
-    except Exception:
+    except Exception:  # noqa: BLE001 - boundary: fail closed when optional Forge/workspace setup or GC execution is unavailable
         return GcRunResult((), 0, (), 1)
 
 

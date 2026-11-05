@@ -244,7 +244,7 @@ def _load_blocked_outcome(
         return None, "forge comment listing method unavailable"
     try:
         comments = list_comments(issue_number)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - boundary: Forge/YAML read failures prevent status repair and return a diagnostic
         return None, f"failed to fetch issue comments: {exc}"
     outcome = parse_from_comments(comments)
     if outcome is None or outcome.result != "blocked":
@@ -258,7 +258,7 @@ def _load_issue_claim(forge: Any, issue_number: int) -> tuple[str | None, str | 
         return None, "forge get_issue method unavailable"
     try:
         issue = get_issue(issue_number)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - boundary: Forge/YAML read failures prevent status repair and return a diagnostic
         return None, f"failed to fetch issue: {exc}"
     if issue is None:
         return None, "issue record unavailable"
@@ -269,7 +269,7 @@ def _load_issue_claim(forge: Any, issue_number: int) -> tuple[str | None, str | 
 
     try:
         data = yaml.safe_load(match[1])
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - boundary: Forge/YAML read failures prevent status repair and return a diagnostic
         return None, f"blocked Outcome found but footprint YAML parsing failed: {exc}"
 
     if not isinstance(data, dict):

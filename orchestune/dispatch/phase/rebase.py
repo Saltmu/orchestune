@@ -67,7 +67,7 @@ def _collect_completed_dependency_evidence(
                 cache[key] = None
                 try:
                     sha = forge.get_current_branch_tip_sha_if_merged_into(branch, base)
-                except Exception:
+                except Exception:  # noqa: BLE001 - boundary: preserve safe rebase outcome when Git resolution or cleanup fails
                     # Failed observations remain conflicts; retry only next scan.
                     continue
                 if isinstance(sha, str) and re.fullmatch(r"[0-9a-fA-F]{40}", sha):

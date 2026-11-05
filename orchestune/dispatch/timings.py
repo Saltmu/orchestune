@@ -56,7 +56,7 @@ class CycleTimingCollector:
             return
         try:
             self._observe(phase, event, task_issue)
-        except Exception:
+        except Exception:  # noqa: BLE001 - boundary: optional timing collector failures degrade data to partial/unavailable
             self.partial = True
             self.active.pop((phase, task_issue), None)
             if phase in {"cycle", "events_record"}:
@@ -158,10 +158,10 @@ class TimingProgress:
     ) -> None:
         try:
             self.collector.observe(phase, event, task_issue=task_issue)
-        except Exception:
+        except Exception:  # noqa: BLE001 - boundary: optional timing collector failures degrade data to partial/unavailable
             try:
                 self.collector.phase_unavailable()
-            except Exception:
+            except Exception:  # noqa: BLE001 - boundary: optional timing collector failures degrade data to partial/unavailable
                 pass
         self.sink.emit(phase, event, task_issue=task_issue, reason=reason)
 
@@ -172,6 +172,6 @@ def timing_snapshot(collector: CycleTimingCollector | None) -> dict[str, Any]:
             result = collector.snapshot()
             json.dumps(result, allow_nan=False)
             return result
-        except Exception:
+        except Exception:  # noqa: BLE001 - boundary: optional timing collector failures degrade data to partial/unavailable
             pass
     return unavailable_timings()

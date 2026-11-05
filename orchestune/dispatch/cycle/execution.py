@@ -206,7 +206,7 @@ def execute_cycle(
         candidate = CycleTimingCollector()
         config = replace(config, progress=TimingProgress(config.progress, candidate))
         collector = candidate
-    except Exception:
+    except Exception:  # noqa: BLE001 - boundary: optional timing instrumentation must not prevent cycle execution
         pass
     sink = config.progress
     phase_name = (

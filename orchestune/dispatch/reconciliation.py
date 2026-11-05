@@ -88,7 +88,7 @@ def _collect_active_conflict_subtask_ids(
             for conflict in conflicts:
                 if conflict.blocked_subtask_id:
                     active_conflict_subtask_ids.add(conflict.blocked_subtask_id)
-        except Exception:
+        except Exception:  # noqa: BLE001 - boundary: unavailable conflict/Forge/Git evidence fails closed and retains recovery state
             # Conflict Graph再計算中の例外発生時も fail-closed とし、
             # 自動復帰させない（＝全てのサブタスクを競合中とする）
             for subtask_id in subtasks_for_recompute:
@@ -317,7 +317,7 @@ def _release_recompute_for_promotion(
         ):
             return None
         return evaluation
-    except Exception:  # fail closed on marker mutation or fresh-read failure
+    except Exception:  # fail closed on marker mutation or fresh-read failure  # noqa: BLE001 - boundary: unavailable conflict/Forge/Git evidence fails closed and retains recovery state
         return None
 
 
@@ -340,7 +340,7 @@ def _get_branch_commit_sha(
         )
         result = run_git(["rev-parse", resolved], cwd=repository_root, check=True)
         return result.stdout.strip() or None
-    except Exception:
+    except Exception:  # noqa: BLE001 - boundary: unavailable conflict/Forge/Git evidence fails closed and retains recovery state
         return None
 
 
@@ -496,7 +496,7 @@ def _apply_base_branch_red_escalate(
     )
     try:
         config.resolved_forge.remove_label(decision.issue_number, "ci:base-branch-red")
-    except Exception:
+    except Exception:  # noqa: BLE001 - boundary: unavailable conflict/Forge/Git evidence fails closed and retains recovery state
         pass
 
 
@@ -568,7 +568,7 @@ def _lookup_issue_outcome(issue_number: int, forge: Forge) -> OutcomeLookupResul
     """
     try:
         comments = forge.list_comments(issue_number)
-    except Exception:
+    except Exception:  # noqa: BLE001 - boundary: unavailable conflict/Forge/Git evidence fails closed and retains recovery state
         return OutcomeLookupResult(state=OutcomeLookupState.UNKNOWN)
     record = parse_from_comments(comments)
     if record is None:

@@ -119,7 +119,7 @@ def _parse_claim_info_from_issue(issue: IssueRecord) -> ClaimInfo:
                     "repository",
                 }:
                     rk = r
-        except Exception:
+        except Exception:  # noqa: BLE001 - boundary: optional legacy metadata parsing must not block safe claim restoration
             pass
     return ClaimInfo(owner, cid, rk, recompute_count=rc, forced_serial=fs)
 

@@ -90,7 +90,7 @@ def collect_confirmed_completion(
                 event = _prepare_collection(
                     state, config, key, fresh, record_completion, task
                 )
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - boundary: preserve a retryable completion event when collection fails
         event = ForgeFailureCompletion(
             issue_number=active.core.issue_number,
             worktree_path=active.core.worktree_path,

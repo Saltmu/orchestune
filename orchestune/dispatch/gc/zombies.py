@@ -574,7 +574,7 @@ def _stop_reclaimed_process(reclaim: ZombieOrTimeoutReclaim) -> None:
     if reclaim.active.launch.pid and reclaim.process_alive:
         try:
             os.kill(reclaim.active.launch.pid, 9)
-        except Exception:
+        except Exception:  # noqa: BLE001 - boundary: cleanup tolerates a process that exited during the liveness check
             pass
 
 

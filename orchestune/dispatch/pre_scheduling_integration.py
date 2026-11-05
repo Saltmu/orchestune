@@ -87,7 +87,7 @@ def _run_best_effort_phase(
             retryable=False,
             stage="integration_boundary",
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - boundary: normalize integration failures into the existing retryable/fatal phase result
         print(f"Warning: {failure_message}: {e}", file=sys.stderr)
         return PhaseResult(
             phase_name=phase_name,

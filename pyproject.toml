@@ -64,12 +64,9 @@ max-args = 9
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["SLF001"]
-# Temporary BLE001 coverage for packages not yet included in the exception audit.
-# Each package is removed here by its dedicated follow-up Issue.
 "orchestune/*.py" = ["BLE001"]
 "orchestune/config_wizard/**" = ["BLE001"]
 "orchestune/dag/**" = ["BLE001"]
-"orchestune/dispatch/**" = ["BLE001"]
 "orchestune/forge/**" = ["BLE001"]
 "orchestune/installer/**" = ["BLE001"]
 "orchestune/provisioning/**" = ["BLE001"]

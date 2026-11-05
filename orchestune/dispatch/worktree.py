@@ -134,7 +134,7 @@ def _cleanup_existing_worktree(
         )
         if worktree_path.exists():
             shutil.rmtree(worktree_path)
-    except Exception:
+    except Exception:  # noqa: BLE001 - boundary: rollback cleanup is best-effort after worktree creation failure
         pass
     return None
 
@@ -226,7 +226,7 @@ def _cleanup_failed_worktree(worktree_path: Path) -> None:
         if worktree_path.exists():
             shutil.rmtree(worktree_path)
         run_git(["worktree", "prune"], cwd=None, check=False)
-    except Exception:
+    except Exception:  # noqa: BLE001 - boundary: rollback cleanup is best-effort after worktree creation failure
         pass
 
 
