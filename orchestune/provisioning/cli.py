@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from collections.abc import Sequence
 from contextlib import ExitStack, suppress
@@ -62,6 +63,9 @@ __all__ = (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 def provision_issues(*args: object, **kwargs: object) -> ProvisionResult:
     """Compatibility entry point for callers of ``orchestune.provisioning``."""
     return _provision_issues(*args, **kwargs)  # type: ignore[arg-type]
@@ -75,7 +79,8 @@ def _say(output: CliOutput, text: str = "", *, multiline: bool = False) -> None:
 def _print_resume_hint(plan_path: str) -> None:
     try:
         subtasks, metadata = _load_plan(plan_path)
-    except Exception:  # noqa: BLE001 - boundary: an optional resume hint must not mask the primary provisioning error
+    except Exception as error:  # noqa: BLE001 - boundary: an optional resume hint must not mask the primary provisioning error
+        logger.warning("swallowed broad exception: %s", error)
         return
     known = {task.id: task.issue_number for task in subtasks if task.issue_number}
     _say(
@@ -112,9 +117,7 @@ class ProvisionProgressDisplay:
             self._update(self._description)
         except Exception:  # noqa: BLE001 - boundary: terminal rendering failure disables progress without interrupting provisioning
             self._disable()
-        except (
-            BaseException
-        ):  # cleanup: close progress resources before re-raising cancellation
+        except BaseException:  # cleanup: must run on BaseException; close progress resources before re-raising cancellation
             self.close()
             raise
         return self

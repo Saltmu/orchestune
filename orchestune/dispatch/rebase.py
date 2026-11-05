@@ -390,7 +390,8 @@ def _prepare_wip_backup_for_rebase(
         try:
             os.kill(active.launch.pid, 9)
             _wait_for_process_terminate(active.launch.pid)
-        except Exception:  # noqa: BLE001 - cleanup: a process may exit between the liveness check and SIGKILL
+        except Exception as error:  # noqa: BLE001 - cleanup: a process may exit between the liveness check and SIGKILL
+            logger.warning("swallowed broad exception: %s", error)
             pass
 
     backup_error = dispatch_gc.backup_wip_commit(
@@ -424,7 +425,8 @@ def _handle_rebase_failure(
 ) -> None:
     try:
         run_git(["rebase", "--abort"], cwd=active.core.worktree_path, check=False)
-    except Exception:  # noqa: BLE001 - cleanup: best-effort abort must not hide the original rebase failure
+    except Exception as error:  # noqa: BLE001 - cleanup: best-effort abort must not hide the original rebase failure
+        logger.warning("swallowed broad exception: %s", error)
         pass
 
     transition_status_label(

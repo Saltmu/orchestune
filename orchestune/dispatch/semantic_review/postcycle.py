@@ -12,6 +12,7 @@ same post-cycle.
 from __future__ import annotations
 
 import hashlib
+import logging
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
@@ -149,6 +150,9 @@ WARNING_STATUSES = frozenset(
 )
 
 VerifyCiFn = Callable[[str, str], SemanticCiObservation | None]
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -666,7 +670,8 @@ class SemanticReviewCycleRunner:
             return
         try:
             self._claims.release(self._root, ctx.claim, now=self._clock())
-        except Exception:  # an unreleased claim only expires later  # noqa: BLE001
+        except Exception as error:  # noqa: BLE001 - unreleased claim only expires later
+            logger.warning("swallowed broad exception: %s", error)
             pass
         ctx.claim = None
 
@@ -859,7 +864,7 @@ class SemanticReviewCycleRunner:
             if latest_notice_body(self._forge.list_comments(parent), kind) is None:
                 return False
             labels = self._forge.get_issue_labels(parent)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - boundary: an unreadable escalation record counts as already recorded
             return True
         return StatusLabel.BLOCKED_HUMAN_REVIEW.value in labels
 

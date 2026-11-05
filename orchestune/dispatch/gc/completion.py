@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import logging
 import sys
 import time
 from collections.abc import Callable, Sequence
@@ -119,6 +120,8 @@ from orchestune.pr_freshness import (  # noqa: F401 - gc package re-exports the 
 from orchestune.pr_link_notice_trust import NoticePresence, TrustContext
 from orchestune.targets.completion_policy import token_limit_decision
 from orchestune.task_metadata import TaskMetadata
+
+logger = logging.getLogger(__name__)
 
 
 def _detect_worktree_commits(
@@ -367,7 +370,8 @@ def _apply_escalated_base_branch_red(
         ctx.config.resolved_forge.remove_label(
             ctx.active.core.issue_number, "ci:base-branch-red"
         )
-    except Exception:  # noqa: BLE001 - boundary: optional status-label cleanup must not undo verified completion
+    except Exception as error:  # noqa: BLE001 - boundary: optional status-label cleanup must not undo verified completion
+        logger.warning("swallowed broad exception: %s", error)
         pass
 
 

@@ -23,6 +23,7 @@ parent from different hosts are therefore unsupported; a detected conflict stops
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 import uuid
@@ -73,6 +74,9 @@ _BLOCKING_OUTCOMES = frozenset(
 )
 
 _EVENT_BODY = re.compile(r"```json\s*\n(.*?)\n```", re.DOTALL)
+
+
+logger = logging.getLogger(__name__)
 
 
 class BudgetReadError(RuntimeError):
@@ -609,7 +613,12 @@ class ExecutionBudgetStore:
             if absent_proven:
                 try:
                     self.forge.create_issue_comment(self.parent, body)
-                except (Exception, ExecutionCommandTimeout, ExecutionDeadlineExceeded):  # noqa: BLE001 - boundary: confirm a possibly lost write before retrying it
+                except (
+                    Exception,
+                    ExecutionCommandTimeout,
+                    ExecutionDeadlineExceeded,
+                ) as error:  # noqa: BLE001 - boundary: confirm a possibly lost write before retrying it
+                    logger.warning("swallowed broad exception: %s", error)
                     pass  # the response may have been lost; confirm below
             try:
                 if self._present(event):

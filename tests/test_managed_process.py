@@ -288,7 +288,7 @@ class TestExecutionScope:
             with pytest.raises(ExecutionInterrupt):
                 try:
                     raise signal
-                except Exception:  # noqa: BLE001
+                except Exception:  # noqa: BLE001 - boundary: prove the scoped timeout is not swallowed
                     pytest.fail("a best-effort handler absorbed an execution bound")
         assert issubclass(IntegrationExecutionAbort, ExecutionInterrupt)
         assert not issubclass(IntegrationExecutionAbort, Exception)

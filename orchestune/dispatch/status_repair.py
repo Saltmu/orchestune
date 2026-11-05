@@ -489,7 +489,8 @@ def reconcile_status_repair_intents(
                     verified_labels=labels,
                 )
             )
-        except Exception:  # noqa: BLE001 - retry live verification next cycle
+        except Exception as error:  # noqa: BLE001 - retry live verification next cycle
+            _LOGGER.warning("swallowed broad exception: %s", error)
             continue
     return tuple(verified)
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 from collections.abc import Callable, Sequence
 from dataclasses import replace
@@ -49,6 +50,8 @@ from orchestune.ledger.run_state import (
     RunState,
     load_run_state_readonly,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _is_standalone_gc_candidate(active: ActiveWorktree) -> bool:
@@ -118,7 +121,8 @@ def _gc_forge(
         return None
     try:
         return forge_factory()
-    except Exception:  # noqa: BLE001 - boundary: fail closed when optional Forge/workspace setup or GC execution is unavailable
+    except Exception as error:  # noqa: BLE001 - boundary: fail closed when optional Forge/workspace setup or GC execution is unavailable
+        logger.warning("swallowed broad exception: %s", error)
         return None
 
 

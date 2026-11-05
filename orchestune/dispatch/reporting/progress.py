@@ -134,7 +134,7 @@ def progress_phase(sink: ProgressSink, phase: str) -> Iterator[None]:
     sink.emit(phase, "started")
     try:
         yield
-    except BaseException:
+    except BaseException:  # cleanup: must run on BaseException
         sink.emit(phase, "failed")
         raise
     else:

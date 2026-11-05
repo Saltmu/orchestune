@@ -470,7 +470,7 @@ def _atomic_write_text(target: Path, content: str) -> None:
             tmp_file.flush()
             os.fsync(tmp_file.fileno())
         os.replace(tmp_name, target)
-    except BaseException:  # cleanup: remove the temporary file even during cancellation or interpreter shutdown
+    except BaseException:  # cleanup: must run on BaseException; remove the temporary file even during cancellation or interpreter shutdown
         try:
             os.remove(tmp_name)
         except FileNotFoundError:
