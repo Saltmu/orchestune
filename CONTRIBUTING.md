@@ -149,6 +149,22 @@ with patch("orchestune.dispatch.worktree._branch_exists", autospec=True) as mock
 
 ## Local CI Script
 
+### Default text encoding warnings
+
+Local CI sets `PYTHONWARNDEFAULTENCODING=1` for pytest on Linux and Windows. Python's
+`EncodingWarning` is collected and printed in pytest's warning summary, so it does not
+make the initial rollout fail the suite. The summary points to each warning site. Treat
+warnings from this repository as cleanup work; report dependency warnings separately
+with the package and warning location, and do not hide either group with a blanket
+ignore filter.
+
+For UTF-8 files, pass `encoding="utf-8"` to `open`, `Path.read_text`, and
+`Path.write_text`. If a file intentionally uses the operating system locale, make that
+choice explicit and test it under the supported locale rather than relying on the
+machine's default. Once existing repository warnings have been reviewed and cleaned up,
+the project can promote its own `EncodingWarning` instances to errors while continuing
+to assess dependency warnings separately.
+
 Before committing or pushing your changes, run the local CI script to verify formatting, types, and tests:
 * **POSIX (Linux / macOS)**:
   ```bash

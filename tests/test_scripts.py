@@ -22,6 +22,21 @@ def test_powershell_local_ci_contract():
     assert "gitleaks detect" in content
 
 
+def test_local_ci_scopes_default_encoding_warnings_to_pytest():
+    local_ci_sh = PROJECT_ROOT / "scripts" / "local-ci.sh"
+    local_ci_ps1 = PROJECT_ROOT / "scripts" / "local-ci.ps1"
+    shell_content = local_ci_sh.read_text(encoding="utf-8")
+    powershell_content = local_ci_ps1.read_text(encoding="utf-8")
+
+    assert "PYTHONWARNDEFAULTENCODING=1 uv run pytest" in shell_content
+    assert '$env:PYTHONWARNDEFAULTENCODING = "1"' in powershell_content
+    assert "$HadEncodingWarningSetting = Test-Path" in powershell_content
+    assert (
+        "$SavedEncodingWarningSetting = $env:PYTHONWARNDEFAULTENCODING"
+        in powershell_content
+    )
+
+
 def test_powershell_local_ci_configurable_workers():
     import re
 

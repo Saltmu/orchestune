@@ -102,7 +102,7 @@ echo "[5/7] Running tests with coverage (pytest)..."
   if [ -n "${ORCHESTUNE_TEST_WORKERS:-}" ]; then
     PYTEST_WORKER_ARGS+=("-n" "${ORCHESTUNE_TEST_WORKERS}")
   fi
-  uv run pytest ${PYTEST_WORKER_ARGS[@]+"${PYTEST_WORKER_ARGS[@]}"} --cov=orchestune --cov-branch --cov-fail-under=90 --cov-report=term-missing
+  PYTHONWARNDEFAULTENCODING=1 uv run pytest ${PYTEST_WORKER_ARGS[@]+"${PYTEST_WORKER_ARGS[@]}"} --cov=orchestune --cov-branch --cov-fail-under=90 --cov-report=term-missing
 )
 
 QUINT_SUMMARY="${QUINT_REPLAY_DIR}/test_bounded_exploration_replays_on_production/exploration-summary.json"
