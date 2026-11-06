@@ -63,7 +63,18 @@ The MCP client, not the offline CLI, posts one combined normal PR comment (`issu
 
 ### Terminal judgment posting (round limit)
 The judged round r is the final round when r >= `MAX_REVIEW_ROUNDS` (5): no further trigger is possible (Exit 12 beyond it; `--max-rounds` 1-5 can only lower the limit, never raise it to avoid this). At the final round, freeze the PR at the reviewed HEAD: do not commit or push, and do not fix adopted findings, so the done gate's HEAD check still passes. Review target round r is preserved (e.g. Round 5/5 with `round: 5`).
-1. File a follow-up Issue for every final-round row still open (`judgment: adopt` not fixed, `judgment: needs_information`, or `status: unresolved`); one Issue may group rows by footprint overlap. State each finding's source link, basis and fix plan; declare `depends_on: [<source subtask_id>]` in its Footprint YAML, or `blocked-by #<source Issue>` in the body when the source task has no subtask_id.
+1. File one independent follow-up Issue for every final-round row still open (`judgment: adopt` not fixed, `judgment: needs_information`, or `status: unresolved`); one Issue may group rows by footprint overlap. State each finding's source link, basis and fix plan. Give it a new `subtask_id`, a Footprint limited to the remainder, `parent_issue_number: null`, and `depends_on: []`. Do not copy the source parent number, the source `subtask_id`, `owner_kind`, `claim_id`, or `reservation_kind`. Record the link with `blocked-by #<source Issue>` and the source PR or finding URL even when the source has a `subtask_id`. A `depends_on` id names only another task in the same DAG. Do not add a native sub-issue of the source parent EPIC or an entry in that parent's manifest; joining the parent plan is a separate explicit plan change. A queued label does not decide parentage, and automatic dispatch is a separate explicit registration. Minimal Footprint:
+
+```text
+subtask_id: followup-unique-id
+footprint:
+  - path/to/affected-file.py
+symbols: []
+depends_on: []
+parent_issue_number: null
+```
+
+After creation, read back the Issue body and the native parent. Use the Issue as `evidence` only when `parent_issue_number: null` and there is no native parent. If that read fails, stop unverified: do not post the final judgment table or advance to done. If the create response is unknown, search again and do not file a duplicate.
 2. Table: set those rows to `status: deferred` with the follow-up in `evidence` (a `https://github.com/<owner>/<repo>/issues/<N>` URL of this repository, or `#<N>`): an open Issue, never a PR, a closed Issue, another repository, or the task's own Issue/PR. `adopt` and `needs_information` rows may be deferred only in the final round; no `status: unresolved` row may remain.
 3. Comment: check existing PR comments across all pages first; if a reply for the final round exists, reuse it and do not repost. Otherwise start `review-reply.md` with `<!-- orchestune:review-reply -->` as the first non-blank line, then `Round X/5` and the `orchestune-review-judgments` block for round r; never include `@<bot> review`, trigger, round, head or selection markers, preventing re-review. Post once: CLI/gh via `gh pr comment <PR_NUMBER> --body-file <session-dir>/review-reply.md`; GitHub MCP backend via `issue_comments` with that file's body.
 4. Verify & complete: save the returned comment id and URL. If the posting response is unknown, re-fetch and check before any action; never resend without verification. After confirming posting, run `orchestune complete --issue <N> --pr <PR> --result done --reviewer <bot> --review-reply <session-dir>/review-reply.md`; the gate re-validates each follow-up (a lookup failure is `evidence_missing`) and records `required_deferred`. If `complete` fails, do not repost.

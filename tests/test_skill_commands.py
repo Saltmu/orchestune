@@ -1228,8 +1228,10 @@ def test_review_loop_defines_terminal_judgment_posting_contract(skill_name: str)
     assert "follow-up Issue" in section
     assert "`judgment: adopt`" in section and "`needs_information`" in section
     assert "`status: unresolved`" in section
-    assert "`depends_on: [<source subtask_id>]`" in section
+    assert "`depends_on: []`" in section
     assert "`blocked-by #<source Issue>`" in section
+    assert "even when the source has a `subtask_id`" in section
+    assert "`depends_on: [<source subtask_id>]`" not in section
 
     # 3. 判断表: deferred + 有効な参照。最終巡に限る。unresolved は残さない
     assert "`status: deferred`" in section and "`evidence`" in section
