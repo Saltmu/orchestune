@@ -26,12 +26,18 @@ from orchestune.dispatch.semantic_review.adapters import (
     escalate_semantic_review_to_human,
     trigger_semantic_review_round,
 )
+from orchestune.dispatch.semantic_review.effects import SemanticReviewEffects
+from orchestune.dispatch.semantic_review.lease import (
+    CLAIM_TTL_SECONDS,
+    SemanticReviewLease,
+)
 from orchestune.dispatch.semantic_review.postcycle import (
     SemanticClaimClient,
     SemanticReviewCycleRunner,
     SemanticReviewOperations,
     SemanticReviewPorts,
     advance_pending_semantic_reviews,
+    verify_semantic_ci,
 )
 from orchestune.integrator.semantic_claim import (
     ClaimResult,
@@ -106,6 +112,7 @@ class World:
         self.claim: SemanticClaim | None = None
         self.lose_claim = False
         self.renewed_at: list[datetime] = []
+        self.write_log: list[str] = []
         self.fail_save_after = -1
         self.dispatched: list[str] = []
         self.polls: dict[str, SemanticOperationResult] = {}
@@ -165,6 +172,7 @@ class World:
             if self.fail_save_after == 0:
                 raise RuntimeError("state save failed")
             self.fail_save_after -= 1
+            self.write_log.append("save_state")
         self.clock += timedelta(seconds=1)
         comment = {
             "id": 1000 + sum(len(c) for c in self.comments.values()),
@@ -222,6 +230,7 @@ class World:
             _root: Any, claim: SemanticClaim, *, now: datetime, **_: Any
         ) -> PushResult:
             self.renewed_at.append(now)
+            self.write_log.append("renew")
             if self.lose_claim:
                 return PushResult(PushStatus.REJECTED, None, "claim_lost")
             return PushResult(PushStatus.PUSHED, claim)
@@ -263,6 +272,7 @@ class World:
             _target: Any, *, operation_id: str, expected_head_sha: str, **_: Any
         ) -> SemanticOperationResult:
             self.dispatched.append(operation_id)
+            self.write_log.append("dispatch_fix")
             return SemanticOperationResult(
                 operation_id,
                 SemanticOperationStatus.DISPATCHING,
@@ -278,6 +288,7 @@ class World:
 
         def escalate(forge: Any, **kwargs: Any) -> None:
             self.escalations.append(kwargs["reason"])
+            self.write_log.append("escalate")
             escalate_semantic_review_to_human(forge, **kwargs)
 
         def cleanup_worktree(path: Path, repo_root: Any = None, **_k: Any) -> bool:
@@ -409,8 +420,17 @@ class TestReviewFixLoop:
         assert world.cycle()["status"] == "held"  # no review yet
 
         world.review()
+        world.write_log.clear()
         report = world.cycle()
         assert _phases(report) == ("review_pending", "fix_in_progress")
+        assert world.write_log == [
+            "renew",
+            "save_state",
+            "renew",
+            "dispatch_fix",
+            "renew",
+            "save_state",
+        ]
         assert world.dispatched == [world.state.operation_id]
         assert world.state.operation_status is SemanticOperationStatus.DISPATCHING
 
@@ -541,9 +561,11 @@ class TestLimitsAndEscalation:
     def test_unacknowledged_trigger_escalates_once(self, world: World) -> None:
         world.seed()
         world.cycle()
+        world.write_log.clear()
         report = world.cycle(minutes=31)
         assert report["next_phase"] == "escalated"
         assert world.state.escalation_reason == "review_not_acknowledged"
+        assert world.write_log == ["renew", "save_state", "renew", "escalate"]
         assert "status:blocked-human-review" in world.labels[PARENT]
         parent_comments = len(world.comments[PARENT])
         assert world.cycle()["status"] == "held"
@@ -964,16 +986,46 @@ class TestPostcycleWiring:
             clock=lambda: world.clock,
         )
         assert runner.run()[0].to_dict()["status"] == "advanced"
-
+        ports = SemanticReviewPorts(world.config.resolved_forge, world.verify_ci)
         with pytest.raises(TypeError, match="unexpected keyword"):
             SemanticReviewCycleRunner(
                 world.config,
-                ports=SemanticReviewPorts(
-                    forge=world.config.resolved_forge,
-                    verify_ci_fn=world.verify_ci,
-                ),
+                ports=ports,
                 repository_root=Path("."),
                 now=world.clock,
                 worker_id="w1",
                 unknown_kwarg=1,
             )
+
+    def test_collaborators_own_lease_and_effects_without_runner_delegates(self) -> None:
+        assert CLAIM_TTL_SECONDS == 300 and callable(verify_semantic_ci)
+        lease_m = {
+            "acquire",
+            "require_unchanged",
+            "revalidate",
+            "release",
+            "promote_fix_output",
+        }
+        effect_m = {
+            "trigger_body",
+            "resumed_trigger",
+            "post_trigger",
+            "dispatch_fix",
+            "save",
+            "cleanup_fix_worktree",
+            "escalation_recorded",
+            "escalate",
+            "note_skip",
+        }
+        assert lease_m <= set(SemanticReviewLease.__dict__) and effect_m <= set(
+            SemanticReviewEffects.__dict__
+        )
+        runner_attrs = {
+            k for k in SemanticReviewCycleRunner.__dict__ if not k.startswith("__")
+        } | {"__init__"}
+        moved = (
+            lease_m
+            | effect_m
+            | {f"_{m}" for m in (lease_m - {"promote_fix_output"}) | effect_m}
+        )
+        assert not (runner_attrs & moved) and len(runner_attrs) == 25

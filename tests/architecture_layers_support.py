@@ -133,6 +133,8 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "dispatch.reporting.progress_output",
             "dispatch.semantic_review.postcycle",
             "dispatch.semantic_review.postcycle_support",
+            "dispatch.semantic_review.lease",
+            "dispatch.semantic_review.effects",
             "dispatch.conflicts",
             "dispatch.cost_model",
             "dispatch.critical_path",
