@@ -1,10 +1,12 @@
 """Orphan PR adoption must reject ambiguous or untrusted PR identity."""
 
 from dataclasses import replace
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from orchestune.claim import service
 from orchestune.claim.adopt_pr import (
     duplicate_marker,
     orphan_marker,
@@ -255,7 +257,7 @@ def test_adoption_preview_validates_before_side_effects(claim_env):
         patch.object(forge, "list_prs", return_value=[pr]),
         patch.object(
             forge,
-            "list_comments",
+            "list_all_issue_comments",
             return_value=[{"body": orphan_marker("old", pr), "author": "operator"}],
         ),
         patch.object(forge, "get_authenticated_user", return_value="operator"),
@@ -278,6 +280,101 @@ def test_adoption_preview_validates_before_side_effects(claim_env):
     assert outcome.success, outcome.failure
     assert all("fetch" not in call.args[0] for call in git.call_args_list)
     prepare.assert_not_called()
+
+
+def test_duplicate_notice_adoption_without_orphan_receipt(claim_env):
+    root, state_path = claim_env["repo_root"], claim_env["state_path"]
+    workspace = resolve_claim_workspace(root, explicit_state_path=state_path)
+    issue = _make_issue(number=42, labels=("status:blocked-human-review",))
+    pr = PrRecord(
+        number=12,
+        head_ref="claude/issue-42-test-task",
+        changed_files=(),
+        base_ref="main",
+        state="OPEN",
+        is_cross_repository=False,
+        head_sha="a" * 40,
+    )
+    forge = MockForge({42: issue})
+
+    def git(args, **kwargs):
+        output = (
+            f"{pr.head_sha}\trefs/heads/{pr.head_ref}\n"
+            if "ls-remote" in args
+            else f"{pr.head_sha}\n"
+        )
+        return MagicMock(
+            returncode=0,
+            stdout=output,
+        )
+
+    def prepare(branch, worktree_root, base, claim_id, **kwargs):
+        path = worktree_root / branch.replace("/", "-")
+        return WorktreePreparation(
+            worktree_path=path,
+            branch=branch,
+            accepted=True,
+            created=True,
+            base_sha="b" * 40,
+        )
+
+    comments = [{"body": duplicate_marker(pr), "author": "operator"}]
+    with (
+        patch.object(forge, "list_prs", return_value=[pr]),
+        patch.object(forge, "get_authenticated_user", return_value="operator"),
+        patch.object(service, "is_process_alive", return_value=False),
+        patch.object(service, "run_git", side_effect=git),
+        patch.object(
+            service,
+            "prepare_task_worktree",
+            return_value=prepare(
+                pr.head_ref, workspace.worktree_root, "main", "claim-1"
+            ),
+        ),
+    ):
+        forge.event_comments.append({"issue_number": 42, **comments[0]})
+        preview = claim_task(
+            ClaimRequest(
+                issue_number=42, adopt_pr=12, state_path=state_path, dry_run=True
+            ),
+            forge=forge,
+            cwd=root,
+        )
+        assert preview.success, preview.failure
+        assert not load_run_state(state_path).active_worktrees
+        assert not forge.labels_added
+        assert not (workspace.worktree_root / pr.head_ref.replace("/", "-")).exists()
+
+        outcome = claim_task(
+            ClaimRequest(issue_number=42, adopt_pr=12, state_path=state_path),
+            forge=forge,
+            cwd=root,
+        )
+
+    active = load_run_state(state_path).active_worktrees["42"]
+    assert outcome.success, outcome.failure.message if outcome.failure else outcome
+    assert (active.claim.adopted_pr_number, active.claim.adopted_pr_head_sha) == (
+        12,
+        pr.head_sha,
+    )
+    assert not load_run_state(state_path).recovery_receipts
+    Path(active.core.worktree_path).mkdir(parents=True, exist_ok=True)
+    with (
+        patch.object(forge, "list_prs", return_value=[pr]),
+        patch.object(forge, "get_authenticated_user", return_value="operator"),
+        patch.object(service, "is_process_alive", return_value=False),
+        patch.object(service, "run_git", side_effect=git),
+        patch.object(service, "_check_resume_identity", return_value=None),
+    ):
+        resumed = resume_claim(
+            active.claim.claim_id or "",
+            outcome.owner_token or "",
+            forge=forge,
+            cwd=root,
+            state_path=state_path,
+        )
+    assert resumed.success, resumed.failure
+    assert not load_run_state(state_path).recovery_receipts
 
 
 @pytest.mark.parametrize("move_head", [False, True])
@@ -337,7 +434,7 @@ def test_adoption_reserves_exact_pr_head_and_finalizes(claim_env, move_head):
         ),
         patch.object(
             forge,
-            "list_comments",
+            "list_all_issue_comments",
             return_value=[{"body": orphan_marker("old", pr), "author": "operator"}],
         ),
         patch.object(forge, "get_authenticated_user", return_value="operator"),
@@ -411,7 +508,7 @@ def test_interrupted_adoption_revalidates_before_resume(claim_env):
         patch.object(forge, "list_prs", return_value=[pr]),
         patch.object(
             forge,
-            "list_comments",
+            "list_all_issue_comments",
             return_value=[{"body": orphan_marker("old", pr), "author": "operator"}],
         ),
         patch.object(forge, "get_authenticated_user", return_value="operator"),

@@ -927,7 +927,7 @@ Upon success, the command prints the issue number, claim ID, branch name, prepar
 | :--- | :--- | :--- |
 | `--no-apply` | disabled | Dry-run mode: validates prerequisites and previews planned values without modifying Git, GitHub, or local state. |
 | `--resume <claim_id>` | none | Resumes an interrupted claim using its expected generation and verified local worktree. |
-| `--adopt-pr <number>` | none | Claims a verified orphaned PR from `status:blocked-human-review`; cannot be combined with `--resume` or `--amend-footprint`. |
+| `--adopt-pr <number>` | none | Claims a verified orphaned PR or a PR named by a duplicate-pr notice from `status:blocked-human-review`; cannot be combined with `--resume` or `--amend-footprint`. |
 | `--amend-footprint` | disabled | Widens the held claim's file reservation. Cannot be combined with `--resume`. See below. |
 | `--add-path <path>` | none | Path to add to the held claim's file reservation (repeatable; requires `--amend-footprint`). |
 | `--state <path>` | `run_state.json` | Path to the run-state ledger file. |
@@ -945,9 +945,9 @@ cd <reported-worktree>
 orchestune complete --issue <issue> --pr <pr> --result done --reviewer <bot> --review-reply <file>
 ```
 
-The claim checks the recorded old generation and its stopped state, a trusted matching escalation notice, a unique open same-repository PR, canonical head branch, parent base, and matching remote HEAD. Missing or ambiguous evidence, another claim, an unfinished completion, a fork, or a changed HEAD causes rejection. The adopted PR number and HEAD are bound to the claim; a later HEAD change prevents completion. The normal local CI and review evidence gates still apply. Manual merging bypasses the Layer-1 gate.
+The claim requires the latest trusted notice to match the current PR number and HEAD, plus a unique open same-repository PR, canonical head branch, parent base, and matching remote HEAD. An `orphaned-pr` notice requires a unique receipt for the old execution and proof that it stopped. A `duplicate-pr` notice without a corresponding orphan receipt can proceed through the normal admission gates, including checks for conflicting claims and unfinished completions. If an orphan receipt remains, it receives the same strict validation and stop check as an `orphaned-pr` adoption. Before adopting a receiptless duplicate notice, an operator must confirm that the old execution has stopped and ownership is clear; the ledger cannot prove that no unrecorded execution is running. Missing or ambiguous evidence, another claim, an unfinished completion, a fork, or a changed HEAD causes rejection. The adopted PR number and HEAD are bound to the claim; a later HEAD change prevents completion. The normal local CI and review evidence gates still apply. Manual merging bypasses the Layer-1 gate.
 
-Comments mentioning `status:blocked-human-review` after the orphan notice can make the latest escalation reason ambiguous and cause adoption to be rejected.
+Newer mismatched notices, untrusted authors, or markers that do not match the PR and HEAD cause adoption to be rejected.
 
 ### Failure Handling
 
