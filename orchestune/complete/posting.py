@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import subprocess
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from orchestune.forge import ForgeError
 from orchestune.outcome_record import OutcomeRecord, parse_from_comments
 
 
@@ -68,7 +70,7 @@ def _find_existing(
 ) -> PostingResult | None:
     try:
         comments = forge.list_all_issue_comments(request.issue_number)
-    except Exception as exc:
+    except (ForgeError, OSError, subprocess.CalledProcessError) as exc:
         raise OutcomeLookupUnknownError(
             "Unable to retrieve every Issue comment page"
         ) from exc
@@ -122,7 +124,14 @@ def post_issue_outcome(
 
     try:
         return _post_new(request, forge)
-    except Exception as post_error:
+    except (
+        ForgeError,
+        OSError,
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        ValueError,
+        OutcomePostingError,
+    ) as post_error:
         try:
             recovered = _find_existing(request, forge)
         except OutcomeLookupUnknownError as lookup_error:

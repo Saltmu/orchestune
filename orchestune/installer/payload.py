@@ -32,7 +32,7 @@ def _read_pyproject_version(pyproject_path: Path) -> str:
         content = pyproject_path.read_text(encoding="utf-8")
         data = tomllib.loads(content)
         return str(data["project"]["version"])
-    except Exception as e:
+    except (OSError, tomllib.TOMLDecodeError, KeyError, TypeError) as e:
         raise PayloadError(f"Failed to read version from {pyproject_path}: {e}") from e
 
 

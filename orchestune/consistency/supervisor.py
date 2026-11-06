@@ -350,7 +350,7 @@ def _execute_repair(executor: RepairExecutor, command: RepairCommand) -> RepairR
         if result.command != command:
             raise ValueError("repair executor returned a result for another command")
         return result
-    except Exception as exc:  # noqa: BLE001 - failure belongs in the cycle report
+    except Exception as exc:  # noqa: BLE001 - boundary: executor failures become failed repair results with diagnostics
         return RepairResult(
             command=command,
             status=RepairStatus.FAILED,
@@ -495,7 +495,7 @@ class ConsistencySupervisor:
         for planner in self._repair_planners:
             try:
                 commands.extend(planner.plan(report))
-            except Exception as exc:  # noqa: BLE001 - shadow diagnostics are best effort
+            except Exception as exc:  # noqa: BLE001 - boundary: planner failures become scan diagnostics
                 diagnostics.append(f"repair planning failed: {describe_exception(exc)}")
         return _deduplicated_commands(commands), tuple(diagnostics)
 
@@ -511,7 +511,7 @@ class ConsistencySupervisor:
         try:
             desired = deriver.derive(observed)
             report = engine.evaluate(observed, desired)
-        except Exception as exc:  # noqa: BLE001 - report a shadow failure, do not fail cycle
+        except Exception as exc:  # noqa: BLE001 - boundary: evaluation failures become failed scan results
             return _failure_scan(
                 self._repository_id, boundary, kind, "evaluation", exc, changes
             )
@@ -552,7 +552,7 @@ class ConsistencySupervisor:
                     f"observed={observed.repository_id!r}"
                 )
             return observed
-        except Exception as exc:  # noqa: BLE001 - shadow observation is non-fatal
+        except Exception as exc:  # noqa: BLE001 - boundary: observation failures become failed scan results
             return _failure_scan(
                 self._repository_id, boundary, kind, "observation", exc, changes
             )

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import tomlkit
+from tomlkit.exceptions import ParseError
 
 from orchestune.config_contracts import ConfigError
 
@@ -196,12 +197,12 @@ class ConfigDocument:
 
         try:
             doc = tomlkit.parse(text)
-        except Exception as exc:
+        except ParseError as exc:
             raise ConfigError(f"'{target_path}' has TOML syntax errors: {exc}") from exc
 
         try:
             ref_dict = tomllib.loads(text)
-        except Exception as exc:
+        except tomllib.TOMLDecodeError as exc:
             raise ConfigError(
                 f"'{target_path}' cannot be parsed by tomllib: {exc}"
             ) from exc
@@ -229,7 +230,7 @@ class ConfigDocument:
     ) -> ConfigDocument | None:
         try:
             parsed_pyproject = tomlkit.parse(pyproject_text)
-        except Exception as exc:
+        except ParseError as exc:
             raise ConfigError(
                 f"'{pyproject_path}' has TOML syntax errors: {exc}"
             ) from exc

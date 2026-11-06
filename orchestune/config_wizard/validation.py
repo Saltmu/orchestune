@@ -89,7 +89,7 @@ def diagnose_existing_document(doc_data: dict[str, Any]) -> list[str]:
         already_reported = any(f"'{k}'" in err_msg for k in seen)
         if not already_reported:
             diagnostics.append(err_msg)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - boundary: expose unexpected schema-validator failures as configuration diagnostics
         diagnostics.append(f"Validation error: {exc}")
 
     return diagnostics
@@ -118,7 +118,7 @@ def _collect_candidate_section_errors(data: dict[str, Any]) -> list[str]:
         validate_toml_config(data)
     except ConfigError as exc:
         errors.append(str(exc))
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - boundary: expose unexpected schema-validator failures as configuration diagnostics
         errors.append(f"Unexpected validation error: {exc}")
 
     if any(
@@ -135,7 +135,7 @@ def _collect_candidate_section_errors(data: dict[str, Any]) -> list[str]:
         except ConfigError as exc:
             if str(exc) not in errors:
                 errors.append(str(exc))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - boundary: expose unexpected profile-validator failures as configuration diagnostics
             errors.append(f"Profile error: {exc}")
 
     _collect_dag_section_errors(data, errors)
@@ -146,7 +146,7 @@ def validate_candidate_document(doc_str: str) -> tuple[bool, list[str]]:
     """Validate full candidate TOML string against all existing schema validators."""
     try:
         data = tomllib.loads(doc_str)
-    except Exception as exc:
+    except tomllib.TOMLDecodeError as exc:
         return False, [f"TOML syntax error: {exc}"]
 
     errors = _collect_candidate_section_errors(data)

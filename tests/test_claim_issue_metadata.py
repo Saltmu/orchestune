@@ -58,6 +58,18 @@ def _update(body: str, **kwargs: bool) -> str:
     )
 
 
+def test_malformed_footprint_yaml_falls_back_to_claim_metadata() -> None:
+    body = "## Footprint\n```yaml\n: invalid: yaml: - content\n```\n"
+
+    updated = _update(body)
+    match = FOOTPRINT_BLOCK_PATTERN.search(updated)
+
+    assert match is not None
+    data = yaml.safe_load(match.group(1))
+    assert data["owner_kind"] == "interactive"
+    assert data["claim_id"] == "claim-1"
+
+
 class TestUpdateIssueClaimMetadataKeepsLayout:
     """#1465: the claim appends its keys without re-sorting or re-wrapping the fence."""
 

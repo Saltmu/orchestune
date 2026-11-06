@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Mapping
 
@@ -33,6 +34,8 @@ from orchestune.ledger.run_state import MAX_PENDING_LOCK_RELEASE_NOTICES, RunSta
 from orchestune.lock_contracts import CompletedDependencyBranchEvidence
 from orchestune.models import PrRecord
 from orchestune.task_metadata import TaskMetadata
+
+logger = logging.getLogger(__name__)
 
 
 def _is_base_or_parent_branch(branch_name: str) -> bool:
@@ -67,7 +70,8 @@ def _collect_completed_dependency_evidence(
                 cache[key] = None
                 try:
                     sha = forge.get_current_branch_tip_sha_if_merged_into(branch, base)
-                except Exception:
+                except Exception as error:  # noqa: BLE001 - boundary: preserve safe rebase outcome when Git resolution or cleanup fails
+                    logger.warning("swallowed broad exception: %s", error)
                     # Failed observations remain conflicts; retry only next scan.
                     continue
                 if isinstance(sha, str) and re.fullmatch(r"[0-9a-fA-F]{40}", sha):

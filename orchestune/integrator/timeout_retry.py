@@ -23,6 +23,7 @@ parent from different hosts are therefore unsupported; a detected conflict stops
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 import uuid
@@ -73,6 +74,9 @@ _BLOCKING_OUTCOMES = frozenset(
 )
 
 _EVENT_BODY = re.compile(r"```json\s*\n(.*?)\n```", re.DOTALL)
+
+
+logger = logging.getLogger(__name__)
 
 
 class BudgetReadError(RuntimeError):
@@ -519,7 +523,7 @@ class ExecutionBudgetStore:
         if self._trusted_login is None:
             try:
                 login = self.forge.get_authenticated_user()
-            except (
+            except (  # noqa: BLE001 - boundary: unavailable actor identity cannot authorize a timeout reset
                 Exception,
                 ExecutionCommandTimeout,
                 ExecutionDeadlineExceeded,
@@ -537,7 +541,7 @@ class ExecutionBudgetStore:
             return True
         try:
             return str(self.forge.get_actor_permission(login)) in _RESET_PERMISSIONS
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - boundary: unavailable permission evidence cannot authorize a reset
             raise BudgetReadError(
                 f"permission of reset author {login!r} could not be verified"
             ) from error
@@ -545,7 +549,7 @@ class ExecutionBudgetStore:
     def read_events(self) -> list[ExecutionEvent]:
         try:
             comments = self.forge.list_all_issue_comments(self.parent)
-        except (Exception, ExecutionCommandTimeout, ExecutionDeadlineExceeded) as error:
+        except (Exception, ExecutionCommandTimeout, ExecutionDeadlineExceeded) as error:  # noqa: BLE001 - boundary: unavailable event history cannot be treated as empty
             raise BudgetReadError(
                 f"issue comments could not be read: {error}"
             ) from error
@@ -609,7 +613,12 @@ class ExecutionBudgetStore:
             if absent_proven:
                 try:
                     self.forge.create_issue_comment(self.parent, body)
-                except (Exception, ExecutionCommandTimeout, ExecutionDeadlineExceeded):
+                except (
+                    Exception,
+                    ExecutionCommandTimeout,
+                    ExecutionDeadlineExceeded,
+                ) as error:  # noqa: BLE001 - boundary: confirm a possibly lost write before retrying it
+                    logger.warning("swallowed broad exception: %s", error)
                     pass  # the response may have been lost; confirm below
             try:
                 if self._present(event):

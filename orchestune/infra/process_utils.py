@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import contextlib
 import ctypes
+import logging
 import os
 import sys
 import threading
@@ -25,6 +26,8 @@ from collections.abc import Iterator
 from ctypes import wintypes
 from pathlib import Path
 from typing import IO, Any
+
+_LOGGER = logging.getLogger(__name__)
 
 try:
     import fcntl
@@ -122,8 +125,13 @@ class FileLock:
                     ) from None
                 time.sleep(min(self.poll_interval, remaining))
                 continue
-            except Exception:
-                lock_fd.close()
+            except BaseException:  # cleanup: must run on BaseException
+                try:
+                    lock_fd.close()
+                except OSError as close_error:
+                    _LOGGER.warning(
+                        "failed to close lock file %s: %s", self.lock_path, close_error
+                    )
                 raise
 
             self._lock_fd = lock_fd
@@ -141,8 +149,8 @@ class FileLock:
             elif backend is not None:
                 lock_fd.seek(0)
                 backend.locking(lock_fd.fileno(), backend.LK_UNLCK, 1)
-        except Exception:
-            pass
+        except OSError as exc:
+            _LOGGER.warning("failed to release file lock %s: %s", self.lock_path, exc)
         finally:
             lock_fd.close()
             self._lock_fd = None
@@ -274,7 +282,7 @@ def run_state_lock(
     except FileLockContentionError as exc:
         _release_run_state_lock_in_process(state, release_outermost=True)
         raise RuntimeError(format_run_state_lock_contention_message(norm_path)) from exc
-    except BaseException:
+    except BaseException:  # cleanup: must run on BaseException
         _release_run_state_lock_in_process(state, release_outermost=True)
         raise
 

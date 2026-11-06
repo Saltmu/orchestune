@@ -131,7 +131,7 @@ def begin_worktree_reclaim(
     )
     try:
         save(run_state, workspace.run_state_path)
-    except Exception as error:
+    except (OSError, TypeError, ValueError) as error:
         return assessment, f"Failed to persist the prepared worktree takeover: {error}"
     return assessment, None
 

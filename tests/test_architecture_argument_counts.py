@@ -39,7 +39,7 @@ def collect_plr0913_noqa_functions(base_dirs: list[str]) -> list[str]:
             with open(py_path, "rb") as f:
                 try:
                     tokens = list(tokenize.tokenize(f.readline))
-                except Exception:
+                except Exception:  # noqa: BLE001 - boundary: test_plr0913_baseline_matches skips unreadable token streams
                     continue
 
             noqa_lines = {
@@ -53,7 +53,7 @@ def collect_plr0913_noqa_functions(base_dirs: list[str]) -> list[str]:
 
             try:
                 tree = ast.parse(content, filename=str(py_path))
-            except Exception:
+            except Exception:  # noqa: BLE001 - boundary: test_plr0913_baseline_matches skips sources the AST parser cannot inspect
                 continue
 
             rel_path = py_path.relative_to(REPO_ROOT).as_posix()

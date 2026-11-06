@@ -46,7 +46,7 @@ def _extract_usage_from_dict(data: Any) -> Usage | None:
             model=model,
             cost_usd=cost_usd,
         )
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -55,7 +55,7 @@ def _parse_usage_from_log(log_path: Path) -> Usage | None:
         return None
     try:
         content = log_path.read_text(encoding="utf-8", errors="replace")
-    except Exception:
+    except OSError:
         return None
     lines = [line.strip() for line in content.splitlines() if line.strip()]
     for line in reversed(lines):
@@ -65,14 +65,14 @@ def _parse_usage_from_log(log_path: Path) -> Usage | None:
                 usage = _extract_usage_from_dict(data)
                 if usage is not None:
                     return usage
-            except Exception:
+            except (TypeError, ValueError):
                 pass
     try:
         data = json.loads(content.strip())
         usage = _extract_usage_from_dict(data)
         if usage is not None:
             return usage
-    except Exception:
+    except (TypeError, ValueError):
         pass
     return None
 

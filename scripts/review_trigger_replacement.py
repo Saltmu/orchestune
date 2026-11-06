@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -319,6 +320,8 @@ def _post_once(
         journal,
         {"state": "posting", "body_digest": hashlib.sha256(body.encode()).hexdigest()},
     )
+    # A transport failure can follow a successful POST; the re-fetch below
+    # decides whether the outcome is confirmed before another action.
     try:
         response = json.loads(
             run_gh(
@@ -330,7 +333,13 @@ def _post_once(
                 ]
             )
         )
-    except Exception:
+    except (
+        OSError,
+        subprocess.SubprocessError,
+        RuntimeError,
+        json.JSONDecodeError,
+        TypeError,
+    ):
         response = None
     comments = fetch_comments()
     candidate = _confirmed_candidate(comments, body, author)

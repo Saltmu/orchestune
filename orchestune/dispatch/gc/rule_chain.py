@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import time
@@ -79,6 +80,8 @@ from orchestune.ledger.run_state import (
 from orchestune.models import PrRecord
 from orchestune.outcome_record import RESULT_NOT_NEEDED, OutcomeLookupState
 from orchestune.task_metadata import TaskMetadata
+
+logger = logging.getLogger(__name__)
 
 
 def _rule_not_needed(
@@ -358,7 +361,8 @@ def _cleanup_stale_active_worktree(
     if active.launch.pid and is_process_alive(active.launch.pid):
         try:
             os.kill(active.launch.pid, 9)
-        except Exception:
+        except Exception as error:  # noqa: BLE001 - cleanup: the process may exit between liveness check and signal
+            logger.warning("swallowed broad exception: %s", error)
             pass
 
     if worktree_exists:
@@ -466,7 +470,7 @@ def _abandoned_worktree_outcome(
             on_label_applied=release_entry,
             on_reclaim_reserved=reserve_reclaim,
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - boundary: failed reclaim persistence is reported and the task remains held
         print(
             f"Warning: skipping abandonment of issue #{active.core.issue_number}: "
             f"failed to persist the reclaim count: {e}",

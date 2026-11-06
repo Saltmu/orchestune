@@ -682,7 +682,7 @@ class TestGitHubForgeExecutionScope:
         with activate_scope(self._scope()), pytest.raises(ExecutionCommandTimeout):
             try:
                 GitHubForge()._run(["gh", "issue", "list"])
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 - boundary: prove the scoped timeout is not swallowed
                 pytest.fail("the scoped timeout was swallowed by `except Exception`")
 
     def test_a_forge_timeout_inside_a_scope_is_promoted_even_when_it_is_smaller(
@@ -697,7 +697,7 @@ class TestGitHubForgeExecutionScope:
         with activate_scope(self._scope()), pytest.raises(ExecutionCommandTimeout):
             try:
                 GitHubForge(timeout_seconds=4)._run(["gh", "issue", "list"])
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 - boundary: prove the scoped timeout is not swallowed
                 pytest.fail("the timed-out write was swallowed by `except Exception`")
 
     def test_the_forges_own_timeout_keeps_its_exception_outside_a_scope(self, gh_run):
@@ -774,5 +774,5 @@ class TestAdminMethodsAreBoundedToo:
         ):
             try:
                 GitHubForge().ensure_labels((self._label(),))
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 - boundary: prove the scoped timeout is not swallowed
                 pytest.fail("the scoped timeout was swallowed by `except Exception`")

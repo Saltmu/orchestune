@@ -7,6 +7,7 @@ This module does not import ``service``.
 from __future__ import annotations
 
 import dataclasses
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -38,7 +39,7 @@ from orchestune.claim.workspace import (
     ClaimWorkspace,
     check_repository_identity_match,
 )
-from orchestune.forge import Forge, ForgeGraphQLUnavailableError
+from orchestune.forge import Forge, ForgeError, ForgeGraphQLUnavailableError
 from orchestune.issue_parsing import parse_task_from_issue
 from orchestune.ledger.run_state import (
     ActiveWorktree,
@@ -102,7 +103,7 @@ def _evaluate_conflict_step(
     except ForgeGraphQLUnavailableError:
         # #1334: the CLI reports this as forge_unavailable, not as a conflict.
         raise
-    except Exception as e:
+    except (ForgeError, subprocess.CalledProcessError, OSError) as e:
         return _claim_failure(
             issue_number,
             ClaimFailure(

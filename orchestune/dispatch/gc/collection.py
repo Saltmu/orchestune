@@ -157,7 +157,7 @@ def _remove_verified_worktree(
         removed = remove_verified_worktree(
             replace(evaluation.request, reason="gc_collection")
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 - boundary: collection failures retain the claim or return an explicit hold result
         return "worktree_remove_failed"
     if not removed.success or target.exists():
         return "worktree_remove_failed"
@@ -278,7 +278,7 @@ def _apply_release(
     try:
         assert_run_state_lock_held(workspace.lock_path)
         write_json_atomic(workspace.run_state_path, updated)
-    except Exception:
+    except Exception:  # noqa: BLE001 - boundary: collection failures retain the claim or return an explicit hold result
         return False, "state_save_failed"
     return True, "released"
 
@@ -439,7 +439,7 @@ def _inspect_or_hold(
         )
     try:
         return inspect_handoff(active, workspace, forge, config=config)
-    except Exception:
+    except Exception:  # noqa: BLE001 - boundary: collection failures retain the claim or return an explicit hold result
         return HandoffPlan(
             key=str(core.issue_number),
             issue_number=core.issue_number,

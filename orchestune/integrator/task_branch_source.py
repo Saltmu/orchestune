@@ -54,7 +54,7 @@ class TaskBranchSource:
                 source_sha = self.forge.get_current_branch_tip_sha_if_merged_into(
                     branch_name, base_branch_name
                 )
-            except Exception as lookup_error:
+            except Exception as lookup_error:  # noqa: BLE001 - boundary: report unverifiable branch source and refuse to treat it as merged
                 source_sha = None
                 print(
                     "Warning: Failed to verify whether "
@@ -100,7 +100,7 @@ class TaskBranchSource:
             return self.forge.get_current_branch_tip_sha_if_merged_into(
                 resolution.canonical_branch, base_branch.removeprefix("origin/")
             )
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - boundary: report canonical branch lookup failure and return unknown
             print(
                 "Warning: failed to verify canonical branch containment for "
                 f"{resolution.canonical_branch}: {error}",

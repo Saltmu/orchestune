@@ -41,7 +41,7 @@ def _decide_actor_verification(
         try:
             actor = forge.get_label_actor(task.issue_number, StatusLabel.QUEUED)
             permission = forge.get_actor_permission(actor)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - boundary: provider permission lookup failures deny authorization
             print(
                 f"Warning: actor検証に失敗しました (issue #{task.issue_number}, "
                 f"actor={actor!r}): {exc}. 未認可として扱います。",

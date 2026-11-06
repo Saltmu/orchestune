@@ -132,7 +132,7 @@ def _recover_review_launch(
     if target is not None and meta.get("launch_target") == target_name:
         try:
             handle = target.lookup_launch_attempt(meta["operation_id"])
-        except Exception:
+        except Exception:  # noqa: BLE001 - boundary: failed launch lookup is not proof the original launch did not happen
             # An unavailable lookup never proves that the original POST failed.
             handle = None
     if handle is None:

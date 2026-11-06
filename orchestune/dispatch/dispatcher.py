@@ -146,7 +146,7 @@ def _run_post_cycle_step(
     fatal_exception = False
     try:
         result = call()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - boundary: normalize phase, execution, and report callback failures into existing status/exit results
         result = PhaseResult(name, PhaseStatus.FATAL_FAILURE, error_message=str(exc))
         fatal_exception = True
     event = {
@@ -173,7 +173,7 @@ def _prepare_integration_boundary(
                 auth_error = exc
             semantic_review_enabled = decide_review_fn()
         return semantic_review_enabled, auth_error, None
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - boundary: normalize phase, execution, and report callback failures into existing status/exit results
         failure = PhaseResult(
             "integration_preparation",
             PhaseStatus.FATAL_FAILURE,
@@ -395,7 +395,7 @@ def _main_with_sink(
     except KeyboardInterrupt:
         sink.emit("execution", "failed", reason="interrupted; report not created")
         raise
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - boundary: normalize phase, execution, and report callback failures into existing status/exit results
         safe_stderr(f"Error: {exc}")
         return 1
 
@@ -403,7 +403,7 @@ def _main_with_sink(
 def _execute_and_save(config: DispatcherConfig, output: ReportOutput) -> int:
     try:
         result = _run_dispatcher(config)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - boundary: normalize phase, execution, and report callback failures into existing status/exit results
         config.progress.emit(
             "report", "skipped", reason=f"report not created: {output.path}"
         )
@@ -430,12 +430,12 @@ def _execute_and_save(config: DispatcherConfig, output: ReportOutput) -> int:
         config.progress.emit(
             "report", "completed", reason=f"report saved: {output.path}"
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - boundary: normalize phase, execution, and report callback failures into existing status/exit results
         safe_stderr(f"report save failed: {output.path}: {exc}")
         code = 1
     try:
         _emit_dispatcher_report(result)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - boundary: normalize phase, execution, and report callback failures into existing status/exit results
         safe_stderr(f"Warning: summary unavailable: {exc}")
     config.progress.emit(
         "execution", "completed" if code == 0 else "failed", reason=f"exit_code={code}"

@@ -106,14 +106,14 @@ def _handle_existing_skill_link(
             f"Updating link for '{skill_name}' (points to {link_target} -> updating to {src_skill})",
         )
         dest_skill.unlink()
-    except Exception as e:
+    except (OSError, RuntimeError) as e:
         _report(
             Level.WARNING,
             f"Warning: Failed to resolve existing link {dest_skill}: {e}. Trying to overwrite.",
         )
         try:
             dest_skill.unlink()
-        except Exception as unlink_e:
+        except OSError as unlink_e:
             _report(
                 Level.FAILURE,
                 f"Error: Failed to remove stale link {dest_skill}: {unlink_e}",
@@ -142,7 +142,7 @@ def _link_one_skill(src_skill: Path, dest_skill: Path, skill_name: str) -> bool:
                 Level.SUCCESS, f"Successfully linked '{skill_name}' to {dest_skill}"
             )
         return True
-    except Exception as e:
+    except (OSError, RuntimeError) as e:
         _report(
             Level.FAILURE,
             f"Error: Failed to set up '{skill_name}': {e}",
@@ -171,7 +171,7 @@ def _setup_for_assistant(
 
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
-    except Exception as e:
+    except OSError as e:
         _report(
             Level.WARNING,
             f"Warning: Could not create directory {target_dir}: {e}",
@@ -228,7 +228,7 @@ def _copy_workflow_template_skill(
         shutil.copytree(src_skill, dest_skill)
         _report(Level.SUCCESS, f"Successfully copied '{skill_name}' to {dest_skill}")
         return True
-    except Exception as e:
+    except OSError as e:
         _report(
             Level.FAILURE,
             f"Error: Failed to copy '{skill_name}' to {dest_skill}: {e}",

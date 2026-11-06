@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,7 @@ from orchestune.complete.contracts import (
     DonePayload,
 )
 from orchestune.complete.merged import validate_merged_completion
+from orchestune.forge import ForgeError
 from orchestune.infra.git_cli import WorktreeStatus, inspect_worktree_status
 from orchestune.outcome_record import RESULT_BLOCKED, RESULT_DONE, RESULT_NOT_NEEDED
 
@@ -179,7 +181,13 @@ def _fetch_pr(forge: Any, pr_number: int) -> tuple[Any | None, bool, str | None]
     if hasattr(forge, "get_pull_request"):
         try:
             return forge.get_pull_request(pr_number), True, None
-        except Exception as exc:
+        except (
+            ForgeError,
+            OSError,
+            ValueError,
+            subprocess.CalledProcessError,
+            subprocess.TimeoutExpired,
+        ) as exc:
             return None, True, str(exc)
     if hasattr(forge, "list_prs"):
         try:
@@ -187,9 +195,21 @@ def _fetch_pr(forge: Any, pr_number: int) -> tuple[Any | None, bool, str | None]
         except TypeError:
             try:
                 prs = forge.list_prs(state="all")
-            except Exception as exc:
+            except (
+                ForgeError,
+                OSError,
+                ValueError,
+                subprocess.CalledProcessError,
+                subprocess.TimeoutExpired,
+            ) as exc:
                 return None, True, str(exc)
-        except Exception as exc:
+        except (
+            ForgeError,
+            OSError,
+            ValueError,
+            subprocess.CalledProcessError,
+            subprocess.TimeoutExpired,
+        ) as exc:
             return None, True, str(exc)
         for p in prs:
             if getattr(p, "number", None) == pr_number:

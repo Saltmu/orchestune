@@ -79,7 +79,7 @@ class TestWriteJsonAtomic:
             barrier.wait()
             try:
                 write_json_atomic(path, {"version": version})
-            except BaseException as exc:  # noqa: BLE001 - スレッド側の例外を集める
+            except Exception as exc:  # noqa: BLE001 - boundary: collect worker-thread failures for the parent test
                 errors.append(exc)
 
         threads = [

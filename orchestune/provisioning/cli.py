@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from collections.abc import Sequence
 from contextlib import ExitStack, suppress
@@ -62,6 +63,9 @@ __all__ = (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 def provision_issues(*args: object, **kwargs: object) -> ProvisionResult:
     """Compatibility entry point for callers of ``orchestune.provisioning``."""
     return _provision_issues(*args, **kwargs)  # type: ignore[arg-type]
@@ -75,7 +79,8 @@ def _say(output: CliOutput, text: str = "", *, multiline: bool = False) -> None:
 def _print_resume_hint(plan_path: str) -> None:
     try:
         subtasks, metadata = _load_plan(plan_path)
-    except Exception:
+    except Exception as error:  # noqa: BLE001 - boundary: an optional resume hint must not mask the primary provisioning error
+        logger.warning("swallowed broad exception: %s", error)
         return
     known = {task.id: task.issue_number for task in subtasks if task.issue_number}
     _say(
@@ -110,9 +115,9 @@ class ProvisionProgressDisplay:
         try:
             self._handle = self._stack.enter_context(progress(self._output))
             self._update(self._description)
-        except Exception:
+        except Exception:  # noqa: BLE001 - boundary: terminal rendering failure disables progress without interrupting provisioning
             self._disable()
-        except BaseException:
+        except BaseException:  # cleanup: must run on BaseException; close progress resources before re-raising cancellation
             self.close()
             raise
         return self
@@ -142,7 +147,7 @@ class ProvisionProgressDisplay:
                 self._description = f"{_PROGRESS_TEXT} {phase}"
                 description = self._description
             self._update(description)
-        except Exception:
+        except Exception:  # noqa: BLE001 - boundary: terminal rendering failure disables progress without interrupting provisioning
             self._disable()
 
     def _update(self, description: str) -> None:
@@ -157,15 +162,18 @@ class ProvisionProgressDisplay:
         self._closed = True
         try:
             self._stack.close()
-        except Exception:
+        except Exception:  # noqa: BLE001 - cleanup: progress renderer shutdown must not replace the provisioning result
             self._disable()
 
     def _disable(self) -> None:
         if self._disabled:
             return
         self._disabled = self._closed = True
+        # cleanup: a broken progress renderer must not prevent the main task's
+        # result from being reported.
         with suppress(Exception):
             self._stack.close()
+        # cleanup: failure to clear a broken terminal renderer is best-effort.
         with suppress(Exception):
             _say(
                 make_output(sys.stderr),
@@ -369,7 +377,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     except ConfigError as error:
         _print_error(error)
         raise SystemExit(2) from error
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - boundary: report unexpected provisioning failures and preserve the resume hint
         _print_error(error)
         _print_resume_hint(args.plan)
         raise SystemExit(1) from error

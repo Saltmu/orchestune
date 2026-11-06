@@ -36,7 +36,7 @@ def _check_issue_state(
     try:
         state = forge.get_issue_state(issue_number)
         return str(state).upper(), None
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - boundary: diagnostic Forge reads return the error as diagnostic data
         return None, str(exc)
 
 

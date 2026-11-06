@@ -96,6 +96,25 @@ class TestFileLock:
         with file_lock(lock_path):
             pass
 
+    def test_acquire_closes_lock_file_when_base_exception_interrupts(
+        self, tmp_path: Path
+    ):
+        lock = FileLock(tmp_path / "interrupted.lock")
+        opened_files = []
+
+        def interrupt(lock_fd):
+            opened_files.append(lock_fd)
+            raise KeyboardInterrupt
+
+        with (
+            patch.object(lock, "_try_acquire", side_effect=interrupt),
+            pytest.raises(KeyboardInterrupt),
+        ):
+            lock.acquire()
+
+        assert opened_files[0].closed
+        assert lock._lock_fd is None
+
     def test_msvcrt_backend_locks_and_unlocks_one_byte(self, tmp_path: Path):
         mock_msvcrt = MagicMock()
 

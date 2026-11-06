@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import ast
 import functools
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,9 @@ try:
     _TREE_SITTER_AVAILABLE = True
 except ImportError:  # pragma: no cover
     _TREE_SITTER_AVAILABLE = False
+
+
+logger = logging.getLogger(__name__)
 
 
 def _flatten_scope_statements(statements: list[ast.stmt]) -> list[ast.stmt]:
@@ -819,7 +823,8 @@ def _parse_with_tree_sitter(
             return _collect_rust_names(tree, content)
         if language_name == "go":
             return _collect_go_names(tree, content)
-    except Exception:
+    except Exception as error:  # noqa: BLE001 - boundary: unsupported parser failures make symbol evidence unknown
+        logger.warning("swallowed broad exception: %s", error)
         return None
     return None
 

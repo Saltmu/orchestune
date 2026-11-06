@@ -214,7 +214,7 @@ def start_owned_process(
             shell=False,
             creationflags=_CREATE_SUSPENDED | _CREATE_NEW_PROCESS_GROUP,
         )
-    except BaseException:
+    except BaseException:  # cleanup: must run on BaseException
         kernel32.CloseHandle(job)
         raise
     handle = int(popen._handle)  # type: ignore[attr-defined]  # noqa: SLF001

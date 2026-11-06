@@ -6,6 +6,7 @@ This module does not import ``recovery``.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -64,6 +65,9 @@ if TYPE_CHECKING:
 _YAML_SAFE_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 
 
+logger = logging.getLogger(__name__)
+
+
 def _yaml_safe_load(stream: str) -> Any:
     """Parse YAML with LibYAML's CSafeLoader when available, else SafeLoader."""
     return yaml.load(stream, Loader=_YAML_SAFE_LOADER)
@@ -119,7 +123,8 @@ def _parse_claim_info_from_issue(issue: IssueRecord) -> ClaimInfo:
                     "repository",
                 }:
                     rk = r
-        except Exception:
+        except Exception as error:  # noqa: BLE001 - boundary: optional legacy metadata parsing must not block safe claim restoration
+            logger.warning("swallowed broad exception: %s", error)
             pass
     return ClaimInfo(owner, cid, rk, recompute_count=rc, forced_serial=fs)
 

@@ -19,6 +19,7 @@ semantic claim, which is re-proved before each of them.
 from __future__ import annotations
 
 import re
+import sys
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -256,7 +257,7 @@ class AttemptCleaner:
             )
         except ForgeAuthError:
             raise
-        except Exception as error:  # noqa: BLE001 - reported, retried next cycle
+        except Exception as error:  # noqa: BLE001 - boundary: convert cleanup operation failures into a visible retryable report
             return (
                 True,
                 self._report(target, "failed", f"{type(error).__name__}: {error}"),
@@ -362,8 +363,12 @@ class AttemptCleaner:
             return
         try:
             self._claims.release(self._root, target.claim, now=self._clock())
-        except Exception:  # an unreleased claim only expires later  # noqa: BLE001
-            pass
+        except Exception as error:  # noqa: BLE001 - cleanup: a failed claim release expires later and must be reported
+            print(
+                "Warning: failed to release cleanup claim for "
+                f"attempt {target.state.attempt_id}; it will expire: {error}",
+                file=sys.stderr,
+            )
         target.claim = None
 
     # -- steps -------------------------------------------------------------------------

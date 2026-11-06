@@ -319,7 +319,7 @@ def ensure_parent_branch(
             ["ls-remote", "origin", f"refs/heads/{parent_branch}"], cwd=cwd
         )
         remote_exists = bool(result.stdout.strip())
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         remote_exists = False
 
     if remote_exists:
@@ -333,7 +333,7 @@ def ensure_parent_branch(
                 ],
                 cwd=cwd,
             )
-        except Exception as e:
+        except (OSError, subprocess.SubprocessError) as e:
             print(
                 f"Warning: Failed to fetch existing parent branch '{parent_branch}': {e}",
                 file=sys.stderr,
@@ -358,7 +358,7 @@ def ensure_parent_branch(
             ],
             cwd=cwd,
         )
-    except Exception as e:
+    except (OSError, subprocess.SubprocessError) as e:
         print(
             f"Warning: Failed to auto-create parent branch '{parent_branch}': {e}",
             file=sys.stderr,

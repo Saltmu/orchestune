@@ -412,7 +412,7 @@ def _fetch_codex_cloud_page(
             if isinstance(raw_cursor, str) and raw_cursor.strip():
                 next_cursor = raw_cursor.strip()
         return items, next_cursor, True
-    except Exception:
+    except Exception:  # noqa: BLE001 - boundary: cloud API failures return unknown status, never inferred completion
         return [], None, False
 
 
@@ -584,7 +584,7 @@ class CodexCloudDispatchTarget(DispatchTarget):
             return "unknown"
         try:
             cloud_status = self._fetch_task_status(external_id)
-        except Exception:
+        except Exception:  # noqa: BLE001 - boundary: cloud API failures return unknown status, never inferred completion
             return "unknown"
         if cloud_status is None:
             return "unknown"

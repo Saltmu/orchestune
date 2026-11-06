@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import subprocess
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -31,7 +32,12 @@ from orchestune.claim.workspace import (
     resolve_claim_workspace,
 )
 from orchestune.footprint_paths import canonicalize_footprint, normalize_footprint_path
-from orchestune.forge import Forge, ForgeGraphQLUnavailableError, GitHubForge
+from orchestune.forge import (
+    Forge,
+    ForgeError,
+    ForgeGraphQLUnavailableError,
+    GitHubForge,
+)
 from orchestune.infra.git_cli import run_git
 from orchestune.infra.process_utils import FileLockContentionError, run_state_lock
 from orchestune.issue_parsing import (
@@ -206,7 +212,7 @@ def _check_conflicts(
     except ForgeGraphQLUnavailableError:
         # #1334: the CLI reports this as forge_unavailable, not as a conflict.
         raise
-    except Exception as error:
+    except (ForgeError, subprocess.CalledProcessError, OSError) as error:
         raise _reject(
             ClaimFailureReason.CLAIM_CONFLICT,
             f"Failed to evaluate footprint conflicts: {error}",
@@ -253,7 +259,7 @@ def _publish_issue_footprint(
         forge.update_issue_body(
             issue.number, _rewrite_issue_footprint(issue.body, footprint)
         )
-    except Exception as error:
+    except (ForgeError, subprocess.CalledProcessError, OSError) as error:
         raise _reject(
             ClaimFailureReason.STATE_SAVE_FAILED,
             f"Failed to update the footprint in issue #{issue.number}: {error}",
@@ -284,7 +290,7 @@ def _post_amend_comment(
             return
         if any(exact_marker in c.get("body", "") for c in existing_comments):
             return
-    except Exception as exc:
+    except (ForgeError, subprocess.CalledProcessError, OSError) as exc:
         sys.stderr.write(
             f"Warning: failed to list comments for footprint amend on #{issue_number}: {exc}\n"
         )
@@ -302,7 +308,7 @@ def _post_amend_comment(
         lines.extend(["", "#### Warnings", *[f"- {w}" for w in queued_warnings]])
     try:
         forge.add_comment(issue_number, "\n".join(lines) + "\n")
-    except Exception as exc:
+    except (ForgeError, subprocess.CalledProcessError, OSError) as exc:
         sys.stderr.write(
             f"Warning: failed to post footprint amendment comment on #{issue_number}: {exc}\n"
         )
@@ -348,7 +354,7 @@ def _check_queued_overlaps(
                 warnings.append(
                     f"Overlaps with queued task #{q_issue.number}: {', '.join(overlap)}"
                 )
-    except Exception as exc:
+    except (ForgeError, subprocess.CalledProcessError, OSError) as exc:
         sys.stderr.write(
             f"Warning: failed to check queued task overlaps on #{issue_number}: {exc}\n"
         )
@@ -380,7 +386,7 @@ def _persist_amended_state(
     run_state.active_worktrees[key] = amended
     try:
         save_run_state(run_state, run_state_path)
-    except Exception as error:
+    except (OSError, TypeError, ValueError) as error:
         raise _reject(
             ClaimFailureReason.STATE_SAVE_FAILED,
             f"Failed to persist the amended reservation: {error}",
@@ -486,7 +492,10 @@ def amend_claim_footprint(
                         if pre_active.claim.owner_kind != OwnerKind.INTERACTIVE.value:
                             timeout = 600.0
                         break
-        except Exception:
+        except (OSError, TypeError, ValueError) as error:
+            sys.stderr.write(
+                f"Warning: failed to inspect run_state before footprint amend: {error}\n"
+            )
             pass
     try:
         with run_state_lock(workspace.lock_path, timeout=timeout):

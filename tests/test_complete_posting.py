@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import subprocess
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
 
+from orchestune.forge import ForgeError
 from orchestune.outcome_record import OutcomeRecord
 
 
@@ -77,7 +79,7 @@ class TestPostIssueOutcome:
         forge = SimpleNamespace(
             list_all_issue_comments=Mock(side_effect=[[], [matching]]),
             create_issue_comment=Mock(
-                side_effect=RuntimeError("connection dropped after POST")
+                side_effect=ForgeError("connection dropped after POST")
             ),
         )
 
@@ -90,6 +92,98 @@ class TestPostIssueOutcome:
         assert forge.create_issue_comment.call_count == 1
         assert forge.list_all_issue_comments.call_count == 2
 
+    def test_incomplete_post_response_rechecks_for_accepted_comment(self) -> None:
+        from orchestune.complete.posting import PostingRequest, post_issue_outcome
+
+        matching = {
+            "id": 14,
+            "html_url": "https://example.test/comments/14",
+            "body": _record().render(),
+        }
+        forge = SimpleNamespace(
+            list_all_issue_comments=Mock(side_effect=[[], [matching]]),
+            create_issue_comment=Mock(return_value={"id": None, "html_url": None}),
+        )
+
+        result = post_issue_outcome(
+            PostingRequest(issue_number=1003, outcome_record=_record()), forge=forge
+        )
+
+        assert result.comment_id == "14"
+        assert result.reused is True
+        forge.create_issue_comment.assert_called_once()
+        assert forge.list_all_issue_comments.call_count == 2
+
+    def test_subprocess_post_failure_rechecks_before_a_second_post(self) -> None:
+        from orchestune.complete.posting import PostingRequest, post_issue_outcome
+
+        matching = {
+            "id": 15,
+            "html_url": "https://example.test/comments/15",
+            "body": _record().render(),
+        }
+        forge = SimpleNamespace(
+            list_all_issue_comments=Mock(side_effect=[[], [matching]]),
+            create_issue_comment=Mock(
+                side_effect=subprocess.CalledProcessError(1, ["gh", "api"])
+            ),
+        )
+
+        result = post_issue_outcome(
+            PostingRequest(issue_number=1003, outcome_record=_record()), forge=forge
+        )
+
+        assert result.comment_id == "15"
+        assert result.reused is True
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            subprocess.TimeoutExpired(["gh", "api"], timeout=30),
+            ValueError("GitHub did not return an Issue comment object"),
+        ],
+    )
+    def test_timeout_or_invalid_post_response_rechecks_for_accepted_comment(
+        self, error
+    ) -> None:
+        from orchestune.complete.posting import PostingRequest, post_issue_outcome
+
+        matching = {
+            "id": 16,
+            "html_url": "https://example.test/comments/16",
+            "body": _record().render(),
+        }
+        forge = SimpleNamespace(
+            list_all_issue_comments=Mock(side_effect=[[], [matching]]),
+            create_issue_comment=Mock(side_effect=error),
+        )
+
+        result = post_issue_outcome(
+            PostingRequest(issue_number=1003, outcome_record=_record()), forge=forge
+        )
+
+        assert result.comment_id == "16"
+        assert result.reused is True
+
+    def test_execution_scope_timeout_signal_is_not_caught_for_readback(self) -> None:
+        from orchestune.complete.posting import PostingRequest, post_issue_outcome
+        from orchestune.infra.execution_deadline import ExecutionCommandTimeout
+
+        forge = SimpleNamespace(
+            list_all_issue_comments=Mock(return_value=[]),
+            create_issue_comment=Mock(
+                side_effect=ExecutionCommandTimeout("gh api", 30, "normal")
+            ),
+        )
+
+        with pytest.raises(ExecutionCommandTimeout):
+            post_issue_outcome(
+                PostingRequest(issue_number=1003, outcome_record=_record()),
+                forge=forge,
+            )
+
+        forge.list_all_issue_comments.assert_called_once_with(1003)
+
     def test_unknown_lookup_never_posts_blindly(self) -> None:
         from orchestune.complete.posting import (
             OutcomeLookupUnknownError,
@@ -98,7 +192,7 @@ class TestPostIssueOutcome:
         )
 
         forge = SimpleNamespace(
-            list_all_issue_comments=Mock(side_effect=RuntimeError("GitHub unavailable"))
+            list_all_issue_comments=Mock(side_effect=ForgeError("GitHub unavailable"))
         )
 
         with pytest.raises(OutcomeLookupUnknownError):

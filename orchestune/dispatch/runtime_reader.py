@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 
 import orchestune.claim.workspace as claim_workspace
@@ -26,6 +27,8 @@ from orchestune.dispatch.targets import (
 from orchestune.forge import GitHubForge
 from orchestune.infra.repository_config import find_and_load_config_file
 from orchestune.ledger.run_state import ActiveWorktree
+
+logger = logging.getLogger(__name__)
 
 
 def provider_config(workspace: ClaimWorkspace) -> DispatcherConfig | None:
@@ -70,7 +73,8 @@ def provider_config(workspace: ClaimWorkspace) -> DispatcherConfig | None:
             events_log_path=primary / "events.jsonl",
             not_needed_review_state_path=primary / "not_needed_review_state.json",
         )
-    except Exception:
+    except Exception as error:  # noqa: BLE001 - boundary: malformed or unavailable optional runtime state is treated as absent
+        logger.warning("swallowed broad exception: %s", error)
         return None
 
 

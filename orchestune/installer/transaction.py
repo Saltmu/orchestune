@@ -133,7 +133,7 @@ def _journal_entry_snapshot(bundle_name: str, entry_data: Any) -> BundleManifest
                 "bundles": {bundle_name: entry_data},
             }
         ).bundles[bundle_name]
-    except Exception as err:
+    except (ManifestError, KeyError, AttributeError, TypeError) as err:
         raise TransactionError(
             f"Invalid uninstall journal entry snapshot: {err}"
         ) from err
@@ -311,7 +311,7 @@ class SkillTransaction:
                 self.skills_root, skip_tx_id=self.tx_id
             )
             self.tx_dir.mkdir(parents=True, exist_ok=True)
-        except BaseException:
+        except BaseException:  # cleanup: must run on BaseException; release the lock even when interrupted during transaction setup
             if self.lock is not None:
                 self.lock.release()
                 self.lock = None
@@ -323,7 +323,7 @@ class SkillTransaction:
             if exc_type is not None:
                 try:
                     self.rollback()
-                except Exception as rollback_err:
+                except TransactionError as rollback_err:
                     raise TransactionError(
                         f"Rollback failed after {exc_type.__name__}: {rollback_err}"
                     ) from exc_val
@@ -594,8 +594,6 @@ class SkillTransaction:
             raise TransactionError(
                 f"Cannot safely perform live rollback due to corrupted manifest: {e}"
             ) from e
-        except Exception:
-            pass
 
         published = list(
             dict.fromkeys(
@@ -623,7 +621,14 @@ class SkillTransaction:
         try:
             data = json.loads(self.journal_path.read_text(encoding="utf-8"))
             journal = UninstallJournal.from_dict(data)
-        except Exception as err:
+        except (
+            OSError,
+            ValueError,
+            TypeError,
+            KeyError,
+            ManifestError,
+            TransactionError,
+        ) as err:
             raise TransactionError(
                 f"Cannot read uninstall journal during rollback: {err}"
             ) from err
@@ -933,8 +938,6 @@ def _rollback_sub_transaction(
             raise TransactionError(
                 f"Cannot safely recover transaction {sub.name} due to corrupted manifest: {e}"
             ) from e
-        except Exception:
-            pass
 
     published = journal_data.get("published_skills", [])
     _remove_published_skills(skills_root, published)
@@ -982,7 +985,14 @@ def recover_pending_transactions(
                 raise TransactionError(
                     f"Unknown transaction operation: {journal_data['operation']!r}"
                 )
-        except Exception as e:
+        except (
+            OSError,
+            ValueError,
+            TypeError,
+            KeyError,
+            ManifestError,
+            TransactionError,
+        ) as e:
             raise TransactionError(
                 f"Failed to recover transaction at {sub}: {e}"
             ) from e

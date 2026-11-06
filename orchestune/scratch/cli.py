@@ -51,7 +51,7 @@ def main(argv: list[str] | None = None) -> int:
         except SessionDirError as e:
             print(f"Error: {e}", file=sys.stderr)
             return 1
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - boundary: render unexpected session-directory creation failures
             print(f"Unexpected error creating session directory: {e}", file=sys.stderr)
             return 1
     return 1

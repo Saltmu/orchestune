@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import subprocess
 from collections.abc import Callable
+from contextlib import nullcontext
 from pathlib import Path
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -32,6 +34,7 @@ from orchestune.integrator.timeout_retry import (
     EVENT_FINISHED,
     EVENT_RESERVED,
     EVENT_TERMINAL,
+    BudgetReadError,
     parse_event,
 )
 from orchestune.worktree_ops.temp_branches import load_holds
@@ -39,6 +42,33 @@ from tests.conftest import IntegratorEnv, make_done_issue
 
 PRE_MERGE_SHA = "c" * 40
 BLOCKED = "status:blocked-human-review"
+
+
+def test_active_generation_does_not_swallow_unexpected_budget_store_errors() -> None:
+    state = cast(Any, object.__new__(ExecutionState))
+    state.budget = None
+    state.scope = SimpleNamespace(cleanup_phase=nullcontext)
+
+    def fail_unexpectedly():
+        raise RuntimeError("unexpected store failure")
+
+    state.store = SimpleNamespace(load=fail_unexpectedly)
+
+    with pytest.raises(RuntimeError, match="unexpected store failure"):
+        state._active_generation()
+
+
+def test_active_generation_defaults_for_a_typed_budget_read_failure() -> None:
+    state = cast(Any, object.__new__(ExecutionState))
+    state.budget = None
+    state.scope = SimpleNamespace(cleanup_phase=nullcontext)
+
+    def fail_read():
+        raise BudgetReadError("budget unavailable")
+
+    state.store = SimpleNamespace(load=fail_read)
+
+    assert state._active_generation() == 1
 
 
 def _result(

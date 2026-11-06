@@ -331,7 +331,7 @@ def _budgeted_payload(
 def _read_pr(forge: Forge, pr_number: int, parent: int) -> PrRecord:
     try:
         pr = forge.get_pull_request(pr_number)
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - boundary: unknown PR identity must produce an indeterminate review
         raise _Indeterminate("pr_identity_unknown") from error
     if (
         pr.number != pr_number
@@ -349,7 +349,7 @@ def _read_ci(forge: Forge, head_sha: str) -> tuple[CommitCheck, ...]:
     """The finished checks of `head_sha`; anything else defers the request (#1554)."""
     try:
         checks = tuple(forge.list_commit_checks(head_sha))
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - boundary: unavailable CI evidence must not be treated as passing
         raise _Indeterminate("ci_status_unavailable") from error
     if not checks:
         raise _WaitingForCi("no_checks", ())
@@ -362,7 +362,7 @@ def _read_ci(forge: Forge, head_sha: str) -> tuple[CommitCheck, ...]:
 def _existing_request(forge: Forge, pr: PrRecord) -> dict[str, Any] | None:
     try:
         comments = forge.list_all_issue_comments(pr.number)
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - boundary: unreadable request history must prevent a duplicate review request
         raise _Indeterminate("comments_unavailable") from error
     marker = final_acceptance_marker(pr.head_sha)
     candidates = [
@@ -386,7 +386,7 @@ def _existing_request(forge: Forge, pr: PrRecord) -> dict[str, Any] | None:
 def _read_parent(forge: Forge, parent: int) -> IssueRecord:
     try:
         issue = forge.get_issue(parent)
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - boundary: unavailable parent body must keep acceptance indeterminate
         raise _Indeterminate("parent_body_unavailable") from error
     if issue is None or issue.number != parent:
         raise _Indeterminate("parent_body_unavailable")
@@ -423,7 +423,7 @@ def _post(forge: Forge, pr_number: int, body: str) -> dict[str, Any]:
             )
             return {"status": "failed", "reason": "post_rejected"}
         raise _Indeterminate("post_outcome_unknown") from error
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - boundary: uncertain comment write must not be retried blindly
         raise _Indeterminate("post_outcome_unknown") from error
     if not comment.get("id"):
         raise _Indeterminate("post_outcome_unknown")
@@ -490,7 +490,7 @@ def request_final_acceptance_review(
         report.update(status="indeterminate", reason="payload_budget_exceeded")
     except _Indeterminate as error:
         report.update(status="indeterminate", reason=str(error))
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - boundary: serialize any remaining failure in the returned review status
         report.update(status="failed", reason="request_failed", error=str(error))
     print(
         f"Warning: final acceptance review #{pr_number}: {report['reason']}",

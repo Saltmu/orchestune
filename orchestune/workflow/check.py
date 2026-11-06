@@ -490,7 +490,7 @@ def _review(c: WorkflowContext) -> tuple[_Observation, _Observation]:
         return _unmet(error.reason.value, str(error), "review evidence"), _unmet(
             "reply_missing", "Verify the current-round reply after acquiring review"
         )
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - boundary: unavailable review evidence remains unknown
         missing = _unknown(str(error), "PR review snapshot/reply")
         return missing, missing
 

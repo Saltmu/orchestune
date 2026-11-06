@@ -176,6 +176,27 @@ def test_find_open_attempts_marks_trusted_corrupt_latest_state_fail_closed():
     assert attempt.state_error is not None
 
 
+def test_find_open_attempts_retains_unreadable_attempt_as_blocked_evidence():
+    forge = MagicMock(spec=Forge)
+    forge.get_authenticated_user.return_value = "orchestune"
+    forge.list_open_prs.return_value = [
+        PrRecord(
+            7,
+            _identity(CHILD_A).temp_branch,
+            (),
+            base_ref="parent/issue-100",
+            is_cross_repository=False,
+            head_sha=HEAD,
+        )
+    ]
+    forge.list_comments.side_effect = RuntimeError("comments unavailable")
+
+    (attempt,) = find_open_attempts(forge, 100)
+
+    assert attempt.state is None
+    assert attempt.state_error == "comments unavailable"
+
+
 def test_find_open_attempts_does_not_trust_human_collaborator_state():
     state = _state(CHILD_A)
     forge = MagicMock(spec=Forge)

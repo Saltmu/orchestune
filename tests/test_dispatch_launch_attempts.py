@@ -7,6 +7,7 @@ import pytest
 from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.launch.service import TaskLaunchPlan, _apply_task_launches
 from orchestune.dispatch.targets import CodexCloudDispatchTarget, DispatchHandle
+from orchestune.forge import ForgeError
 from orchestune.ledger.run_state import RunState, load_run_state, save_run_state
 from tests.conftest import FakeForge, make_issue, make_task, real_claim_fn
 
@@ -115,7 +116,7 @@ def test_saved_handle_restored_after_crash_without_pr(launch_env, stop):
         # （dispatch側が古いラベルスナップショットを基に二重に遷移を試みて
         # ラベル状態を壊すのを避けるため——`_resolve_claim_failure_launch_result`
         # 参照）。dispatch側はこれを「保留・次サイクルで再試行」として扱う。
-        with patch.object(forge, "add_label", side_effect=OSError("crash")):
+        with patch.object(forge, "add_label", side_effect=ForgeError("crash")):
             _apply_task_launches(
                 [plan], RunState(), 100.0, config, claim_fn=real_claim_fn(config)
             )

@@ -318,7 +318,7 @@ def reconcile_attempt(
         return False
     try:
         attempt = _lookup_attempt(attempt, task, config)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - boundary: attempt lookup failure holds the task instead of guessing launch state
         _hold(task, config, f"attempt {attempt.attempt_id}: lookup failed ({exc})")
         return True
     if attempt.phase != "launched":

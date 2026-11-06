@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
@@ -20,6 +21,7 @@ from orchestune.dependencies.policy import (
     decide_stack_target,
     has_pending_dependencies,
 )
+from orchestune.forge import ForgeError
 from orchestune.issue_parsing import (
     effective_parent_number,
     parse_task_from_issue,
@@ -339,7 +341,7 @@ def _validate_issue_not_pr(issue_number: int, forge: Any) -> ClaimFailure | None
                 reason=ClaimFailureReason.NOT_AN_ISSUE,
                 message=f"#{issue_number} is a pull request, not an issue.",
             )
-    except Exception as exc:
+    except (ForgeError, subprocess.CalledProcessError, OSError) as exc:
         return ClaimFailure(
             reason=ClaimFailureReason.FORGE_UNAVAILABLE,
             message=f"Failed to verify whether #{issue_number} is an issue: {exc}",

@@ -151,7 +151,7 @@ def _is_pr_duplicate_update(
         output = res.stdout.strip()
         if output:
             remote_sha = output.split()[0]
-    except Exception:
+    except Exception:  # noqa: BLE001 - boundary: Git/Forge and launch-state persistence failures preserve the safe launch decision
         ls_remote_failed = True
 
     if ls_remote_failed:
@@ -343,7 +343,7 @@ def _release_launch_reservation(now: float, config: DispatcherConfig) -> None:
             config.resolved_forge.update_issue_body(
                 config.parent_issue_number, patched_body
             )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - boundary: Git/Forge and launch-state persistence failures preserve the safe launch decision
         print(
             f"Warning: failed to release the launch reservation in parent issue "
             f"#{config.parent_issue_number}: {e}",
@@ -357,7 +357,7 @@ def _launch_reservation(
 ) -> Iterator[Callable[[], None] | None]:
     try:
         _persist_launch_history(now, config)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - boundary: Git/Forge and launch-state persistence failures preserve the safe launch decision
         target = f"issue #{issue_number}" if issue_number is not None else "task"
         print(
             f"Warning: skipping launch of {target}: failed to "
@@ -655,7 +655,7 @@ def _read_issue_for_counters(
     """#1280: the current Issue (never the cycle listing, which can lag) or why not."""
     try:
         issue = config.resolved_forge.get_issue(issue_number)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - boundary: Git/Forge and launch-state persistence failures preserve the safe launch decision
         return None, f"failed to read recovery counters: {exc}"
     if issue is None:
         return None, "failed to read recovery counters: issue not found"
@@ -701,7 +701,7 @@ def _write_launching_phase(
             open_prs=open_prs,
         )
         return None
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - boundary: Git/Forge and launch-state persistence failures preserve the safe launch decision
         run_state.active_worktrees[subject.key] = subject.active_entry
         print(
             f"Holding launch of issue #{subject.issue_number}: failed to persist launching phase: {exc}",
@@ -860,7 +860,7 @@ def _record_failed_launch_phase(
             launch_window_seconds=config.window_seconds,
             open_prs=open_prs,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - boundary: Git/Forge and launch-state persistence failures preserve the safe launch decision
         print(
             f"Warning: failed to persist failed launch phase for issue #{issue_number}: {exc}",
             file=sys.stderr,

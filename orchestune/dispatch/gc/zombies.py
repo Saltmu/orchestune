@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -56,6 +57,8 @@ from orchestune.ledger.status_labels import (
 )
 from orchestune.models import PrRecord
 from orchestune.task_metadata import TaskMetadata
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -574,7 +577,8 @@ def _stop_reclaimed_process(reclaim: ZombieOrTimeoutReclaim) -> None:
     if reclaim.active.launch.pid and reclaim.process_alive:
         try:
             os.kill(reclaim.active.launch.pid, 9)
-        except Exception:
+        except Exception as error:  # noqa: BLE001 - boundary: cleanup tolerates a process that exited during the liveness check
+            logger.warning("swallowed broad exception: %s", error)
             pass
 
 

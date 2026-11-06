@@ -6,6 +6,7 @@ and filters out low-impact or low-validity findings based on a simple threshold.
 
 from __future__ import annotations
 
+import http.client
 import json
 import math
 import os
@@ -270,7 +271,15 @@ def _evaluate_request(
                 file=sys.stderr,
             )
             break
-        except Exception as exc:
+        except (
+            http.client.HTTPException,
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+            ValueError,
+            TypeError,
+            KeyError,
+            AttributeError,
+        ) as exc:
             print(
                 f"Warning: Jev evaluation failed ({type(exc).__name__}); bypassing filter.",
                 file=sys.stderr,
@@ -366,7 +375,7 @@ def _append_jev_log(
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
-    except Exception as exc:
+    except OSError as exc:
         print(
             f"Warning: Failed to write Jev evaluation log to {target}: {exc}",
             file=sys.stderr,

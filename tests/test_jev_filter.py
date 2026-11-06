@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import http.client
+import io
 import json
 import urllib.error
 from pathlib import Path
@@ -275,6 +277,24 @@ class TestEvaluateFindingWithJev:
             assert result.impact == "HIGH"
             assert result.bypassed is True
             assert mock_sleep.call_count == 3
+
+    def test_truncated_http_response_bypasses_evaluation(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("JEV_API_KEY", "secret-test-key")
+        fake_socket = MagicMock()
+        fake_socket.makefile.return_value = io.BytesIO(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 20\r\n\r\n{}"
+        )
+        response = http.client.HTTPResponse(fake_socket)
+        response.begin()
+
+        with patch("urllib.request.urlopen", return_value=response):
+            result = evaluate_finding_with_jev("check", "a.py", 1)
+
+        assert result.validity == 1.0
+        assert result.impact == "HIGH"
+        assert result.bypassed is True
 
     def test_api_key_not_leaked_in_exceptions_or_attributes(
         self, monkeypatch: pytest.MonkeyPatch

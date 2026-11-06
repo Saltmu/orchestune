@@ -318,7 +318,7 @@ def _read_probe[ProbeT](
         return _Reading(None, _UNKNOWN, (f"{label} probe is not configured",))
     try:
         return _Reading(call(probe), _KNOWN)
-    except Exception as exc:  # noqa: BLE001 - every failure becomes an unknown
+    except Exception as exc:  # noqa: BLE001 - boundary: probe failures become unknown facts with diagnostics
         return _Reading(None, _UNKNOWN, (f"{label} probe failed: {_describe(exc)}",))
 
 
@@ -801,7 +801,7 @@ class ObservationCollector:
             )
         try:
             fetched = self._forge_probe.fetch_snapshot()
-        except Exception as exc:  # noqa: BLE001 - an outage is unknown, not empty
+        except Exception as exc:  # noqa: BLE001 - boundary: Forge outages become unknown snapshots with diagnostics
             return _ForgeReading(
                 None, _UNKNOWN, (f"forge probe failed: {_describe(exc)}",), now
             )

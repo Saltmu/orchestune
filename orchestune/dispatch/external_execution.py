@@ -77,7 +77,7 @@ def _attempt_matches_provider(
         return True
     try:
         attempt = read_attempt(config.resolved_forge, active.core.issue_number)
-    except Exception:
+    except Exception:  # noqa: BLE001 - boundary: external targets define provider-specific errors; unknown runtime state is fail-safe
         return False
     return (
         attempt is not None
@@ -120,7 +120,7 @@ def observe_runtime_state(
     )
     try:
         status = target.execution_status(handle)
-    except Exception:
+    except Exception:  # noqa: BLE001 - boundary: external targets define provider-specific errors; unknown runtime state is fail-safe
         return "unknown"
     return status if status in ("running", "stopped") else "unknown"
 
@@ -132,7 +132,7 @@ def probe_runtime_status(config: DispatcherConfig, external_id: str) -> RuntimeS
         return "unknown"
     try:
         status = target.execution_status(DispatchHandle(external_id=external_id))
-    except Exception:
+    except Exception:  # noqa: BLE001 - boundary: external targets define provider-specific errors; unknown runtime state is fail-safe
         return "unknown"
     return status if status in ("running", "stopped") else "unknown"
 

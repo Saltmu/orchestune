@@ -42,20 +42,20 @@ def find_and_load_config_file(checkout_root: str | Path) -> dict[str, Any]:
     """
     checkout_root = Path(checkout_root)
 
-    # Beyond `OSError`/`tomllib.TOMLDecodeError`, a pathological file can
-    # make `open()`/`tomllib.load()` fail in other ways too — invalid UTF-8
-    # raises `UnicodeDecodeError`, ~500+ levels of nested arrays/tables
-    # raise `RecursionError` (Codex review, #441). `tomllib.load` is the
-    # only risky operation in each block below, so any failure loading
-    # user-supplied config data is a config problem, not an internal bug —
-    # catch broadly rather than chase the parser's exception types one by
-    # one (same reasoning as `compile_extra_ignore_patterns`).
+    # These are input-boundary errors from reading or decoding user-supplied
+    # TOML. Keep unexpected programming errors visible instead of normalizing
+    # them into ConfigError.
     orchestune_toml = checkout_root / "orchestune.toml"
     if orchestune_toml.exists():
         try:
             with open(orchestune_toml, "rb") as f:
                 return tomllib.load(f)
-        except Exception as e:
+        except (
+            OSError,
+            UnicodeDecodeError,
+            tomllib.TOMLDecodeError,
+            RecursionError,
+        ) as e:
             raise config_contracts.ConfigError(
                 f"failed to load {orchestune_toml}: {e}"
             ) from e
@@ -65,7 +65,12 @@ def find_and_load_config_file(checkout_root: str | Path) -> dict[str, Any]:
         try:
             with open(pyproject_toml, "rb") as f:
                 data = tomllib.load(f)
-        except Exception as e:
+        except (
+            OSError,
+            UnicodeDecodeError,
+            tomllib.TOMLDecodeError,
+            RecursionError,
+        ) as e:
             raise config_contracts.ConfigError(
                 f"failed to load {pyproject_toml}: {e}"
             ) from e

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from contextlib import ExitStack
 from dataclasses import replace
 from enum import Enum
@@ -24,6 +25,8 @@ from orchestune.dispatch.timings import (
 )
 from orchestune.infra.command_metrics import command_observer_scope
 from orchestune.lock_contracts import ExternalLockScanResult
+
+logger = logging.getLogger(__name__)
 
 
 class CycleStage(str, Enum):
@@ -206,7 +209,8 @@ def execute_cycle(
         candidate = CycleTimingCollector()
         config = replace(config, progress=TimingProgress(config.progress, candidate))
         collector = candidate
-    except Exception:
+    except Exception as error:  # noqa: BLE001 - boundary: optional timing instrumentation must not prevent cycle execution
+        logger.warning("swallowed broad exception: %s", error)
         pass
     sink = config.progress
     phase_name = (
