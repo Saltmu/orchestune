@@ -457,14 +457,22 @@ def test_cycle_timing_setup_failure_is_logged(
 
 def test_cleanup_comments_and_noqa_reasons_name_the_boundary() -> None:
     root = Path(__file__).resolve().parents[1]
-    progress = (root / "orchestune/dispatch/reporting/progress.py").read_text()
-    plan = (root / "orchestune/plan_writer.py").read_text()
-    transaction = (root / "orchestune/installer/transaction.py").read_text()
-    provisioning = (root / "orchestune/provisioning/cli.py").read_text()
-    cleanup = (root / "orchestune/dispatch/semantic_review/cleanup.py").read_text()
-    postcycle = (root / "orchestune/dispatch/semantic_review/postcycle.py").read_text()
-    forge = (root / "tests/test_forge.py").read_text()
-    managed = (root / "tests/test_managed_process.py").read_text()
+    progress = (root / "orchestune/dispatch/reporting/progress.py").read_text(
+        encoding="utf-8"
+    )
+    plan = (root / "orchestune/plan_writer.py").read_text(encoding="utf-8")
+    transaction = (root / "orchestune/installer/transaction.py").read_text(
+        encoding="utf-8"
+    )
+    provisioning = (root / "orchestune/provisioning/cli.py").read_text(encoding="utf-8")
+    cleanup = (root / "orchestune/dispatch/semantic_review/cleanup.py").read_text(
+        encoding="utf-8"
+    )
+    postcycle = (root / "orchestune/dispatch/semantic_review/postcycle.py").read_text(
+        encoding="utf-8"
+    )
+    forge = (root / "tests/test_forge.py").read_text(encoding="utf-8")
+    managed = (root / "tests/test_managed_process.py").read_text(encoding="utf-8")
     phrase = "cleanup: must run on BaseException"
     assert phrase in progress
     assert phrase in plan
