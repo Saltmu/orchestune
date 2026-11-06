@@ -210,3 +210,36 @@ def test_unexpected_completion_failure_is_logged_and_returned(monkeypatch, caplo
     assert not result.success
     assert "unexpected failure" in result.failure.message
     assert "Unexpected completion failure" in caplog.text
+
+
+def test_comment_lookup_timeout_is_forge_failure_without_handoff(tmp_path, monkeypatch):
+    from complete_lifecycle_test_support import lifecycle_environment
+
+    from orchestune.complete.contracts import CompleteFailureReason, CompleteStage
+    from orchestune.complete.service import complete_task
+    from orchestune.ledger.run_state import load_run_state_readonly
+
+    request, forge, _ = lifecycle_environment(tmp_path, monkeypatch)
+    original_lookup = forge.list_all_issue_comments
+
+    def lookup(issue_number):
+        if issue_number == request.issue_number:
+            raise subprocess.TimeoutExpired(["gh", "api"], timeout=30)
+        return original_lookup(issue_number)
+
+    forge.list_all_issue_comments = lookup
+
+    result = complete_task(request, forge=forge)
+
+    assert not result.success
+    assert result.failure.reason is CompleteFailureReason.FORGE_POST_FAILED
+    assert result.stage is CompleteStage.RESERVED
+    state = load_run_state_readonly(request.state_path)
+    completion = state.active_worktrees[str(request.issue_number)].completion
+    assert completion.completion_handoff_ready is False
+    assert completion.completion_comment_url is None
+    assert len(state.completion_journal) == 1
+    journal = next(iter(state.completion_journal.values()))
+    assert journal.stage is CompleteStage.RESERVED
+    assert forge.comments == []
+    assert "status:done" not in forge.labels

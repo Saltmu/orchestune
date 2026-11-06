@@ -70,7 +70,13 @@ def _find_existing(
 ) -> PostingResult | None:
     try:
         comments = forge.list_all_issue_comments(request.issue_number)
-    except (ForgeError, OSError, subprocess.CalledProcessError) as exc:
+    except (
+        ForgeError,
+        OSError,
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        ValueError,
+    ) as exc:
         raise OutcomeLookupUnknownError(
             "Unable to retrieve every Issue comment page"
         ) from exc
