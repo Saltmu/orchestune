@@ -308,8 +308,15 @@ def test_duplicate_notice_adoption_without_orphan_receipt(claim_env):
             stdout=output,
         )
 
+    prepare_calls = 0
+
     def prepare(branch, worktree_root, base, claim_id, **kwargs):
+        nonlocal prepare_calls
+        prepare_calls += 1
         path = worktree_root / branch.replace("/", "-")
+        if prepare_calls == 1:
+            path.mkdir(parents=True)
+            raise OSError("interrupted after worktree creation")
         return WorktreePreparation(
             worktree_path=path,
             branch=branch,
@@ -324,13 +331,7 @@ def test_duplicate_notice_adoption_without_orphan_receipt(claim_env):
         patch.object(forge, "get_authenticated_user", return_value="operator"),
         patch.object(service, "is_process_alive", return_value=False),
         patch.object(service, "run_git", side_effect=git),
-        patch.object(
-            service,
-            "prepare_task_worktree",
-            return_value=prepare(
-                pr.head_ref, workspace.worktree_root, "main", "claim-1"
-            ),
-        ),
+        patch.object(service, "prepare_task_worktree", side_effect=prepare),
     ):
         forge.event_comments.append({"issue_number": 42, **comments[0]})
         preview = claim_task(
@@ -345,36 +346,43 @@ def test_duplicate_notice_adoption_without_orphan_receipt(claim_env):
         assert not forge.labels_added
         assert not (workspace.worktree_root / pr.head_ref.replace("/", "-")).exists()
 
-        outcome = claim_task(
+        interrupted = claim_task(
             ClaimRequest(issue_number=42, adopt_pr=12, state_path=state_path),
             forge=forge,
             cwd=root,
         )
 
     active = load_run_state(state_path).active_worktrees["42"]
-    assert outcome.success, outcome.failure.message if outcome.failure else outcome
-    assert (active.claim.adopted_pr_number, active.claim.adopted_pr_head_sha) == (
-        12,
-        pr.head_sha,
-    )
+    assert not interrupted.success
+    assert interrupted.claim_id == active.claim.claim_id
+    assert interrupted.owner_token
+    assert Path(active.core.worktree_path).is_dir()
+    assert not forge.labels_added
     assert not load_run_state(state_path).recovery_receipts
-    Path(active.core.worktree_path).mkdir(parents=True, exist_ok=True)
     with (
         patch.object(forge, "list_prs", return_value=[pr]),
         patch.object(forge, "get_authenticated_user", return_value="operator"),
         patch.object(service, "is_process_alive", return_value=False),
         patch.object(service, "run_git", side_effect=git),
         patch.object(service, "_check_resume_identity", return_value=None),
+        patch.object(service, "prepare_task_worktree", side_effect=prepare),
     ):
         resumed = resume_claim(
             active.claim.claim_id or "",
-            outcome.owner_token or "",
+            interrupted.owner_token or "",
             forge=forge,
             cwd=root,
             state_path=state_path,
         )
+
     assert resumed.success, resumed.failure
+    active = load_run_state(state_path).active_worktrees["42"]
+    assert (active.claim.adopted_pr_number, active.claim.adopted_pr_head_sha) == (
+        12,
+        pr.head_sha,
+    )
     assert not load_run_state(state_path).recovery_receipts
+    assert prepare_calls == 2
 
 
 @pytest.mark.parametrize("move_head", [False, True])
