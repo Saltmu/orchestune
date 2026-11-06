@@ -15,8 +15,9 @@ import uuid
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import TypedDict, cast
 
+from orchestune.complete.contracts import CompleteRequest
 from orchestune.infra.git_cli import WorktreeStatus, inspect_worktree_status, run_git
 from orchestune.outcome_record import RESULT_DONE
 
@@ -44,6 +45,34 @@ class CiExecutionError(CiEvidenceError):
     """Raised when running local CI fails."""
 
 
+class CiEvidenceJson(TypedDict):
+    """JSON object written by ``CiEvidence.to_dict`` and read by ``from_dict``."""
+
+    head_sha: str
+    base_sha: str
+    succeeded: bool
+    schema_version: int
+    ci_definition_digest: str
+    lockfile_digest: str
+    os: str
+    architecture: str
+    python_version: str
+    started_at: str
+    completed_at: str
+    exit_code: int
+    status: str
+    worktree_clean: bool
+    tree_sha: str
+
+
+class ActiveWorktreeEntry(TypedDict, total=False):
+    """Fields read from one ``active_worktrees`` value. All may be absent."""
+
+    base_ref: str
+    base_sha: str
+    worktree_path: str
+
+
 @dataclass(frozen=True)
 class CiEvidence:
     """Versioned evidence bound to a completion request."""
@@ -64,32 +93,30 @@ class CiEvidence:
     worktree_clean: bool = True
     tree_sha: str = ""
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> CiEvidenceJson:
         """Serialize evidence to a dictionary."""
-        return asdict(self)
+        return cast(CiEvidenceJson, asdict(self))
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> CiEvidence:
+    def from_dict(cls, data: object) -> CiEvidence:
         """Construct and validate CiEvidence from dictionary."""
-        if not isinstance(data, dict):
-            raise CiEvidenceInvalidError("Evidence payload must be a dictionary")
-        _validate_raw_evidence_data(data)
+        validated = _validate_raw_evidence_data(data)
         return cls(
-            head_sha=str(data["head_sha"]),
-            base_sha=str(data["base_sha"]),
-            succeeded=bool(data["succeeded"]),
-            schema_version=int(data["schema_version"]),
-            ci_definition_digest=str(data["ci_definition_digest"]),
-            lockfile_digest=str(data["lockfile_digest"]),
-            os=str(data["os"]),
-            architecture=str(data["architecture"]),
-            python_version=str(data["python_version"]),
-            started_at=str(data["started_at"]),
-            completed_at=str(data["completed_at"]),
-            exit_code=int(data["exit_code"]),
-            status=str(data["status"]),
-            worktree_clean=bool(data["worktree_clean"]),
-            tree_sha=str(data["tree_sha"]),
+            head_sha=str(validated["head_sha"]),
+            base_sha=str(validated["base_sha"]),
+            succeeded=bool(validated["succeeded"]),
+            schema_version=int(validated["schema_version"]),
+            ci_definition_digest=str(validated["ci_definition_digest"]),
+            lockfile_digest=str(validated["lockfile_digest"]),
+            os=str(validated["os"]),
+            architecture=str(validated["architecture"]),
+            python_version=str(validated["python_version"]),
+            started_at=str(validated["started_at"]),
+            completed_at=str(validated["completed_at"]),
+            exit_code=int(validated["exit_code"]),
+            status=str(validated["status"]),
+            worktree_clean=bool(validated["worktree_clean"]),
+            tree_sha=str(validated["tree_sha"]),
         )
 
 
@@ -108,7 +135,9 @@ class CiRecordOptions:
     expected_tree: str | None = None
 
 
-def _validate_raw_evidence_data(data: dict[str, Any]) -> None:
+def _validate_raw_evidence_data(data: object) -> CiEvidenceJson:
+    if not isinstance(data, dict):
+        raise CiEvidenceInvalidError("Evidence payload must be a dictionary")
     schema_version = data.get("schema_version")
     if schema_version != CURRENT_SCHEMA_VERSION:
         raise CiEvidenceInvalidError(
@@ -143,6 +172,7 @@ def _validate_raw_evidence_data(data: dict[str, Any]) -> None:
         raise CiEvidenceInvalidError("Evidence succeeded flag is not True")
     if data["status"] not in ("passed", "success"):
         raise CiEvidenceInvalidError(f"Invalid evidence status: {data['status']!r}")
+    return cast(CiEvidenceJson, data)
 
 
 def resolve_evidence_dir(worktree_root: Path | str | None = None) -> Path:
@@ -382,7 +412,7 @@ def _resolve_ref_tip(root: Path, ref: str) -> str | None:
 
 def _candidate_state_paths(
     root: Path,
-    request: Any | None = None,
+    request: CompleteRequest | None = None,
     *,
     state_path: Path | str | None = None,
 ) -> list[Path]:
@@ -392,7 +422,7 @@ def _candidate_state_paths(
     env_state = os.environ.get("ORCHESTUNE_STATE_PATH")
     if env_state:
         candidate_paths.append(Path(env_state).resolve())
-    if request is not None and getattr(request, "state_path", None):
+    if request is not None and request.state_path is not None:
         candidate_paths.append(Path(request.state_path).resolve())
     for candidate_dir in [root] + list(root.parents)[:5]:
         candidate_paths.append(candidate_dir / "run_state.json")
@@ -400,7 +430,7 @@ def _candidate_state_paths(
 
 
 def _match_active_worktree(
-    active_trees: dict[str, Any],
+    active_trees: dict[str, ActiveWorktreeEntry],
     root: Path,
     req_issue: str | None,
 ) -> tuple[str | None, str | None] | None:
@@ -415,7 +445,7 @@ def _match_active_worktree(
 
 def _find_active_worktree_base(
     root: Path,
-    request: Any | None = None,
+    request: CompleteRequest | None = None,
     *,
     state_path: Path | str | None = None,
     issue_number: int | str | None = None,
@@ -472,7 +502,7 @@ def _resolve_fallback_base_tip(root: Path) -> str | None:
 
 def _resolve_base_sha(
     root: Path,
-    request: Any | None = None,
+    request: CompleteRequest | None = None,
     *,
     base_sha: str | None = None,
     base_ref: str | None = None,
@@ -485,9 +515,10 @@ def _resolve_base_sha(
         return explicit_sha
 
     if request is not None:
-        payload = getattr(request, "payload", None)
-        if payload is not None and getattr(payload, "base_sha", None):
-            return str(payload.base_sha)
+        payload: object | None = request.payload
+        payload_base = getattr(payload, "base_sha", None)
+        if payload_base:
+            return str(payload_base)
 
     explicit_ref = base_ref or os.environ.get("ORCHESTUNE_BASE_REF")
     if explicit_ref:
@@ -625,14 +656,15 @@ def _resolve_record_ci_options(
     exit_code: int,
     base_sha: str | None,
     base_ref: str | None,
-    kwargs: dict[str, Any],
+    kwargs: dict[str, object],
 ) -> CiRecordOptions:
-    state_path = kwargs.pop("state_path", None)
-    issue_number = kwargs.pop("issue_number", None)
-    expected_head = kwargs.pop("expected_head", None)
-    expected_tree = kwargs.pop("expected_tree", None)
-    if kwargs:
-        unexpected = ", ".join(sorted(kwargs.keys()))
+    raw = dict(kwargs)
+    state_path = cast(Path | str | None, raw.pop("state_path", None))
+    issue_number = cast(int | str | None, raw.pop("issue_number", None))
+    expected_head = cast(str | None, raw.pop("expected_head", None))
+    expected_tree = cast(str | None, raw.pop("expected_tree", None))
+    if raw:
+        unexpected = ", ".join(sorted(raw.keys()))
         raise TypeError(
             f"record_ci_evidence() got unexpected keyword argument(s): {unexpected}"
         )
@@ -675,7 +707,7 @@ def record_ci_evidence(
     exit_code: int = 0,
     base_sha: str | None = None,
     base_ref: str | None = None,
-    **kwargs: Any,
+    **kwargs: object,
 ) -> CiEvidence:
     """Atomically record successful CI evidence outside the worktree tracking area."""
     opts = _resolve_record_ci_options(
@@ -804,7 +836,7 @@ def _validate_evidence_context(evidence: CiEvidence, root: Path) -> None:
     _validate_digests_and_env(evidence, root)
 
 
-def validate_ci_evidence(request: Any) -> CiEvidence:
+def validate_ci_evidence(request: CompleteRequest) -> CiEvidence:
     """Validate saved local-CI evidence for a completion request."""
     root = getattr(request, "worktree_root", None)
     worktree_path = Path(root).resolve() if root is not None else Path.cwd().resolve()
@@ -835,7 +867,7 @@ def _resolve_default_ci_command(root: Path) -> list[str]:
 
 def _build_ci_env(
     worktree_path: Path,
-    request: Any,
+    request: CompleteRequest,
     expected_base_sha: str,
     initial_head: str,
     initial_tree: str,
@@ -854,7 +886,7 @@ def _build_ci_env(
 
 def _execute_local_ci(
     worktree_path: Path,
-    request: Any,
+    request: CompleteRequest,
     ci_command: Sequence[str] | str | None,
     expected_base_sha: str,
     initial_head: str,
@@ -883,7 +915,7 @@ def _execute_local_ci(
 
 
 def _verify_ci_run_result(
-    request: Any,
+    request: CompleteRequest,
     worktree_path: Path,
     initial_head: str,
     initial_tree: str,
@@ -901,7 +933,7 @@ def _verify_ci_run_result(
 
 
 def run_local_ci_if_needed(
-    request: Any,
+    request: CompleteRequest,
     *,
     ci_command: Sequence[str] | str | None = None,
 ) -> CiEvidence:

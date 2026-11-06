@@ -6,9 +6,9 @@ import argparse
 import os
 import re
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, TypedDict, cast
 
 import orchestune.claim.workspace as claim_workspace
 import orchestune.config_contracts as config_contracts
@@ -40,16 +40,99 @@ from orchestune.dispatch.reporting.report_output import _check_target
 from orchestune.dispatch.targets import (
     ROUTINE_ID_ENV_VAR,
     ROUTINE_TOKEN_ENV_VAR,
+    DispatchTarget,
     TargetBuildConfig,
     build_dispatch_target,
     resolve_default_dispatch_target_name,
 )
+from orchestune.forge import Forge
 from orchestune.infra.git_cli import run_git
 from orchestune.infra.repository_config import (
     find_and_load_config_file as find_and_load_config_file,
 )
 from orchestune.outcome_record import VALID_CHILD_REVIEW_GATE_MODES
 from orchestune.review.semantic_gate import VALID_SEMANTIC_REVIEW_MODES
+from orchestune.targets.contracts import ReviewerBot, ReviewerBotSetting
+
+# The only Any in this module: TOML values are heterogeneous until a known table is read.
+TomlTable = dict[str, Any]
+
+
+class DispatchCliArgs(Protocol):
+    """CLI attributes this loader reads. Missing attributes stay optional."""
+
+    parent_issue: int | None
+    apply: bool | None
+    dispatch_target: str | None
+    max_concurrent: int | None
+    allow_unsafe_agent_execution: bool
+    profile: str | None
+    child_review_gate: str | None
+    semantic_review_mode: str | None
+    final_acceptance_review: str | None
+    force_integration_review: bool | None
+
+
+class PathOverrides(Protocol):
+    run_state_path: str | Path | None
+    worktree_root: str | Path | None
+
+
+class ResolvedPaths(TypedDict):
+    run_state_path: Path
+    worktree_root: Path
+    log_dir: Path
+    events_log_path: Path
+    not_needed_review_state_path: Path
+    report_dir: Path
+
+
+class SemanticConfigInputs(TypedDict, total=False):
+    semantic_review_mode: str
+    force_integration_review: bool
+    semantic_review_provider: str
+    semantic_fix_provider: str
+    semantic_review_trigger: str
+    max_semantic_review_rounds: int
+    max_semantic_fix_retries: int
+    semantic_review_timeout_seconds: int
+    semantic_review_ack_timeout_seconds: int
+    semantic_review_auto_retry: bool
+    semantic_review_retry_backoff_seconds: int
+    semantic_fix_timeout_seconds: int
+    semantic_ci_timeout_seconds: int
+    semantic_attempt_timeout_seconds: int
+
+
+class DispatcherConfigInputs(TypedDict):
+    parent_issue_number: int
+    apply: bool
+    run_state_path: Path
+    worktree_root: Path
+    log_dir: Path
+    events_log_path: Path
+    not_needed_review_state_path: Path
+    report_dir: Path
+    dispatch_target: DispatchTarget | None
+    profile: str | None
+    child_review_gate: str
+    final_acceptance_review: str
+    ci_command: list[str] | None
+    dag_ignore_patterns: tuple[re.Pattern[str], ...]
+    dag_similarity_threshold: float
+    execution_profile_config: ExecutionProfileConfig
+    reviewer_by_target: dict[str, ReviewerBot]
+    consistency_mode: ConsistencyMode
+    consistency_repair_allowlist: frozenset[str]
+    semantic_review_mode: str
+    force_integration_review: bool
+
+
+def _optional_text(value: object) -> str | None:
+    if value is None or isinstance(value, str):
+        return value
+    return cast(str, value)
+
 
 _DISPATCH_TARGET_HELP = (
     "#215/#163: エージェントの実ディスパッチ先。未指定時は実行環境から自動選択される"
@@ -200,13 +283,17 @@ def resolve_parent_issue(cli_parent_issue: int | None, cwd: Path | None = None) 
 
 
 class _PathArgs:
-    def __init__(self, run_state_path: Any = None, worktree_root: Any = None):
+    def __init__(
+        self,
+        run_state_path: str | Path | None = None,
+        worktree_root: str | Path | None = None,
+    ):
         self.run_state_path = run_state_path
         self.worktree_root = worktree_root
 
 
 def _default_resolve_dispatch_shared_paths(
-    args: Any,
+    args: PathOverrides,
     cwd: Path | None,
 ) -> tuple[Path, Path]:
     target_cwd = cwd or Path.cwd()
@@ -229,17 +316,28 @@ def _default_resolve_dispatch_shared_paths(
         return state.resolve(), wt.resolve()
 
 
+def _toml_path(table: TomlTable, key: str) -> str | Path | None:
+    value = table.get(key)
+    if value is None or isinstance(value, str | Path):
+        return value
+    return cast(str, value)
+
+
 def _resolve_paths(
-    toml_data: dict[str, Any],
+    toml_data: TomlTable,
     primary_root: Path,
     target_cwd: Path | None = None,
-    resolve_paths_fn: Callable[[Any, Path | None], tuple[Path, Path]] | None = None,
-) -> dict[str, Path]:
+    resolve_paths_fn: Callable[[PathOverrides, Path | None], tuple[Path, Path]]
+    | None = None,
+) -> ResolvedPaths:
     if resolve_paths_fn is None:
         resolve_paths_fn = _default_resolve_dispatch_shared_paths
     try:
         run_state_path, worktree_root = resolve_paths_fn(
-            _PathArgs(toml_data.get("run_state_path"), toml_data.get("worktree_root")),
+            _PathArgs(
+                _toml_path(toml_data, "run_state_path"),
+                _toml_path(toml_data, "worktree_root"),
+            ),
             target_cwd,
         )
     except (OSError, RuntimeError, subprocess.CalledProcessError) as e:
@@ -247,63 +345,71 @@ def _resolve_paths(
             f"unable to resolve repository workspace: {e}"
         ) from e
 
-    paths: dict[str, Path] = {
+    def relative(key: str, default: str) -> Path:
+        return claim_workspace.resolve_relative_to(
+            primary_root, _toml_path(toml_data, key), default
+        )
+
+    return {
         "run_state_path": run_state_path,
         "worktree_root": worktree_root,
+        "log_dir": relative("log_dir", "logs"),
+        "events_log_path": relative("events_log_path", "events.jsonl"),
+        "not_needed_review_state_path": relative(
+            "not_needed_review_state_path", "not_needed_review_state.json"
+        ),
+        "report_dir": relative("report_dir", ".orchestune/reports/dispatch"),
     }
-    defaults = {
-        "log_dir": "logs",
-        "events_log_path": "events.jsonl",
-        "not_needed_review_state_path": "not_needed_review_state.json",
-        "report_dir": ".orchestune/reports/dispatch",
-    }
-    for key, default_val in defaults.items():
-        val = toml_data.get(key)
-        paths[key] = claim_workspace.resolve_relative_to(primary_root, val, default_val)
-
-    return paths
 
 
 def _resolve_cloud_settings(
-    toml_data: dict[str, Any],
+    toml_data: TomlTable,
 ) -> tuple[str | None, str | None, str | None]:
-    routine_id = os.environ.get(ROUTINE_ID_ENV_VAR) or toml_data.get("routine_id")
+    routine_id = _optional_text(
+        os.environ.get(ROUTINE_ID_ENV_VAR) or toml_data.get("routine_id")
+    )
     routine_token = os.environ.get(ROUTINE_TOKEN_ENV_VAR)
-    codex_cloud_env = os.environ.get("ORCHESTUNE_CODEX_CLOUD_ENV") or toml_data.get(
-        "codex_cloud_env"
+    codex_cloud_env = _optional_text(
+        os.environ.get("ORCHESTUNE_CODEX_CLOUD_ENV") or toml_data.get("codex_cloud_env")
     )
     return routine_id, routine_token, codex_cloud_env
 
 
 def _resolve_and_build_target(
-    args: Any,
-    toml_data: dict[str, Any],
-    paths: dict[str, Path],
+    args: DispatchCliArgs,
+    toml_data: TomlTable,
+    paths: ResolvedPaths,
     routine_id: str | None,
     routine_token: str | None,
     codex_cloud_env: str | None,
     execution_profile_config: ExecutionProfileConfig,
-    build_target_fn: Callable[[TargetBuildConfig], Any] | None = None,
-) -> Any:
+    build_target_fn: Callable[[TargetBuildConfig], object] | None = None,
+) -> DispatchTarget | None:
     if build_target_fn is None:
         build_target_fn = build_dispatch_target
-    dispatch_target_name = (
-        args.dispatch_target
-        or toml_data.get("dispatch_target")
-        or resolve_default_dispatch_target_name(os.environ)
+    configured_target = args.dispatch_target or _optional_text(
+        toml_data.get("dispatch_target")
     )
-    dispatch_target = build_target_fn(
-        TargetBuildConfig(
-            dispatch_target_name=dispatch_target_name,
-            routine_id=routine_id,
-            routine_token=routine_token,
-            log_dir=paths["log_dir"],
-            local_cmd=toml_data.get("local_cmd"),
-            codex_cloud_env=codex_cloud_env,
-            allow_unsafe_agent_execution=bool(args.allow_unsafe_agent_execution),
-            reviewer_bot=toml_data.get("reviewer_bot", "auto"),
-            reviewer_by_target=extract_reviewer_by_target(toml_data),
-        )
+    dispatch_target_name = configured_target or resolve_default_dispatch_target_name(
+        os.environ
+    )
+    dispatch_target = cast(
+        DispatchTarget | None,
+        build_target_fn(
+            TargetBuildConfig(
+                dispatch_target_name=dispatch_target_name,
+                routine_id=routine_id,
+                routine_token=routine_token,
+                log_dir=paths["log_dir"],
+                local_cmd=_optional_text(toml_data.get("local_cmd")),
+                codex_cloud_env=codex_cloud_env,
+                allow_unsafe_agent_execution=bool(args.allow_unsafe_agent_execution),
+                reviewer_bot=cast(
+                    ReviewerBotSetting, toml_data.get("reviewer_bot", "auto")
+                ),
+                reviewer_by_target=extract_reviewer_by_target(toml_data),
+            )
+        ),
     )
     if args.profile:
         resolved_name = extract_target_name(dispatch_target)
@@ -313,7 +419,7 @@ def _resolve_and_build_target(
     return dispatch_target
 
 
-def _resolve_child_review_gate(args: Any, toml_data: dict[str, Any]) -> str:
+def _resolve_child_review_gate(args: DispatchCliArgs, toml_data: TomlTable) -> str:
     env_gate: str | None = None
     if "ORCHESTUNE_CHILD_REVIEW_GATE" in os.environ:
         raw_env = os.environ["ORCHESTUNE_CHILD_REVIEW_GATE"].strip()
@@ -335,7 +441,7 @@ def _resolve_child_review_gate(args: Any, toml_data: dict[str, Any]) -> str:
     return env_gate or "required"
 
 
-def _resolve_semantic_review_mode(args: Any, toml_data: dict[str, Any]) -> str:
+def _resolve_semantic_review_mode(args: DispatchCliArgs, toml_data: TomlTable) -> str:
     env_mode: str | None = None
     if "ORCHESTUNE_SEMANTIC_REVIEW_MODE" in os.environ:
         raw_env = os.environ["ORCHESTUNE_SEMANTIC_REVIEW_MODE"].strip()
@@ -357,7 +463,9 @@ def _resolve_semantic_review_mode(args: Any, toml_data: dict[str, Any]) -> str:
     return "off" if os.environ.get("ORCHESTUNE_SEMANTIC_REVIEW") == "0" else "required"
 
 
-def _resolve_final_acceptance_review(args: Any, toml_data: dict[str, Any]) -> str:
+def _resolve_final_acceptance_review(
+    args: DispatchCliArgs, toml_data: TomlTable
+) -> str:
     key = "ORCHESTUNE_FINAL_ACCEPTANCE_REVIEW"
     env_mode = os.environ[key].strip() if key in os.environ else None
     if env_mode is not None and env_mode not in VALID_FINAL_ACCEPTANCE_REVIEW_MODES:
@@ -373,9 +481,9 @@ def _resolve_final_acceptance_review(args: Any, toml_data: dict[str, Any]) -> st
 
 
 def _extract_semantic_config_kwargs(
-    args: Any,
-    toml_data: dict[str, Any],
-) -> dict[str, Any]:
+    args: DispatchCliArgs,
+    toml_data: TomlTable,
+) -> SemanticConfigInputs:
     semantic_keys = (
         "semantic_review_provider",
         "semantic_fix_provider",
@@ -391,25 +499,27 @@ def _extract_semantic_config_kwargs(
         "semantic_attempt_timeout_seconds",
     )
     force_rev = getattr(args, "force_integration_review", None)
-    return {
+    selected: SemanticConfigInputs = {
         "semantic_review_mode": _resolve_semantic_review_mode(args, toml_data),
-        "force_integration_review": (
+        "force_integration_review": cast(
+            bool,
             force_rev
             if force_rev is not None
-            else toml_data.get("force_integration_review", False)
+            else toml_data.get("force_integration_review", False),
         ),
-        **{k: toml_data[k] for k in semantic_keys if k in toml_data},
     }
+    extras = {key: toml_data[key] for key in semantic_keys if key in toml_data}
+    return cast(SemanticConfigInputs, {**selected, **extras})
 
 
 def _assemble_dispatcher_config(
-    args: Any,
-    toml_data: dict[str, Any],
-    paths: dict[str, Path],
+    args: DispatchCliArgs,
+    toml_data: TomlTable,
+    paths: Mapping[str, Path] | ResolvedPaths,
     parent_issue: int,
-    dispatch_target: Any,
+    dispatch_target: DispatchTarget | None,
     execution_profile_config: ExecutionProfileConfig,
-    forge: Any = None,
+    forge: Forge | None = None,
 ) -> DispatcherConfig:
     dag_ignore_patterns = compile_extra_ignore_patterns(
         extract_dag_ignore_patterns(toml_data)
@@ -423,10 +533,13 @@ def _assemble_dispatcher_config(
     ci_raw = toml_data.get("ci_command")
     ci_cmd = parse_ci_command(ci_raw) if ci_raw is not None else None
     repair_codes = list(toml_data.get("consistency_repair_code", []))
-    config_kwargs: dict[str, Any] = {
+    config_kwargs: dict[str, object] = {
         "parent_issue_number": parent_issue,
-        "apply": args.apply if args.apply is not None else toml_data.get("apply", True),
-        **paths,
+        "apply": cast(
+            bool,
+            args.apply if args.apply is not None else toml_data.get("apply", True),
+        ),
+        **cast(ResolvedPaths, paths),
         "dispatch_target": dispatch_target,
         "profile": args.profile,
         "child_review_gate": _resolve_child_review_gate(args, toml_data),
@@ -436,30 +549,34 @@ def _assemble_dispatcher_config(
         "dag_similarity_threshold": dag_similarity_threshold,
         "execution_profile_config": execution_profile_config,
         "reviewer_by_target": extract_reviewer_by_target(toml_data),
-        "consistency_mode": ConsistencyMode(toml_data.get("consistency_mode", "off")),
-        "consistency_repair_allowlist": frozenset(repair_codes),
+        "consistency_mode": ConsistencyMode(
+            cast(str, toml_data.get("consistency_mode", "off"))
+        ),
+        "consistency_repair_allowlist": frozenset(cast(list[str], repair_codes)),
         **runtime_tuning_overrides(toml_data),
         **_extract_semantic_config_kwargs(args, toml_data),
     }
     if args.max_concurrent is not None:
         config_kwargs["max_concurrent"] = args.max_concurrent
-    return DispatcherConfig(
-        **config_kwargs, **({"forge": forge} if forge is not None else {})
-    )
+    typed = cast(DispatcherConfigInputs, config_kwargs)
+    if forge is None:
+        return DispatcherConfig(**typed)
+    return DispatcherConfig(**typed, forge=forge)
 
 
 def load_and_resolve_config(
     cli_args: list[str] | None = None,
     cwd: Path | None = None,
-    forge: Any = None,
+    forge: Forge | None = None,
     *,
-    load_config_fn: Callable[[Path], dict[str, Any]] | None = None,
-    build_target_fn: Callable[[TargetBuildConfig], Any] | None = None,
-    resolve_paths_fn: Callable[[Any, Path | None], tuple[Path, Path]] | None = None,
+    load_config_fn: Callable[[Path], TomlTable] | None = None,
+    build_target_fn: Callable[[TargetBuildConfig], object] | None = None,
+    resolve_paths_fn: Callable[[PathOverrides, Path | None], tuple[Path, Path]]
+    | None = None,
 ) -> DispatcherConfig:
     """End-to-end config resolution: CLI parsing -> TOML validation -> DispatcherConfig."""
     parser = build_arg_parser()
-    args = parser.parse_args(cli_args)
+    args = cast(DispatchCliArgs, parser.parse_args(cli_args))
     target_cwd = cwd or Path.cwd()
     primary_root, checkout_root = claim_workspace.resolve_checkout_roots(target_cwd)
 

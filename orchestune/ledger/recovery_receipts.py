@@ -8,7 +8,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from math import isfinite
-from typing import Any, Literal, cast
+from typing import Any, Literal, TypedDict, TypeVar, cast
 
 from orchestune.ledger.active_codec import (
     decode_active_worktree,
@@ -26,6 +26,107 @@ ORPHANED_PR_OPERATION = "orphaned-pr"
 RESTORE_MARKER_OPERATION = "restore-marker"
 RECLAIM_PHASES = frozenset({"prepared", "active_saved", "completed"})
 RESTART_PHASES = frozenset({"prepared", "restarted"})
+RawJson = dict[str, Any]
+_JsonType = TypeVar("_JsonType")
+_ReclaimPhase = Literal["prepared", "active_saved", "completed"]
+_RestartPhase = Literal["prepared", "restarted"]
+
+
+class RecoveryExecutionIdentityJson(TypedDict):
+    repository_id: str
+    issue_number: int
+    claim_id: str
+    owner_token_digest: str | None
+    claimed_at: float | None
+    branch: str
+    launch_attempt_id: str | None
+    external_id: str
+    started_at: float | None
+
+
+class RecoveryReceiptBaseJson(TypedDict):
+    schema_version: int
+    repository_id: str
+    issue_number: int
+    claim_id: str
+    operation: str
+
+
+class ExternalStopJson(RecoveryReceiptBaseJson):
+    source: str
+    confirmed_external_stopped: bool
+    reason: str
+    recorded_at: str
+    launch_attempt_id: str | None
+    external_id: str
+    execution_identity: RecoveryExecutionIdentityJson
+    active: RawJson
+    worktree_action: str
+
+
+class ReleaseReceiptJson(RecoveryReceiptBaseJson):
+    reason: str | None
+    recorded_at: str
+    worktree_action: str
+    active: RawJson
+
+
+class ReleaseReceiptStored(ReleaseReceiptJson, total=False):
+    confirmation_receipt_key: str
+    source: str
+    confirmed_external_stopped: bool
+    launch_attempt_id: str
+    external_id: str
+    execution_identity: RecoveryExecutionIdentityJson
+
+
+class RestoreMarkerJson(RecoveryReceiptBaseJson):
+    reason: str | None
+    recorded_at: str
+    worktree_action: str
+    active: RawJson
+
+
+class ReclaimReceiptJson(TypedDict):
+    new_claim_id: str
+    phase: _ReclaimPhase
+    superseded_claim_ids: list[str]
+
+
+class ReclaimReceiptStored(ReclaimReceiptJson, total=False):
+    recorded_at: str
+
+
+class GcReleaseJson(RecoveryReceiptBaseJson):
+    branch: str
+    worktree_path: str
+    worktree_action: str
+    stop_confirmed: bool
+    recorded_at: str
+    active: RawJson
+
+
+class GcReleaseStored(GcReleaseJson, total=False):
+    completion_id: str
+    completion_result: str
+    base_sha: str
+    reclaim: RawJson
+
+
+class RestartBlockedJson(RecoveryReceiptBaseJson):
+    phase: _RestartPhase
+    reason: str
+    new_claim_id: str
+    recorded_at: str
+    worktree_action: str
+    active: RawJson
+    replacement: RawJson
+
+
+class OrphanedPrJson(RecoveryReceiptBaseJson):
+    pr_number: int
+    head_sha: str
+    active: RawJson
 
 
 def recovery_receipt_key(
@@ -42,7 +143,7 @@ def gc_release_receipt_key(
     )
 
 
-def legacy_active_snapshot(active: ActiveWorktree) -> dict[str, Any]:
+def legacy_active_snapshot(active: ActiveWorktree) -> RawJson:
     """Flat receipt snapshot; unlike the ledger, it keeps a null policy config."""
     snapshot = encode_active_worktree(active)
     snapshot.setdefault("completion_policy_config", None)
@@ -62,7 +163,7 @@ class RecoveryExecutionIdentity:
     started_at: float | None
 
     @classmethod
-    def from_json(cls, raw: Any) -> RecoveryExecutionIdentity:
+    def from_json(cls, raw: object) -> RecoveryExecutionIdentity:
         if not isinstance(raw, dict):
             raise ValueError("execution_identity must be an object")
         names = (
@@ -109,7 +210,7 @@ class RecoveryExecutionIdentity:
             started_at=times["started_at"],
         )
 
-    def to_json(self) -> dict[str, Any]:
+    def to_json(self) -> RecoveryExecutionIdentityJson:
         return {
             "repository_id": self.repository_id,
             "issue_number": self.issue_number,
@@ -128,17 +229,17 @@ class RecoveryActiveSnapshot:
     """Typed active-worktree snapshot with codec-only source JSON preservation."""
 
     value: ActiveWorktree
-    _source_json: dict[str, Any] = field(repr=False, compare=False)
+    _source_json: RawJson = field(repr=False, compare=False)
     _original_value: ActiveWorktree = field(repr=False, compare=False)
 
     @classmethod
-    def from_json(cls, raw: Any) -> RecoveryActiveSnapshot:
+    def from_json(cls, raw: object) -> RecoveryActiveSnapshot:
         if not isinstance(raw, dict):
             raise ValueError("active snapshot must be an object")
         value = decode_active_worktree(raw)
         return cls(value, deepcopy(raw), value)
 
-    def to_json(self) -> dict[str, Any]:
+    def to_json(self) -> RawJson:
         if self.value == self._original_value:
             return deepcopy(self._source_json)
         return _preserved_json(
@@ -155,14 +256,14 @@ class RecoveryReceiptBase(ABC):
     issue_number: int
     claim_id: str
     operation: str
-    _codec_source_json: dict[str, Any] | None = field(
+    _codec_source_json: RawJson | None = field(
         default=None, repr=False, compare=False, kw_only=True
     )
-    _codec_original_fields: dict[str, Any] | None = field(
+    _codec_original_fields: RawJson | None = field(
         default=None, repr=False, compare=False, kw_only=True
     )
 
-    def _base_json(self) -> dict[str, Any]:
+    def _base_json(self) -> RecoveryReceiptBaseJson:
         return {
             "schema_version": self.schema_version,
             "repository_id": self.repository_id,
@@ -172,7 +273,7 @@ class RecoveryReceiptBase(ABC):
         }
 
     @abstractmethod
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> RawJson:
         """Encode the typed receipt at the run_state.json boundary."""
 
 
@@ -188,8 +289,8 @@ class ExternalStopConfirmation(RecoveryReceiptBase):
     active: RecoveryActiveSnapshot
     worktree_action: str
 
-    def to_dict(self) -> dict[str, Any]:
-        current = {
+    def to_dict(self) -> RawJson:
+        current: ExternalStopJson = {
             **self._base_json(),
             "source": self.source,
             "confirmed_external_stopped": self.confirmed_external_stopped,
@@ -202,7 +303,9 @@ class ExternalStopConfirmation(RecoveryReceiptBase):
             "worktree_action": self.worktree_action,
         }
         return _preserved_json(
-            self._codec_source_json, self._codec_original_fields, current
+            self._codec_source_json,
+            self._codec_original_fields,
+            cast(RawJson, current),
         )
 
 
@@ -219,29 +322,30 @@ class ReleaseReceipt(RecoveryReceiptBase):
     external_id: str | None = None
     execution_identity: RecoveryExecutionIdentity | None = None
 
-    def to_dict(self) -> dict[str, Any]:
-        current: dict[str, Any] = {
+    def to_dict(self) -> RawJson:
+        current: ReleaseReceiptStored = {
             **self._base_json(),
             "reason": self.reason,
             "recorded_at": self.recorded_at,
             "worktree_action": self.worktree_action,
             "active": self.active.to_json(),
         }
-        optional = {
-            "confirmation_receipt_key": self.confirmation_receipt_key,
-            "source": self.source,
-            "confirmed_external_stopped": self.confirmed_external_stopped,
-            "launch_attempt_id": self.launch_attempt_id,
-            "external_id": self.external_id,
-            "execution_identity": self.execution_identity.to_json()
-            if self.execution_identity
-            else None,
-        }
-        for key, value in optional.items():
-            if value is not None:
-                current[key] = value
+        if self.confirmation_receipt_key is not None:
+            current["confirmation_receipt_key"] = self.confirmation_receipt_key
+        if self.source is not None:
+            current["source"] = self.source
+        if self.confirmed_external_stopped is not None:
+            current["confirmed_external_stopped"] = self.confirmed_external_stopped
+        if self.launch_attempt_id is not None:
+            current["launch_attempt_id"] = self.launch_attempt_id
+        if self.external_id is not None:
+            current["external_id"] = self.external_id
+        if self.execution_identity is not None:
+            current["execution_identity"] = self.execution_identity.to_json()
         return _preserved_json(
-            self._codec_source_json, self._codec_original_fields, current
+            self._codec_source_json,
+            self._codec_original_fields,
+            cast(RawJson, current),
         )
 
 
@@ -252,8 +356,8 @@ class RestoreMarkerReceipt(RecoveryReceiptBase):
     worktree_action: str
     active: RecoveryActiveSnapshot
 
-    def to_dict(self) -> dict[str, Any]:
-        current = {
+    def to_dict(self) -> RawJson:
+        current: RestoreMarkerJson = {
             **self._base_json(),
             "reason": self.reason,
             "recorded_at": self.recorded_at,
@@ -261,7 +365,9 @@ class RestoreMarkerReceipt(RecoveryReceiptBase):
             "active": self.active.to_json(),
         }
         return _preserved_json(
-            self._codec_source_json, self._codec_original_fields, current
+            self._codec_source_json,
+            self._codec_original_fields,
+            cast(RawJson, current),
         )
 
 
@@ -271,15 +377,15 @@ class ReclaimReceipt:
     phase: Literal["prepared", "active_saved", "completed"]
     recorded_at: str | None
     superseded_claim_ids: tuple[str, ...] = ()
-    _codec_source_json: dict[str, Any] | None = field(
+    _codec_source_json: RawJson | None = field(
         default=None, repr=False, compare=False, kw_only=True
     )
-    _codec_original_fields: dict[str, Any] | None = field(
+    _codec_original_fields: RawJson | None = field(
         default=None, repr=False, compare=False, kw_only=True
     )
 
-    def to_dict(self) -> dict[str, Any]:
-        current: dict[str, Any] = {
+    def to_dict(self) -> RawJson:
+        current: ReclaimReceiptStored = {
             "new_claim_id": self.new_claim_id,
             "phase": self.phase,
             "superseded_claim_ids": list(self.superseded_claim_ids),
@@ -287,7 +393,9 @@ class ReclaimReceipt:
         if self.recorded_at is not None:
             current["recorded_at"] = self.recorded_at
         return _preserved_json(
-            self._codec_source_json, self._codec_original_fields, current
+            self._codec_source_json,
+            self._codec_original_fields,
+            cast(RawJson, current),
         )
 
 
@@ -304,8 +412,8 @@ class GcReleaseReceipt(RecoveryReceiptBase):
     active: RecoveryActiveSnapshot
     reclaim: ReclaimReceipt | None = None
 
-    def to_dict(self) -> dict[str, Any]:
-        current: dict[str, Any] = {
+    def to_dict(self) -> RawJson:
+        current: GcReleaseStored = {
             **self._base_json(),
             "branch": self.branch,
             "worktree_path": self.worktree_path,
@@ -314,17 +422,18 @@ class GcReleaseReceipt(RecoveryReceiptBase):
             "recorded_at": self.recorded_at,
             "active": self.active.to_json(),
         }
-        for key, value in (
-            ("completion_id", self.completion_id),
-            ("completion_result", self.completion_result),
-            ("base_sha", self.base_sha),
-        ):
-            if value is not None:
-                current[key] = value
+        if self.completion_id is not None:
+            current["completion_id"] = self.completion_id
+        if self.completion_result is not None:
+            current["completion_result"] = self.completion_result
+        if self.base_sha is not None:
+            current["base_sha"] = self.base_sha
         if self.reclaim is not None:
             current["reclaim"] = self.reclaim.to_dict()
         return _preserved_json(
-            self._codec_source_json, self._codec_original_fields, current
+            self._codec_source_json,
+            self._codec_original_fields,
+            cast(RawJson, current),
         )
 
 
@@ -338,8 +447,8 @@ class RestartBlockedReceipt(RecoveryReceiptBase):
     active: RecoveryActiveSnapshot
     replacement: RecoveryActiveSnapshot
 
-    def to_dict(self) -> dict[str, Any]:
-        current = {
+    def to_dict(self) -> RawJson:
+        current: RestartBlockedJson = {
             **self._base_json(),
             "phase": self.phase,
             "reason": self.reason,
@@ -350,7 +459,9 @@ class RestartBlockedReceipt(RecoveryReceiptBase):
             "replacement": self.replacement.to_json(),
         }
         return _preserved_json(
-            self._codec_source_json, self._codec_original_fields, current
+            self._codec_source_json,
+            self._codec_original_fields,
+            cast(RawJson, current),
         )
 
 
@@ -360,15 +471,17 @@ class OrphanedPrReceipt(RecoveryReceiptBase):
     head_sha: str
     active: RecoveryActiveSnapshot
 
-    def to_dict(self) -> dict[str, Any]:
-        current = {
+    def to_dict(self) -> RawJson:
+        current: OrphanedPrJson = {
             **self._base_json(),
             "pr_number": self.pr_number,
             "head_sha": self.head_sha,
             "active": self.active.to_json(),
         }
         return _preserved_json(
-            self._codec_source_json, self._codec_original_fields, current
+            self._codec_source_json,
+            self._codec_original_fields,
+            cast(RawJson, current),
         )
 
 
@@ -383,28 +496,28 @@ type RecoveryReceipt = (
 type RecoveryReceiptValue = RecoveryReceipt | InvalidLedgerRecord
 
 
-def _required(raw: dict[str, Any], key: str, expected: type[Any]) -> Any:
+def _required(raw: RawJson, key: str, expected: type[_JsonType]) -> _JsonType:
     value = raw[key]
     valid = type(value) is expected if expected is bool else isinstance(value, expected)
     if not valid or (expected is int and isinstance(value, bool)):
         raise ValueError(f"{key} must be {expected.__name__}")
-    return value
+    return cast(_JsonType, value)
 
 
-def _optional(raw: dict[str, Any], key: str, expected: type[Any]) -> Any | None:
+def _optional(raw: RawJson, key: str, expected: type[_JsonType]) -> _JsonType | None:
     if key not in raw or raw[key] is None:
         return None
     return _required(raw, key, expected)
 
 
-def _positive_issue(raw: dict[str, Any]) -> int:
+def _positive_issue(raw: RawJson) -> int:
     value = _required(raw, "issue_number", int)
     if value <= 0:
         raise ValueError("issue_number must be positive")
-    return cast(int, value)
+    return value
 
 
-def _validated_recorded_at(raw: dict[str, Any]) -> str:
+def _validated_recorded_at(raw: RawJson) -> str:
     value = _required(raw, "recorded_at", str)
     try:
         parsed = datetime.fromisoformat(value)
@@ -412,10 +525,10 @@ def _validated_recorded_at(raw: dict[str, Any]) -> str:
         raise ValueError("recorded_at must be an ISO timestamp") from error
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ValueError("recorded_at must include a timezone")
-    return cast(str, value)
+    return value
 
 
-def _validated_utc_recorded_at(raw: dict[str, Any]) -> str:
+def _validated_utc_recorded_at(raw: RawJson) -> str:
     value = _validated_recorded_at(raw)
     parsed = datetime.fromisoformat(value)
     if parsed.utcoffset() != UTC.utcoffset(parsed):
@@ -423,11 +536,11 @@ def _validated_utc_recorded_at(raw: dict[str, Any]) -> str:
     return value
 
 
-def _decode_active(raw: dict[str, Any], key: str) -> RecoveryActiveSnapshot:
+def _decode_active(raw: RawJson, key: str) -> RecoveryActiveSnapshot:
     return RecoveryActiveSnapshot.from_json(raw[key])
 
 
-def _base(raw: dict[str, Any], operation: str) -> dict[str, Any]:
+def _base(raw: RawJson, operation: str) -> RecoveryReceiptBaseJson:
     version = _required(raw, "schema_version", int)
     if version != 1:
         raise ValueError("unsupported recovery receipt schema_version")
@@ -444,7 +557,7 @@ def _base(raw: dict[str, Any], operation: str) -> dict[str, Any]:
     }
 
 
-def _decode_external(raw: dict[str, Any]) -> ExternalStopConfirmation:
+def _decode_external(raw: RawJson) -> ExternalStopConfirmation:
     base = _base(raw, EXTERNAL_STOP_OPERATION)
     identity = RecoveryExecutionIdentity.from_json(raw["execution_identity"])
     if (
@@ -495,7 +608,7 @@ def _decode_external(raw: dict[str, Any]) -> ExternalStopConfirmation:
     )
 
 
-def _decode_release(raw: dict[str, Any]) -> ReleaseReceipt:
+def _decode_release(raw: RawJson) -> ReleaseReceipt:
     base = _base(raw, RELEASE_OPERATION)
     identity_raw = raw.get("execution_identity")
     identity = (
@@ -520,7 +633,7 @@ def _decode_release(raw: dict[str, Any]) -> ReleaseReceipt:
     )
 
 
-def _decode_restore_marker(raw: dict[str, Any]) -> RestoreMarkerReceipt:
+def _decode_restore_marker(raw: RawJson) -> RestoreMarkerReceipt:
     base = _base(raw, RESTORE_MARKER_OPERATION)
     return RestoreMarkerReceipt(
         **base,
@@ -533,7 +646,7 @@ def _decode_restore_marker(raw: dict[str, Any]) -> RestoreMarkerReceipt:
     )
 
 
-def _decode_reclaim(raw: Any) -> ReclaimReceipt | None:
+def _decode_reclaim(raw: object) -> ReclaimReceipt | None:
     if raw is None:
         return None
     if not isinstance(raw, dict):
@@ -552,7 +665,7 @@ def _decode_reclaim(raw: Any) -> ReclaimReceipt | None:
         raise ValueError("reclaim new_claim_id must be non-empty")
     return ReclaimReceipt(
         new_claim_id=new_claim_id,
-        phase=phase,
+        phase=cast(_ReclaimPhase, phase),
         recorded_at=recorded_at,
         superseded_claim_ids=tuple(ids),
         _codec_source_json=deepcopy(raw),
@@ -560,7 +673,7 @@ def _decode_reclaim(raw: Any) -> ReclaimReceipt | None:
     )
 
 
-def _decode_gc(raw: dict[str, Any]) -> GcReleaseReceipt:
+def _decode_gc(raw: RawJson) -> GcReleaseReceipt:
     base = _base(raw, GC_RELEASE_OPERATION)
     completion_id = raw.get("completion_id")
     completion_result = raw.get("completion_result")
@@ -589,7 +702,7 @@ def _decode_gc(raw: dict[str, Any]) -> GcReleaseReceipt:
     )
 
 
-def _decode_restart(raw: dict[str, Any]) -> RestartBlockedReceipt:
+def _decode_restart(raw: RawJson) -> RestartBlockedReceipt:
     base = _base(raw, RESTART_BLOCKED_OPERATION)
     phase = _required(raw, "phase", str)
     if phase not in RESTART_PHASES:
@@ -600,7 +713,7 @@ def _decode_restart(raw: dict[str, Any]) -> RestartBlockedReceipt:
         raise ValueError("restart-blocked receipt text is empty")
     return RestartBlockedReceipt(
         **base,
-        phase=phase,
+        phase=cast(_RestartPhase, phase),
         reason=reason,
         new_claim_id=new_claim_id,
         recorded_at=_validated_recorded_at(raw),
@@ -612,7 +725,7 @@ def _decode_restart(raw: dict[str, Any]) -> RestartBlockedReceipt:
     )
 
 
-def _decode_orphan(raw: dict[str, Any]) -> OrphanedPrReceipt:
+def _decode_orphan(raw: RawJson) -> OrphanedPrReceipt:
     base = _base(raw, ORPHANED_PR_OPERATION)
     pr_number = _required(raw, "pr_number", int)
     if pr_number <= 0:
@@ -627,7 +740,7 @@ def _decode_orphan(raw: dict[str, Any]) -> OrphanedPrReceipt:
     )
 
 
-_DECODERS: dict[str, Callable[[dict[str, Any]], RecoveryReceipt]] = {
+_DECODERS: dict[str, Callable[[RawJson], RecoveryReceipt]] = {
     EXTERNAL_STOP_OPERATION: _decode_external,
     RELEASE_OPERATION: _decode_release,
     RESTORE_MARKER_OPERATION: _decode_restore_marker,
@@ -637,7 +750,7 @@ _DECODERS: dict[str, Callable[[dict[str, Any]], RecoveryReceipt]] = {
 }
 
 
-def decode_recovery_receipt(raw: Any) -> RecoveryReceiptValue:
+def decode_recovery_receipt(raw: object) -> RecoveryReceiptValue:
     """Decode one record; semantic invalidity stays local to that entry."""
     if not isinstance(raw, dict):
         raise TypeError("recovery receipt entries must be objects")
@@ -651,7 +764,7 @@ def decode_recovery_receipt(raw: Any) -> RecoveryReceiptValue:
         return InvalidLedgerRecord("recovery_receipts", str(error), raw)
 
 
-def encode_recovery_receipt(value: RecoveryReceiptValue) -> dict[str, Any]:
+def encode_recovery_receipt(value: RecoveryReceiptValue) -> RawJson:
     if isinstance(value, InvalidLedgerRecord):
         return deepcopy(value.raw_json)
     if isinstance(value, RecoveryReceiptBase):
@@ -725,7 +838,7 @@ def _required_active_claim_id(active: ActiveWorktree) -> str:
 
 
 def record_recovery_in_raw(
-    raw: dict[str, Any],
+    raw: RawJson,
     key: str,
     active: ActiveWorktree,
     *,
