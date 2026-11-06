@@ -900,6 +900,8 @@ previewとtokenが必要で、完了済みの再実行はGitHubを変更しま�
 orchestune claim 123
 ```
 
+着手前の fetch は `FETCH_HEAD` を更新しませんが、refs と取得した objects のために Git 管理領域への書き込みは必要です。失敗した場合は表示された Git エラーを確認してください。権限拒否または読み取り専用エラーの場合は、チェックアウトと共有 Git 管理領域（`git rev-parse --git-dir --git-common-dir`）の権限を確認し、Git 管理領域へ書き込める環境で元の claim コマンドを再実行してください。worktree 作成にも書き込み権限が必要なため、fetch 単独の成功は claim 完了を保証しません。
+
 成功すると、Issue番号、Claim ID、ブランチ名、作成された worktree のパス、ベースブランチ等が表示され、終了コード `0` を返します。出力された worktree パスへ移動（`cd <worktree_path>`）して実装作業を開始します。
 
 ### 主要なオプション

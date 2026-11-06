@@ -921,6 +921,8 @@ To begin work on a provisioned subtask issue, use the `orchestune claim` command
 orchestune claim 123
 ```
 
+The pre-claim fetch avoids updating `FETCH_HEAD`, but still needs write access to the Git metadata for refs and downloaded objects. If it fails, inspect the reported Git error; for permission or read-only errors, check the checkout and shared Git directory (`git rev-parse --git-dir --git-common-dir`). Retry the original claim command in an environment authorized to write the Git metadata. Worktree creation also requires Git metadata write access, so a standalone successful fetch does not guarantee the claim can complete.
+
 Upon success, the command prints the issue number, claim ID, branch name, prepared worktree path, and base reference, and exits with code `0`. Navigate to the prepared worktree path (`cd <worktree_path>`) and start development.
 
 ### Major Options

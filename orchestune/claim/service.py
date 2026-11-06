@@ -109,19 +109,23 @@ def _resolve_owner_token(request: ClaimRequest) -> tuple[ClaimRequest, str]:
 def _perform_git_fetch(repo_root: Path, issue_number: int) -> ClaimFailure | None:
     """Execute git fetch origin before making local modifications."""
     try:
-        res = run_git(["fetch", "origin"], cwd=repo_root, check=False)
-        if res.returncode != 0:
-            err = res.stderr or res.stdout or "unknown fetch failure"
-            return ClaimFailure(
-                reason=ClaimFailureReason.GIT_FETCH_FAILED,
-                message=f"git fetch origin failed: {err.strip()}",
-            )
-    except OSError as e:
-        return ClaimFailure(
-            reason=ClaimFailureReason.GIT_FETCH_FAILED,
-            message=f"git fetch origin raised exception: {e}",
+        res = run_git(
+            ["fetch", "--no-write-fetch-head", "origin"], cwd=repo_root, check=False
         )
-    return None
+        if res.returncode == 0:
+            return None
+        detail = (res.stderr or res.stdout or "unknown fetch failure").strip()
+    except OSError as e:
+        detail = str(e)
+    return ClaimFailure(
+        reason=ClaimFailureReason.GIT_FETCH_FAILED,
+        message=f"git fetch --no-write-fetch-head origin failed: {detail}",
+        next_actions=(
+            "Check the Git error above for connection, authentication, or origin configuration issues.",
+            "For permission/read-only errors, inspect Git paths with `git rev-parse --git-dir --git-common-dir` and check write access.",
+            f"Retry `orchestune claim {issue_number}` in a writable environment; fetch refs/objects and worktree creation need Git metadata write access.",
+        ),
+    )
 
 
 def _rollback_reservation_on_prep_failure(

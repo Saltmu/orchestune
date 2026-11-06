@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from orchestune.claim import service as claim_service
 from orchestune.claim.contracts import (
     ClaimConflictReason,
     ClaimExitCode,
@@ -18,7 +19,7 @@ from orchestune.claim.contracts import (
     ReservationKind,
 )
 from orchestune.claim.ownership import new_claim_id, new_owner_token, owner_token_digest
-from orchestune.claim.service import claim_task, resume_claim
+from orchestune.claim.service import _perform_git_fetch, claim_task, resume_claim
 from orchestune.infra.process_utils import run_state_lock
 from orchestune.labels import StatusLabel
 from orchestune.ledger.run_state import (
@@ -29,6 +30,62 @@ from orchestune.ledger.run_state import (
 from orchestune.worktree_ops.preparation import WorktreePreparation
 from tests.claim_helpers import MockForge, _make_issue
 from tests.dispatch_test_support import make_test_active_worktree
+
+
+def test_preclaim_fetch_avoids_fetch_head_write(tmp_path: Path) -> None:
+    result = MagicMock(returncode=0, stdout="", stderr="")
+    with patch.object(claim_service, "run_git", return_value=result) as run_git:
+        assert _perform_git_fetch(tmp_path, 1719) is None
+
+    run_git.assert_called_once_with(
+        ["fetch", "--no-write-fetch-head", "origin"], cwd=tmp_path, check=False
+    )
+
+
+@pytest.mark.parametrize(
+    ("stderr", "stdout", "expected"),
+    [
+        ("remote denied", "ignored output", "remote denied"),
+        ("", "remote output", "remote output"),
+        ("", "", "unknown fetch failure"),
+    ],
+)
+def test_preclaim_fetch_failure_preserves_process_detail(
+    tmp_path: Path, stderr: str, stdout: str, expected: str
+) -> None:
+    result = MagicMock(returncode=1, stderr=stderr, stdout=stdout)
+    with patch.object(claim_service, "run_git", return_value=result):
+        failure = _perform_git_fetch(tmp_path, 1719)
+
+    assert failure is not None
+    assert failure.reason == ClaimFailureReason.GIT_FETCH_FAILED
+    assert expected in failure.message
+    assert failure.next_actions
+    assert any("git-common-dir" in action for action in failure.next_actions)
+    assert any("claim 1719" in action for action in failure.next_actions)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        PermissionError("cannot open .git/FETCH_HEAD: Read-only file system"),
+        PermissionError(
+            "cannot update .git/refs/remotes/origin/main: Read-only file system"
+        ),
+        OSError("cannot write .git/objects/aa/bb: Read-only file system"),
+        OSError("unable to access origin: connection reset"),
+    ],
+)
+def test_preclaim_fetch_oserror_keeps_detail_and_recovery(
+    tmp_path: Path, error: OSError
+) -> None:
+    with patch.object(claim_service, "run_git", side_effect=error):
+        failure = _perform_git_fetch(tmp_path, 1719)
+
+    assert failure is not None
+    assert failure.reason == ClaimFailureReason.GIT_FETCH_FAILED
+    assert str(error) in failure.message
+    assert failure.next_actions
 
 
 class TestClaimLifecycleOrderAndSuccess:
@@ -231,6 +288,10 @@ class TestInterruptionAndPreservation:
         assert outcome.success is False
         assert outcome.failure is not None
         assert outcome.failure.reason == ClaimFailureReason.GIT_FETCH_FAILED
+        assert "Network failure during fetch" in outcome.failure.message
+        assert any(
+            "git-common-dir" in action for action in outcome.failure.next_actions
+        )
 
         # Verify nothing was written to run_state or labels
         persisted = load_run_state(state_path)
