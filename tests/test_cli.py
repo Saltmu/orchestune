@@ -1,4 +1,6 @@
+import importlib
 import io
+import subprocess
 import sys
 from unittest.mock import patch
 
@@ -8,6 +10,39 @@ import pytest
 class _TTYStringIO(io.StringIO):
     def isatty(self) -> bool:
         return True
+
+
+def test_cli_command_specs_resolve_to_callable_entrypoints():
+    from orchestune.cli import _COMMAND_SPECS
+
+    for spec in _COMMAND_SPECS:
+        if spec.module is not None:
+            assert callable(
+                getattr(importlib.import_module(spec.module), spec.function)
+            )
+
+    assert callable(
+        importlib.import_module("orchestune.dispatch.runtime_reader").read_runtime
+    )
+    assert callable(importlib.import_module("orchestune.setup_skills").setup_skills)
+
+
+def test_cli_help_does_not_import_command_modules():
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; sys.argv=['orchestune', '--help']; "
+            "from orchestune.cli import main; main(); "
+            "assert not any(name in sys.modules for name in ("
+            "'orchestune.dag.cli', 'orchestune.dispatch.dispatcher', "
+            "'orchestune.claim.cli', 'orchestune.complete.cli'))",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_cli_delegates_to_dag():
