@@ -8,9 +8,15 @@ from pathlib import Path
 import pytest
 
 import orchestune.integrator.parent_completion as parent_completion
+from orchestune.claim.contracts import ReservationKind
+from orchestune.claim.preflight import _resolve_reservation_kind
 from orchestune.infra.git_cli import MergeProbeResult, MergeProbeStatus
 from orchestune.integrator.parent_completion import process_parent_completion
-from orchestune.issue_parsing import find_children_by_parent
+from orchestune.issue_parsing import (
+    find_children_by_parent,
+    parse_footprint_block,
+    parse_task_from_issue,
+)
 from orchestune.models import IssueRecord
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -112,19 +118,47 @@ def test_review_loops_isolate_independent_followups(skill_name: str) -> None:
     assert "`depends_on: [<source subtask_id>]`" not in section
 
 
+def _followup_example(skill_name: str) -> str:
+    match = re.search(
+        r"```yaml\n(subtask_id: followup-unique-id\n.*?)```",
+        _section(skill_name),
+        re.S,
+    )
+    assert match, f"{skill_name} follow-up example is not a yaml fence"
+    return f"```yaml\n{match.group(1)}```\n"
+
+
 def test_followup_footprint_example_matches_across_review_loops() -> None:
-    examples = []
-    for skill_name in SKILLS:
-        match = re.search(
-            r"```text\n(subtask_id: followup-unique-id\n.*?)```",
-            _section(skill_name),
-            re.S,
-        )
-        assert match
-        examples.append(match.group(1))
+    examples = [_followup_example(skill_name) for skill_name in SKILLS]
     assert examples[0] == examples[1]
     assert "parent_issue_number: null" in examples[0]
     assert "depends_on: []" in examples[0]
+
+
+def test_followup_example_parses_as_file_reservation() -> None:
+    """The documented fence is what claim reads, not a text illustration."""
+    body = _followup_example("local-ci-developer")
+    parsed = parse_footprint_block(body)
+    assert parsed is not None
+    assert parsed["subtask_id"] == "followup-unique-id"
+    assert parsed["depends_on"] == []
+    assert parsed["parent_issue_number"] is None
+    assert parsed["footprint"] == ["path/to/affected-file.py"]
+    issue = IssueRecord(
+        number=1697,
+        title="Follow-up example",
+        body=body,
+        labels=(),
+        created_at="2026-11-06T00:00:00Z",
+    )
+    task = parse_task_from_issue(issue)
+    assert task.yaml_error is False
+    assert task.footprint_error is None
+    assert task.subtask_id == "followup-unique-id"
+    assert task.parent_number is None
+    assert task.depends_on == ()
+    assert task.footprint == ("path/to/affected-file.py",)
+    assert _resolve_reservation_kind(issue) == ReservationKind.FOOTPRINT
 
 
 def _clean_probe(*_args: object, **_kwargs: object) -> MergeProbeResult:

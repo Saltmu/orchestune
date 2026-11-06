@@ -63,7 +63,7 @@ The MCP client, not the offline CLI, posts one combined normal PR comment (`issu
 The judged round r is the final round when r >= `MAX_REVIEW_ROUNDS` (5): no further trigger is possible (Exit 12 beyond it; `--max-rounds` 1-5 can only lower the limit, never raise it to avoid this). At the final round, freeze the PR at the reviewed HEAD: do not commit or push, and do not fix adopted findings, so the done gate's HEAD check still passes. Review target round r is preserved (e.g. Round 5/5 with `round: 5`).
 1. File one independent follow-up Issue for every final-round row still open (`judgment: adopt` not fixed, `judgment: needs_information`, or `status: unresolved`); one Issue may group rows by footprint overlap. State each finding's source link, basis and fix plan. Give it a new `subtask_id`, a Footprint limited to the remainder, `parent_issue_number: null`, and `depends_on: []`. Do not copy the source parent number, the source `subtask_id`, `owner_kind`, `claim_id`, or `reservation_kind`. Record the link with `blocked-by #<source Issue>` and the source PR or finding URL even when the source has a `subtask_id`. A `depends_on` id names only another task in the same DAG. Do not add a native sub-issue of the source parent EPIC or an entry in that parent's manifest; joining the parent plan is a separate explicit plan change. A queued label does not decide parentage, and automatic dispatch is a separate explicit registration. Minimal Footprint:
 
-```text
+```yaml
 subtask_id: followup-unique-id
 footprint:
   - path/to/affected-file.py
