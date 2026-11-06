@@ -11,8 +11,6 @@ same post-cycle.
 
 from __future__ import annotations
 
-import hashlib
-import logging
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
@@ -21,17 +19,9 @@ from typing import Any, cast
 
 from orchestune.branch_naming import build_task_branch_name
 from orchestune.dispatch.config.model import DispatcherConfig
-from orchestune.dispatch.gc.git import evaluate_worktree_removal
-from orchestune.dispatch.local_semantic_fix import cleanup_semantic_fix_worktree
 from orchestune.dispatch.semantic_review.ack import AckAction, AckAssessment
 from orchestune.dispatch.semantic_review.adapters import (
-    SemanticOperationResult,
     SemanticReviewPreflightResult,
-    dispatch_semantic_fix_agent,
-    escalate_semantic_review_to_human,
-    poll_semantic_operation,
-    trigger_semantic_review_round,
-    validate_semantic_review_preflight,
 )
 from orchestune.dispatch.semantic_review.ci import (
     RemoteHeadFn,
@@ -43,15 +33,22 @@ from orchestune.dispatch.semantic_review.diagnostics import (
     build_review_diagnostics,
     describe_reviewer,
 )
+from orchestune.dispatch.semantic_review.effects import (
+    SemanticReviewEffects,
+    SemanticReviewOperations,
+)
 from orchestune.dispatch.semantic_review.evidence import (
     SemanticReviewEvidence as SemanticReviewEvidence,
 )
 from orchestune.dispatch.semantic_review.evidence import (
     _Attempt,
-    _authored,
     _Review,
-    _state_authors,
     _Stop,
+)
+from orchestune.dispatch.semantic_review.lease import (
+    CLAIM_TTL_SECONDS,
+    SemanticClaimClient,
+    SemanticReviewLease,
 )
 from orchestune.dispatch.semantic_review.postcycle_support import (
     default_worker_id,
@@ -60,7 +57,6 @@ from orchestune.dispatch.semantic_review.postcycle_support import (
 )
 from orchestune.dispatch.semantic_review.triggers import (
     parse_iso,
-    round_trigger,
     round_triggers,
 )
 from orchestune.forge import Forge, ForgeAuthError
@@ -71,22 +67,12 @@ from orchestune.integrator.attempt import (
 from orchestune.integrator.attempt_cleanup import RemoteRefPorts
 from orchestune.integrator.semantic_claim import (
     DETAIL_FIX_NOT_DESCENDANT,
-    ClaimResult,
-    ClaimStatus,
-    PushResult,
     PushStatus,
-    acquire_semantic_claim,
-    delete_attempt_fix_branches,
-    promote_fix_output,
-    release_semantic_claim,
-    renew_semantic_claim,
 )
-from orchestune.issue_notice import latest_notice_body, post_notice_if_changed
 from orchestune.labels import StatusLabel
 from orchestune.review.acquisition import collect_review_state, has_reviewer_activity
-from orchestune.review.markers import build_trigger_body, derive_review_target
+from orchestune.review.markers import derive_review_target
 from orchestune.review.rounds import (
-    ReviewTrigger,
     precise_created_at,
     trigger_comment_ids,
 )
@@ -103,11 +89,8 @@ from orchestune.review.semantic_gate import (
     SemanticTransitionDecision,
     SemanticTransitionObservation,
     evaluate_semantic_review_transition,
-    format_semantic_review_state_marker,
-    restore_latest_semantic_review_state,
     semantic_fix_output_branch,
 )
-from orchestune.review.snapshot import normalize_timestamp
 
 _P = SemanticReviewPhase
 _TARGET_PHASES = ACTIVE_PENDING_PHASES | {_P.ESCALATED}
@@ -115,7 +98,6 @@ _REVIEW_PHASES = frozenset({_P.REVIEW_PENDING, _P.FIX_IN_PROGRESS, _P.CI_VERIFIC
 _UNSETTLED_OPERATIONS = IN_FLIGHT_OPERATION_STATUSES | {
     SemanticOperationStatus.INDETERMINATE
 }
-_CLAIM_TTL_SECONDS = 300
 #: A reviewer that showed no activity after its request (#1436).
 _ACK_REASON = "review_not_acknowledged"
 _SEMANTIC_MARKERS = (
@@ -152,9 +134,6 @@ WARNING_STATUSES = frozenset(
 VerifyCiFn = Callable[[str, str], SemanticCiObservation | None]
 
 
-logger = logging.getLogger(__name__)
-
-
 @dataclass(frozen=True)
 class SemanticReviewCycleReport:
     status: str
@@ -167,29 +146,6 @@ class SemanticReviewCycleReport:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
-
-
-@dataclass(frozen=True)
-class SemanticReviewOperations:
-    """The #1361 operation adapters (replaceable for tests)."""
-
-    preflight: Callable[..., Any] = validate_semantic_review_preflight
-    trigger: Callable[..., SemanticOperationResult] = trigger_semantic_review_round
-    dispatch_fix: Callable[..., SemanticOperationResult] = dispatch_semantic_fix_agent
-    poll: Callable[..., SemanticOperationResult] = poll_semantic_operation
-    escalate: Callable[..., None] = escalate_semantic_review_to_human
-    cleanup_fix_worktree: Callable[..., bool] = cleanup_semantic_fix_worktree
-
-
-@dataclass(frozen=True)
-class SemanticClaimClient:
-    """The #1370 claim API (replaceable for tests)."""
-
-    acquire: Callable[..., ClaimResult] = acquire_semantic_claim
-    renew: Callable[..., PushResult] = renew_semantic_claim
-    release: Callable[..., PushResult] = release_semantic_claim
-    promote: Callable[..., PushResult] = promote_fix_output
-    delete_fix_branches: Callable[[str | Path, str], None] = delete_attempt_fix_branches
 
 
 @dataclass(frozen=True)
@@ -227,12 +183,6 @@ def _is_target(attempt: OpenAttempt) -> bool:
     if attempt.state_error is not None:
         return True
     return attempt.state is not None and attempt.state.phase in _TARGET_PHASES
-
-
-def _escalation_notice_kind(attempt_id: str, reason: str) -> str:
-    """The notice kind `escalate_semantic_review_to_human` posts for one reason."""
-    key = hashlib.sha256(f"{attempt_id}:{reason}".encode()).hexdigest()[:16]
-    return f"semantic-review:{attempt_id}:{key}"
 
 
 def _has_semantic_marker(body: object) -> bool:
@@ -297,6 +247,23 @@ class SemanticReviewCycleRunner:
             lambda name: remote_branch_sha(repository_root, name)
         )
         self._mode = SemanticReviewMode(config.semantic_review_mode)
+        self._lease = SemanticReviewLease(
+            forge=self._forge,
+            repository_root=self._root,
+            claims=self._claims,
+            worker_id=self._worker,
+            clock=self._clock,
+        )
+        self._effects = SemanticReviewEffects(
+            forge=self._forge,
+            repository_root=self._root,
+            config=self._config,
+            operations=self._ops,
+            evidence=self._evidence,
+            lease=self._lease,
+            reviewer=self._reviewer,
+            stamp=lambda: self._stamp,
+        )
 
     @property
     def _stamp(self) -> str:
@@ -479,22 +446,12 @@ class SemanticReviewCycleRunner:
             SemanticOperationStatus.COMPLETED,
             SemanticOperationStatus.FAILED,
         ):
-            self._cleanup_fix_worktree(state.operation_id, state.provider_handle)
+            self._effects.cleanup_fix_worktree(
+                state.operation_id, state.provider_handle
+            )
         return SemanticOperationObservation(
             state.operation_id, result.status, output, result.input_sha
         )
-
-    def _cleanup_fix_worktree(self, op: str | None, handle: str | None = None) -> None:
-        if not op:
-            return
-        wt = (
-            Path(self._root) / self._config.worktree_root / f"semantic-fix-{op}"
-        ).resolve()
-        if wt.exists():
-            pid = int(handle) if handle and handle.isdigit() else None
-            self._ops.cleanup_fix_worktree(
-                wt, repo_root=self._root, evaluate_fn=evaluate_worktree_removal, pid=pid
-            )
 
     # -- decision -----------------------------------------------------------
 
@@ -575,8 +532,9 @@ class SemanticReviewCycleRunner:
             return True
         if decision.reason == "ci_pending" and ctx.state.phase == _P.CI_VERIFICATION:
             return True
-        return ctx.state.phase == _P.ESCALATED and not self._escalation_recorded(
-            ctx.state
+        return (
+            ctx.state.phase == _P.ESCALATED
+            and not self._effects.escalation_recorded(ctx.state)
         )
 
     def _carry_out(
@@ -592,13 +550,13 @@ class SemanticReviewCycleRunner:
             return self._report(
                 ctx, "planned", decision.next_state, reason=decision.reason
             )
-        self._acquire(ctx)
+        self._lease.acquire(ctx)
         try:
-            self._require_unchanged(ctx)
+            self._lease.require_unchanged(ctx)
             decision = self._claimed_observations(ctx, decision)
             final = self._apply(ctx, decision)
         finally:
-            self._release(ctx)
+            self._lease.release(ctx)
         return self._report(ctx, "advanced", final, reason=decision.reason)
 
     def _repeat_request(self, ctx: _Attempt) -> SemanticReviewCycleReport:
@@ -606,74 +564,20 @@ class SemanticReviewCycleRunner:
         reason = "review_request_retried"
         if not self._config.apply:
             return self._report(ctx, "planned", ctx.state, reason=reason)
-        self._acquire(ctx)
+        self._lease.acquire(ctx)
         try:
-            self._require_unchanged(ctx)
-            self._revalidate(ctx)
+            self._lease.require_unchanged(ctx)
+            self._lease.revalidate(ctx)
             ctx.comments = self._forge.list_all_issue_comments(ctx.pr.pr_number)
             ctx.review = self._acquire_review(ctx)  # a late answer cancels the retry
             if self._diagnose(ctx, ctx.state, ctx.review)[1].action != AckAction.RETRY:
                 return self._report(ctx, "held", ctx.state, reason="retry_not_due")
             self._forge.create_issue_comment(
-                ctx.pr.pr_number, self._trigger_body(ctx, ctx.state)
+                ctx.pr.pr_number, self._effects.trigger_body(ctx, ctx.state)
             )
         finally:
-            self._release(ctx)
+            self._lease.release(ctx)
         return self._report(ctx, "advanced", ctx.state, reason=reason)
-
-    def _acquire(self, ctx: _Attempt) -> None:
-        result = self._claims.acquire(
-            self._root,
-            parent_issue_number=ctx.state.parent_issue_number,
-            attempt_id=ctx.state.attempt_id,
-            holder=self._worker,
-            now=self._clock(),
-            ttl_seconds=_CLAIM_TTL_SECONDS,
-        )
-        if result.status is ClaimStatus.HELD_BY_OTHER:
-            holder = result.claim.holder if result.claim else None
-            raise _Stop("claimed_by_other", holder=holder)
-        if result.status is not ClaimStatus.ACQUIRED or result.claim is None:
-            raise _Stop("claim_unknown", detail=result.detail)
-        ctx.claim = result.claim
-
-    def _require_unchanged(self, ctx: _Attempt) -> None:
-        """Another worker may have saved between our read and our claim: then
-        this decision is stale and saving it would fork the state revision."""
-        comments = self._forge.list_all_issue_comments(ctx.pr.pr_number)
-        trusted = _state_authors(ctx.trust)
-        try:
-            latest = restore_latest_semantic_review_state(
-                [
-                    body
-                    for body, _ in _authored(comments, ctx.trust, trusted.__contains__)
-                ]
-            )
-        except ValueError as error:
-            raise _Stop("state_unreadable", error=str(error)) from error
-        if latest != ctx.state:
-            raise _Stop("state_changed")
-
-    def _revalidate(self, ctx: _Attempt, ttl: float = _CLAIM_TTL_SECONDS) -> None:
-        """Renew (and so re-prove) ownership right before an external write."""
-        assert ctx.claim is not None
-        result = self._claims.renew(
-            self._root, ctx.claim, now=self._clock(), ttl_seconds=ttl
-        )
-        if result.status is not PushStatus.PUSHED or result.claim is None:
-            ctx.claim = None
-            raise _Stop("claim_lost", detail=result.detail)
-        ctx.claim = result.claim
-
-    def _release(self, ctx: _Attempt) -> None:
-        if ctx.claim is None:
-            return
-        try:
-            self._claims.release(self._root, ctx.claim, now=self._clock())
-        except Exception as error:  # noqa: BLE001 - unreleased claim only expires later
-            logger.warning("swallowed broad exception: %s", error)
-            pass
-        ctx.claim = None
 
     def _claimed_observations(
         self, ctx: _Attempt, decision: SemanticTransitionDecision
@@ -684,8 +588,8 @@ class SemanticReviewCycleRunner:
             return self._promote(ctx, decision)
         if decision.reason != "ci_pending" or state.phase != _P.CI_VERIFICATION:
             return decision
-        self._revalidate(
-            ctx, self._config.semantic_ci_timeout_seconds + _CLAIM_TTL_SECONDS
+        self._lease.revalidate(
+            ctx, self._config.semantic_ci_timeout_seconds + CLAIM_TTL_SECONDS
         )
         ci = self._verify_ci(ctx.pr.temp_branch, state.head_sha)
         if ci is None:
@@ -702,19 +606,13 @@ class SemanticReviewCycleRunner:
     ) -> SemanticTransitionDecision:
         state = ctx.state
         assert ctx.claim is not None and state.operation_id is not None
-        result = self._claims.promote(
-            self._root,
-            ctx.claim,
-            temp_branch=ctx.pr.temp_branch,
-            expected_head_sha=str(state.fix_input_sha),
-            fix_branch=semantic_fix_output_branch(state.operation_id),
-            now=self._clock(),
+        result = self._lease.promote_fix_output(
+            ctx, fix_branch=semantic_fix_output_branch(state.operation_id)
         )
         if result.status is not PushStatus.PUSHED or result.claim is None:
             if result.detail == DETAIL_FIX_NOT_DESCENDANT:
                 return _escalated(state, "fix_output_not_descendant", self._stamp)
             raise _Stop("promotion_failed", detail=result.detail)
-        ctx.claim = result.claim
         assert ctx.obs is not None and ctx.obs.operation is not None
         promoted = str(ctx.obs.operation.output_sha)
         moved = evaluate_semantic_review_transition(
@@ -729,37 +627,23 @@ class SemanticReviewCycleRunner:
     ) -> SemanticReviewStateV1:
         nxt = decision.next_state
         if decision.requires_review_trigger:
-            self._post_trigger(ctx, nxt)
+            self._effects.post_trigger(ctx, nxt)
         if nxt.phase == _P.INVALIDATED:
-            self._revalidate(ctx)
+            self._lease.revalidate(ctx)
             self._claims.delete_fix_branches(self._root, nxt.attempt_id)
-            self._cleanup_fix_worktree(nxt.operation_id, nxt.provider_handle)
+            self._effects.cleanup_fix_worktree(nxt.operation_id, nxt.provider_handle)
         if nxt != ctx.state:
-            nxt = self._save(ctx, nxt)
+            nxt = self._effects.save(ctx, nxt)
         if decision.requires_fix_dispatch:
-            nxt = self._dispatch_fix(ctx, nxt)
+            nxt = self._effects.dispatch_fix(ctx, nxt)
         if nxt.phase == _P.SKIPPED_BY_HUMAN and ctx.state.phase != nxt.phase:
-            self._note_skip(ctx, nxt, decision.reason)
-        if nxt.phase == _P.ESCALATED and not self._escalation_recorded(nxt):
-            self._revalidate(ctx)
-            self._escalate(ctx, nxt)
+            self._effects.note_skip(ctx, nxt, decision.reason)
+        if nxt.phase == _P.ESCALATED and not self._effects.escalation_recorded(nxt):
+            self._lease.revalidate(ctx)
+            reason = nxt.escalation_reason or "escalated"
+            guidance = self._ack_guidance(ctx, nxt) if reason == _ACK_REASON else ""
+            self._effects.escalate(ctx, nxt, guidance)
         return nxt
-
-    def _save(
-        self, ctx: _Attempt, state: SemanticReviewStateV1
-    ) -> SemanticReviewStateV1:
-        self._revalidate(ctx)
-        assert ctx.claim is not None
-        stored = replace(
-            state,
-            claim_holder=ctx.claim.holder,
-            claim_generation=ctx.claim.generation,
-            claim_expires_at=ctx.claim.expires_at.isoformat(),
-        )
-        self._forge.add_comment(
-            ctx.pr.pr_number, format_semantic_review_state_marker(stored)
-        )
-        return stored
 
     def _reviewer(self) -> str:
         """The reviewer Preflight resolved (same setting and dispatch target)."""
@@ -774,142 +658,12 @@ class SemanticReviewCycleRunner:
             raise _Stop("reviewer_unresolved")
         return resolution.reviewer
 
-    def _trigger_body(self, ctx: _Attempt, nxt: SemanticReviewStateV1) -> str:
-        reviewer = self._reviewer()
-        reply = self._evidence.safe_reply(ctx, nxt, reviewer)
-        return build_trigger_body(reply, reviewer, nxt.round, nxt.head_sha)
-
-    def _resumed_trigger(
-        self, ctx: _Attempt, nxt: SemanticReviewStateV1, triggers: list[ReviewTrigger]
-    ) -> bool:
-        """An explicit retry of the escalated round asks the reviewer again.
-
-        Requests from before the escalation are no answer to it; one posted
-        after the escalation was saved is this resume's own (interrupted run).
-        """
-        since = normalize_timestamp(ctx.state.updated_at)
-        if ctx.state.phase != _P.ESCALATED or nxt.round != ctx.state.round or not since:
-            return False
-        if not any(
-            t.created_at >= since for t in round_triggers(triggers, nxt, fresh=True)
-        ):
-            self._revalidate(ctx)
-            self._forge.create_issue_comment(
-                ctx.pr.pr_number, self._trigger_body(ctx, nxt)
-            )
-        return True
-
-    def _post_trigger(self, ctx: _Attempt, nxt: SemanticReviewStateV1) -> None:
-        reviewer = self._reviewer()
-        reply = self._evidence.safe_reply(ctx, nxt, reviewer)
-        triggers = self._evidence.trusted_triggers(ctx)
-        if self._resumed_trigger(ctx, nxt, triggers):
-            return
-        if round_trigger(triggers, nxt, fresh=True) is not None:
-            return  # posted by an earlier, interrupted run of this transition
-        self._revalidate(ctx)
-        if round_trigger(triggers, nxt, fresh=False) is not None:
-            # A reset round repeats an old (round, head) request, which the
-            # adapter would take as already posted: request a new review.
-            self._forge.create_issue_comment(
-                ctx.pr.pr_number,
-                build_trigger_body(reply, reviewer, nxt.round, nxt.head_sha),
-            )
-            return
-        result = self._ops.trigger(
-            self._forge,
-            pr_number=ctx.pr.pr_number,
-            attempt_id=nxt.attempt_id,
-            round_number=nxt.round,
-            head_sha=nxt.head_sha,
-            reviewer=reviewer,
-            reply_body=reply,
-        )
-        if result.status is SemanticOperationStatus.INDETERMINATE:
-            raise _Stop("trigger_indeterminate", error=result.error_code)
-
-    def _dispatch_fix(
-        self, ctx: _Attempt, reserved: SemanticReviewStateV1
-    ) -> SemanticReviewStateV1:
-        """Launch the reserved job once; an unknown launch is never relaunched."""
-        assert reserved.operation_id is not None
-        self._revalidate(ctx)
-        result = self._ops.dispatch_fix(
-            self._config.dispatch_target,
-            pr_number=ctx.pr.pr_number,
-            attempt_id=reserved.attempt_id,
-            operation_id=reserved.operation_id,
-            temp_branch=ctx.pr.temp_branch,
-            expected_head_sha=reserved.head_sha,
-            round_number=reserved.round,
-            worktree_root=(self._root / self._config.worktree_root).resolve(),
-            repo_root=self._root,
-        )
-        launched = replace(
-            reserved,
-            operation_status=result.status,
-            provider_handle=result.provider_handle,
-            state_revision=reserved.state_revision + 1,
-            updated_at=self._stamp,
-        )
-        return self._save(ctx, launched)
-
-    def _escalation_recorded(self, state: SemanticReviewStateV1) -> bool:
-        """Notice posted and the parent still blocked, else the (idempotent)
-        escalation is redone; an unreadable answer counts as recorded, since a
-        repeated escalation comments again."""
-        reason = state.escalation_reason or "escalated"
-        kind = _escalation_notice_kind(state.attempt_id, reason)
-        parent = state.parent_issue_number
-        try:
-            if latest_notice_body(self._forge.list_comments(parent), kind) is None:
-                return False
-            labels = self._forge.get_issue_labels(parent)
-        except Exception:  # noqa: BLE001 - boundary: an unreadable escalation record counts as already recorded
-            return True
-        return StatusLabel.BLOCKED_HUMAN_REVIEW.value in labels
-
-    def _escalate(self, ctx: _Attempt, state: SemanticReviewStateV1) -> None:
-        reason = state.escalation_reason or "escalated"
-        source = state.escalated_from.value if state.escalated_from else "unknown"
-        guidance = self._ack_guidance(ctx, state) if reason == _ACK_REASON else ""
-        self._ops.escalate(
-            self._forge,
-            parent_issue_number=state.parent_issue_number,
-            pr_number=ctx.pr.pr_number,
-            attempt_id=state.attempt_id,
-            reason=reason,
-            details=(
-                f"stopped at `{source}` (round {state.round}, head `{state.head_sha}`); "
-                "the head is kept. Resume with a semantic-review-retry marker or skip "
-                "with a semantic-review-override marker bound to this head."
-                f"{guidance}"
-            ),
-        )
-
     def _ack_guidance(self, ctx: _Attempt, state: SemanticReviewStateV1) -> str:
         """Facts and next steps of an unanswered request (#1436)."""
         review = ctx.review
         if not review.requests:  # recorded earlier: look at the PR again
             review = self._acquire_review(replace(ctx, state=state))
         return "\n\n" + self._diagnose(ctx, state, review)[0].guidance()
-
-    def _note_skip(
-        self, ctx: _Attempt, state: SemanticReviewStateV1, reason: str
-    ) -> None:
-        override = ctx.override if reason == "human_override" else None
-        by = f" by @{override.actor}: {override.reason}" if override else ""
-        body = (
-            "## Layer-2 semantic review skipped\n\n"
-            f"- Attempt: `{state.attempt_id}`\n- Head: `{state.head_sha}`\n"
-            f"- Reason: `{reason}`{by}"
-        )
-        post_notice_if_changed(
-            self._forge,
-            ctx.pr.pr_number,
-            f"semantic-review-skip:{state.attempt_id}",
-            body,
-        )
 
     def _report(
         self,

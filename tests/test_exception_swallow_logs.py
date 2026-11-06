@@ -43,7 +43,7 @@ from orchestune.dispatch.reconciliation import (
 from orchestune.dispatch.recovery.restoration import _parse_claim_info_from_issue
 from orchestune.dispatch.reporting.progress_output import RichDispatchProgress
 from orchestune.dispatch.runtime_reader import provider_config
-from orchestune.dispatch.semantic_review.postcycle import SemanticReviewCycleRunner
+from orchestune.dispatch.semantic_review.lease import SemanticReviewLease
 from orchestune.dispatch.status_repair import reconcile_status_repair_intents
 from orchestune.dispatch.timings import TimingProgress, timing_snapshot
 from orchestune.dispatch.worktree import (
@@ -320,15 +320,18 @@ def test_parser_failure_is_logged(
 
 
 def test_claim_release_failure_is_logged(caplog: pytest.LogCaptureFixture) -> None:
-    runner = SemanticReviewCycleRunner.__new__(SemanticReviewCycleRunner)
-    runner._claims = SimpleNamespace(  # type: ignore[assignment]
-        release=Mock(side_effect=RuntimeError("release"))
+    lease = SemanticReviewLease(
+        forge=SimpleNamespace(),  # type: ignore[arg-type]
+        repository_root=Path("."),
+        claims=SimpleNamespace(  # type: ignore[arg-type]
+            release=Mock(side_effect=RuntimeError("release"))
+        ),
+        worker_id="w1",
+        clock=lambda: datetime.now(UTC),
     )
-    runner._root = Path(".")
-    runner._clock = lambda: datetime.now(UTC)  # type: ignore[method-assign]
     ctx = SimpleNamespace(claim=object())
     with caplog.at_level(logging.WARNING):
-        runner._release(ctx)  # type: ignore[arg-type]
+        lease.release(ctx)  # type: ignore[arg-type]
     assert ctx.claim is None
     assert MARK in _logged(caplog)
 
@@ -468,7 +471,7 @@ def test_cleanup_comments_and_noqa_reasons_name_the_boundary() -> None:
     cleanup = (root / "orchestune/dispatch/semantic_review/cleanup.py").read_text(
         encoding="utf-8"
     )
-    postcycle = (root / "orchestune/dispatch/semantic_review/postcycle.py").read_text(
+    effects = (root / "orchestune/dispatch/semantic_review/effects.py").read_text(
         encoding="utf-8"
     )
     forge = (root / "tests/test_forge.py").read_text(encoding="utf-8")
@@ -481,7 +484,7 @@ def test_cleanup_comments_and_noqa_reasons_name_the_boundary() -> None:
     assert "boundary: an unknown poll result is not settled" in cleanup
     assert (
         "boundary: an unreadable escalation record counts as already recorded"
-        in postcycle
+        in effects
     )
     assert "boundary: prove the scoped timeout is not swallowed" in forge
     assert "boundary: prove the scoped timeout is not swallowed" in managed
