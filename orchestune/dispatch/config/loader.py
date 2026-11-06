@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shutil
 import subprocess
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -384,6 +385,7 @@ def _resolve_and_build_target(
     codex_cloud_env: str | None,
     execution_profile_config: ExecutionProfileConfig,
     build_target_fn: Callable[[TargetBuildConfig], object] | None = None,
+    installed_review_vendors: frozenset[str] | None = None,
 ) -> DispatchTarget | None:
     if build_target_fn is None:
         build_target_fn = build_dispatch_target
@@ -408,6 +410,7 @@ def _resolve_and_build_target(
                     ReviewerBotSetting, toml_data.get("reviewer_bot", "auto")
                 ),
                 reviewer_by_target=extract_reviewer_by_target(toml_data),
+                installed_review_vendors=installed_review_vendors,
             )
         ),
     )
@@ -592,6 +595,9 @@ def load_and_resolve_config(
     routine_id, routine_token, codex_cloud_env = _resolve_cloud_settings(toml_data)
     exec_profile_cfg = extract_execution_profile_config(toml_data)
 
+    installed_review_vendors = frozenset(
+        name for name in ("claude", "codex") if shutil.which(name)
+    )
     dispatch_target = _resolve_and_build_target(
         args,
         toml_data,
@@ -601,6 +607,7 @@ def load_and_resolve_config(
         codex_cloud_env,
         exec_profile_cfg,
         build_target_fn=build_target_fn,
+        installed_review_vendors=installed_review_vendors,
     )
     config = _assemble_dispatcher_config(
         args,
@@ -611,6 +618,7 @@ def load_and_resolve_config(
         exec_profile_cfg,
         forge=forge,
     )
+    config.installed_review_vendors = installed_review_vendors
     _resolve_report_override(config, target_cwd)
     return config
 

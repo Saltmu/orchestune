@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, NoReturn
 
-from orchestune.claim.workspace import resolve_claim_workspace
+from orchestune.claim.workspace import resolve_checkout_roots, resolve_claim_workspace
 from orchestune.config_contracts import ConfigError
 from orchestune.dispatch import pre_scheduling_integration
 from orchestune.dispatch.config.loader import (
@@ -57,6 +57,7 @@ from orchestune.dispatch.targets import (
     build_dispatch_target as build_dispatch_target,  # compatibility patch surface
 )
 from orchestune.forge import ForgeAuthError
+from orchestune.infra.process_utils import platform_ci_script_relative
 from orchestune.infra.repository_config import find_and_load_config_file
 
 _build_arg_parser = build_arg_parser
@@ -383,6 +384,13 @@ def _main_with_sink(
         _config_error(parser, str(e))
 
     sink.parent_issue = config.parent_issue_number
+    if config.apply and config.ci_command is None:
+        _, checkout = resolve_checkout_roots(cwd or Path.cwd())
+        if not (checkout / platform_ci_script_relative()).is_file():
+            _config_error(
+                parser,
+                'Set ci-command = "pytest" in orchestune.toml or [tool.orchestune] in pyproject.toml; the default CI script is missing. There is no --ci-command CLI option.',
+            )
     sink.apply = config.apply
     sink.emit("configuration", "completed")
     config.progress = sink

@@ -567,6 +567,11 @@ class TestDispatcherConfigLoading:
         assert mock_build.call_args.args[0].dispatch_target_name == dispatch_target
 
     def test_post_cycle_failures_in_main(self, tmp_path, capsys, fake_forge):
+        from orchestune.infra.process_utils import platform_ci_script_relative
+
+        script = tmp_path / platform_ci_script_relative()
+        script.parent.mkdir(exist_ok=True)
+        script.touch()
         r1 = PhaseResult("poll_pending_not_needed_reviews", PhaseStatus.SUCCESS)
         r2 = PhaseResult("run_semantic_integrator", PhaseStatus.SUCCESS)
         r2_retryable = PhaseResult(
@@ -769,6 +774,11 @@ class TestDispatcherConfigLoading:
                 assert "main-auth-failed" in res["error_message"]
 
     def test_post_event_log_comment_is_called_for_parent_issue(self, tmp_path):
+        from orchestune.infra.process_utils import platform_ci_script_relative
+
+        script = tmp_path / platform_ci_script_relative()
+        script.parent.mkdir(exist_ok=True)
+        script.touch()
         with (
             patch(
                 "orchestune.dispatch.dispatcher.run_dispatch_cycle",
@@ -809,6 +819,11 @@ class TestDispatcherConfigLoading:
         mock_post.assert_called_once()
 
     def test_post_event_log_comment_receives_cycle_report(self, tmp_path):
+        from orchestune.infra.process_utils import platform_ci_script_relative
+
+        script = tmp_path / platform_ci_script_relative()
+        script.parent.mkdir(exist_ok=True)
+        script.touch()
         """#396: `run_dispatch_cycle`が返した`CycleReport`が、そのまま
         `_post_event_log_comment`へ渡されること。"""
         cycle_report = self._empty_report()
@@ -860,6 +875,11 @@ class TestDispatcherConfigLoading:
         assert mock_post.call_args.args[1] is cycle_report
 
     def test_post_finding_notices_receives_cycle_report(self, tmp_path):
+        from orchestune.infra.process_utils import platform_ci_script_relative
+
+        script = tmp_path / platform_ci_script_relative()
+        script.parent.mkdir(exist_ok=True)
+        script.touch()
         """#790: `run_dispatch_cycle`が返した`CycleReport`が、そのまま
         `_post_finding_notices`へ渡されること。"""
         cycle_report = self._empty_report()

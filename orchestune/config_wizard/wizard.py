@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import os
+import shlex
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from orchestune.config_wizard.ci_candidates import suggest_ci_commands
 from orchestune.config_wizard.document import ConfigDocument
 from orchestune.config_wizard.questions import (
     ADVANCED_CATEGORIES,
@@ -21,6 +25,15 @@ from orchestune.config_wizard.validation import (
     diagnose_existing_document,
     validate_candidate_document,
 )
+from orchestune.dispatch.reviewer import (
+    resolve_reviewer_bot,
+    reviewer_for_installed_vendors,
+)
+from orchestune.dispatch.targets import (
+    detect_installed_local_cli,
+    resolve_default_dispatch_target_name,
+)
+from orchestune.infra.process_utils import platform_ci_script_relative
 
 
 class PromptPort:
@@ -109,10 +122,45 @@ def _ask_single_question(q: QuestionSpec, current_val: Any, prompt: PromptPort) 
     return current_val
 
 
+def _reviewer_suggestion(doc: ConfigDocument, prompt: PromptPort) -> str | None:
+    target = doc.get_value("dispatch-target")
+    if target is None:
+        target = resolve_default_dispatch_target_name(os.environ)
+    if target == "auto":
+        cli = detect_installed_local_cli(which_fn=shutil.which)
+        target = f"{cli}-cli" if cli else "local"
+    installed = frozenset(name for name in ("claude", "codex") if shutil.which(name))
+    overrides = doc.get_value("reviewer_by_target") or {}
+    reviewer = reviewer_for_installed_vendors("auto", target, overrides, installed)
+    if reviewer != resolve_reviewer_bot("auto", target, overrides):
+        prompt.display_message(
+            f"PATH 上のレビュー用 CLI は {reviewer} のみのため、auto は {reviewer} を選びます。"
+        )
+        return reviewer
+    return None
+
+
 def _run_basic_questions(doc: ConfigDocument, prompt: PromptPort) -> None:
     for q in BASIC_QUESTIONS:
         curr = doc.get_value(q.key)
-        new_val = _ask_single_question(q, curr, prompt)
+        suggested = curr
+        if q.key == "ci-command":
+            if isinstance(curr, list):
+                suggested = shlex.join(curr)
+            candidates = suggest_ci_commands(doc.target_path.parent)
+            if curr is None and candidates:
+                suggested = candidates[0]
+            if not (doc.target_path.parent / platform_ci_script_relative()).is_file():
+                prompt.display_message(
+                    "ci-command が空のままだと、apply の dispatch は終了コード 2 で停止します。"
+                )
+        if q.key == "reviewer-bot":
+            reviewer = _reviewer_suggestion(doc, prompt)
+            if curr is None:
+                suggested = reviewer
+        new_val = _ask_single_question(q, suggested, prompt)
+        if q.key == "ci-command" and isinstance(curr, list) and new_val == suggested:
+            new_val = curr
         if new_val is not None:
             doc.set_value(q.key, new_val)
         elif curr is not None and new_val is None and q.allow_unset:

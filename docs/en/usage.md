@@ -504,8 +504,8 @@ Check each target's resolved values with a dry-run dispatch, for example `orches
 
 | Setting Key | Default | Description |
 | :--- | :--- | :--- |
-| `reviewer-bot` | `"auto"` | Reviewer requested after implementation (`"auto"`, `"claude"`, `"codex"`). `auto` evaluates target type and maps Claude targets to Codex, and Codex/agy/Grok targets to Claude. Override the mapping per target with `[reviewer_by_target]` (below); an explicit `"claude"`/`"codex"` always wins. |
-| `ci-command` | `"./scripts/local-ci.sh"` | The CI command the Integrator runs on the integration branch (a shell-like string parsed with shlex or string list, e.g. `"make ci"`). Set this explicitly if your repository's CI entrypoint differs. |
+| `reviewer-bot` | `"auto"` | Reviewer requested after implementation (`"auto"`, `"claude"`, `"codex"`). `auto` uses the sole review CLI on PATH when exactly one is installed; otherwise it maps Claude targets to Codex, and Codex/agy/Grok targets to Claude. Override the mapping per target with `[reviewer_by_target]` (below); an explicit `"claude"`/`"codex"` always wins. |
+| `ci-command` | `"./scripts/local-ci.sh"` | The CI command the Integrator runs on the integration branch (a shell-like string parsed with shlex or string list, e.g. `"make ci"`). Set this explicitly when the platform default script is absent; apply dispatch otherwise exits with code 2 before reserving reports. |
 | `child-review-gate` | `"required"` | Child sub-issue review gate mode (`"required"`, `"off"`). Verifies review evidence (`verdict=pass`, SHA match) before merging to parent branch. `"off"` skips verification with a warning. |
 | `final-acceptance-review` | `"advisory"` | One request per final PR/head, posted after that head's CI has finished; `"off"` disables it. CLI > TOML > `ORCHESTUNE_FINAL_ACCEPTANCE_REVIEW` > default. |
 | `semantic-review-mode` | `"required"` | Layer-2 integration-PR semantic review mode (`"required"`, `"advisory"`, `"off"`). Default is `"required"`. |
@@ -690,6 +690,8 @@ reasoning_effort = "high"
 
 #### Reviewer per target (`[reviewer_by_target]`)
 
+When exactly one of `claude` and `codex` is on PATH, unoverridden `auto` uses that reviewer for both child tasks and semantic review, and reports the change. With both or neither installed, cross-vendor defaults remain. Explicit providers and target overrides win independently; `local` without an override stays unresolved. The required child and semantic gates do not change. Local CLI detection does not prove the GitHub review workflow exists. `config init` suggests the sole vendor only when reviewer-bot is unset; existing values remain the defaults.
+
 The "execution target → reviewer" mapping used by `reviewer-bot = "auto"` and `semantic-review-provider = "auto"` can be overridden with `[reviewer_by_target]`.
 
 ```toml
@@ -803,7 +805,7 @@ Orchestune uses a two-tier review gate architecture for integrating child tasks 
 
 #### Unresponsive Layer-2 reviewers (#1436)
 
-- **Which reviewer is asked**: `semantic-review-provider = "claude"` or `"codex"` names it explicitly. With `"auto"` it follows the dispatch target across vendors (`claude-cli` and `cloud-routine` → `codex`; `codex-cli`, `codex-cloud`, `agy-cli` and `grok-cli` → `claude`; a generic `local` target cannot be resolved unless `[reviewer_by_target]` lists it). The same `[reviewer_by_target]` overrides apply as for `reviewer-bot = "auto"`. An `issue_comment` workflow always runs from the **default branch**, so a reviewer whose workflow or App is not enabled there never answers.
+- **Which reviewer is asked**: `semantic-review-provider = "claude"` or `"codex"` names it explicitly. With `"auto"` it uses the sole review CLI on PATH when exactly one is installed; otherwise it follows the dispatch target across vendors (`claude-cli` and `cloud-routine` → `codex`; `codex-cli`, `codex-cloud`, `agy-cli` and `grok-cli` → `claude`; a generic `local` target cannot be resolved unless `[reviewer_by_target]` lists it). The same `[reviewer_by_target]` overrides apply as for `reviewer-bot = "auto"`. An `issue_comment` workflow always runs from the **default branch**, so a reviewer whose workflow or App is not enabled there never answers.
 - **Early stop**: when the reviewer shows no activity for `semantic-review-ack-timeout-seconds` after the request, the attempt stops as `review_not_acknowledged` instead of waiting for `semantic-review-timeout-seconds`. The notice on the PR and the parent Issue names the attempt, head, round, reviewer and how it was chosen, the request comment, the elapsed time and the deadlines, and the commands to resume. It is posted once per attempt and reason.
 - **`orchestune review`** (`--pr` is an integration PR):
   - `orchestune review status --pr <PR> [--json]` is read-only and shows the same facts at any time.

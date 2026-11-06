@@ -12,6 +12,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from orchestune.config_schema import (
+    VALID_FINAL_ACCEPTANCE_REVIEW_MODES as VALID_FINAL_ACCEPTANCE_REVIEW_MODES,
+)
 from orchestune.consistency.invariants.status import (
     BLOCKED_WITH_RESOLVED_DEPENDENCIES,
     PRIMARY_STATUS_CONFLICT,
@@ -56,7 +59,6 @@ from orchestune.review.semantic_gate import (
 from orchestune.targets.contracts import ReviewerBot
 
 VALID_SEMANTIC_REVIEW_PROVIDERS = frozenset({"auto", "claude", "codex"})
-VALID_FINAL_ACCEPTANCE_REVIEW_MODES = frozenset({"advisory", "off"})
 VALID_SEMANTIC_FIX_PROVIDERS = frozenset(
     {
         "auto",
@@ -213,6 +215,8 @@ class DispatcherConfig:
     consistency_mode: ConsistencyMode = ConsistencyMode.OFF
     consistency_repair_allowlist: frozenset[str] = frozenset()
     consistency_max_repair_passes: int = 1
+
+    installed_review_vendors: frozenset[str] | None = None
 
     def __post_init__(self) -> None:
         if (

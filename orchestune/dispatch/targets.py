@@ -25,6 +25,7 @@ from orchestune.dispatch.reviewer import (
     ReviewerBot,
     ReviewerBotSetting,
     resolve_reviewer_bot,
+    reviewer_for_installed_vendors,
 )
 from orchestune.forge import Forge
 from orchestune.infra.detached_process import (
@@ -145,14 +146,17 @@ GROK_CLI_LOCAL_CMD_TEMPLATE = _default_local_cmd_template(
 LOCAL_CLI_CANDIDATES: tuple[str, ...] = ("claude", "agy", "codex", "grok")
 
 
-def detect_installed_local_cli() -> str | None:
+def detect_installed_local_cli(
+    *, which_fn: Callable[[str], str | None] | None = None
+) -> str | None:
     """PATH上にインストールされているローカルCLIを検出する（`auto`モード用）。
 
     `claude`を優先し、無ければ`agy`、`codex`、`grok`の順にフォールバックする。
     いずれも見つからない場合は`None`を返す。
     """
+    which = which_fn if which_fn is not None else shutil.which
     for candidate in LOCAL_CLI_CANDIDATES:
-        if shutil.which(candidate) is not None:
+        if which(candidate) is not None:
             return candidate
     return None
 
@@ -615,6 +619,7 @@ class TargetBuildConfig:
     reviewer_bot: ReviewerBotSetting = "auto"
     # #1560: `[reviewer_by_target]` overrides of the `auto` reviewer.
     reviewer_by_target: Mapping[str, ReviewerBot] = field(default_factory=dict)
+    installed_review_vendors: frozenset[str] | None = None
 
 
 def _unsafe_execution_error(target_name: str, auto_detected: bool) -> ValueError:
@@ -728,21 +733,41 @@ def _warn_unresolved_auto_reviewer(resolved_target_name: str) -> None:
 
 
 def _resolve_local_fallback_reviewer(config: TargetBuildConfig) -> ReviewerBot | None:
-    reviewer_bot = resolve_reviewer_bot(
-        config.reviewer_bot, "local", config.reviewer_by_target
+    reviewer_bot = reviewer_for_installed_vendors(
+        config.reviewer_bot,
+        "local",
+        config.reviewer_by_target,
+        config.installed_review_vendors,
     )
     if reviewer_bot is None and config.local_cmd is not None:
         _warn_unresolved_auto_reviewer("local")
     return reviewer_bot
 
 
-def build_dispatch_target(config: TargetBuildConfig) -> DispatchTarget:
+def _configured_reviewer(
+    config: TargetBuildConfig, target_name: str, *, announce: bool = False
+) -> ReviewerBot | None:
+    reviewer_bot = reviewer_for_installed_vendors(
+        config.reviewer_bot,
+        target_name,
+        config.reviewer_by_target,
+        config.installed_review_vendors,
+    )
+    if announce and reviewer_bot != resolve_reviewer_bot(
+        config.reviewer_bot, target_name, config.reviewer_by_target
+    ):
+        print(
+            f"Reviewer auto selected {reviewer_bot}: only that review CLI is on PATH.",
+            file=sys.stderr,
+        )
+    return reviewer_bot
+
+
+def _build_dispatch_target(config: TargetBuildConfig) -> DispatchTarget:
     target_name = _resolve_target_name(
         config.dispatch_target_name, config.allow_unsafe_agent_execution
     )
-    reviewer_bot = resolve_reviewer_bot(
-        config.reviewer_bot, target_name, config.reviewer_by_target
-    )
+    reviewer_bot = _configured_reviewer(config, target_name)
     auto_dummy_fallback = (
         config.dispatch_target_name == "auto"
         and target_name == "local"
@@ -779,3 +804,9 @@ def build_dispatch_target(config: TargetBuildConfig) -> DispatchTarget:
         reviewer_bot=reviewer_bot,
         target_name="local",
     )
+
+
+def build_dispatch_target(config: TargetBuildConfig) -> DispatchTarget:
+    target = _build_dispatch_target(config)
+    _configured_reviewer(config, target.target_name or "local", announce=True)
+    return target

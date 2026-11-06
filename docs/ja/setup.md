@@ -13,7 +13,7 @@ Orchestuneは「エージェントが標準開発ワークフローに従って�
 2. **(b) 自動マージを任せられる厚さの品質ゲート（CI）が存在すること**
    Orchestuneの子タスクレベルには人間によるレビューゲートが存在しません。CIに加え、子レビュー証跡ゲートが既定の `required` モードで自動ゲートとして働き、親ブランチ更新前に各子のレビュー合格証跡（`verdict=pass`、マージ対象SHAとの一致）を検証します（詳細は[使い方 §4.5](usage.md#45-子レビュー証跡ゲート)および[Architecture & Design](architecture.md)を参照）。ただし、`child-review-gate = "off"` を明示すると証跡検証は省略され、ゲートが有効でもレビュー判断はLLMによるものです。機械的な正しさの担保はCIに依存するため、スモークテスト程度のCIだけでは、自動で統合されるコードの品質を十分に担保できません。
 3. **(c) `ci_command` を自リポジトリのCIエントリーポイントに設定すること**
-   Integratorが統合ブランチ上で実行するCIコマンドの既定値は `./scripts/local-ci.sh`（Orchestune自身のリポジトリ固有の値）です。導入先リポジトリのCIエントリーポイントが異なる場合（例: `make ci`、`npm run ci`）は、`orchestune dispatch --ci-command "..."` または `orchestune.toml`/`pyproject.toml` の `[tool.orchestune]` セクションで `ci_command` を明示的に設定してください。
+   `orchestune.toml` のトップレベル、または `pyproject.toml` の `[tool.orchestune]` に、例えば `ci-command = "make ci"` や `"npm run ci"` を設定してください。CLI の `--ci-command` はありません。未設定の場合、POSIX は `scripts/local-ci.sh`、Windows は `scripts/local-ci.ps1` があるときだけ既定値を使います。無い場合、apply の dispatch はレポート予約やタスク状態変更より前に終了コード 2 で停止します。`--no-apply` は利用できます。`orchestune complete` は primary checkout の設定を読み、タスク worktree で実行し、成功して HEAD・tree が変わらず worktree が clean な場合に証跡を記録します。`config init` はローカルスクリプト、Makefile、package.json、pytest 設定から候補を提示し、候補コマンドは実行しません。
 
 ### 設定ファイルの作成と編集
 
@@ -248,7 +248,9 @@ orchestune dispatch --dispatch-target auto
 
 これは各サブタスクの専用worktree内で `claude -p "..." --permission-mode bypassPermissions` / `agy -p "..." --add-dir . --print-timeout 60m --dangerously-skip-permissions` / `codex exec "..." --dangerously-bypass-approvals-and-sandbox` / `grok -p "..." --always-approve --no-plan --no-auto-update --output-format streaming-json`（非対話・print/execモード）を実行します。いずれのプリセットも、許可プロンプトのバイパスフラグを毎回付与することで無人実行がブロックされないようにしています。
 
-既定では、解決済みの実行ターゲットからベンダークロスレビューの担当も決定します。`claude-cli`と`cloud-routine`はCodex、`codex-cli`・`codex-cloud`・`agy-cli`・`grok-cli`はClaudeへレビューを依頼します。この選択は`--dispatch-target auto`が具体的なターゲットへ解決された後に行われます。設定ファイル（`orchestune.toml`）の `reviewer-bot = "claude"` または `reviewer-bot = "codex"` で、全ターゲットのレビュアーを固定できます。ターゲットごとに変えたい場合は `reviewer-bot = "auto"` のまま `[reviewer_by_target]` に `grok-cli = "codex"` のように書きます。書いたターゲットだけが既定から変わり、書かなかったターゲットは既定のままです。`local` もここで指定できます。キーは実行ターゲット名（`auto` 以外）、値は `"claude"` か `"codex"` です。カスタム `local-cmd` では `{reviewer_bot}` プレースホルダーを利用でき、それ以外の任意コマンドにはレビュー指示を自動追記しません。
+PATH 上の `claude` と `codex` が片方だけの場合、上書きのない `auto` は子タスクと第2層レビューでその担当を使い、変更理由を表示します。両方ある場合と両方ない場合は従来のクロスベンダー既定です。明示の provider とターゲット別設定はそれぞれ優先され、上書きのない `local` は未解決のままです。子レビューと第2層の必須ゲートは変わりません。ローカル CLI の検出は GitHub レビューワークフローの存在を保証しません。`config init` は reviewer-bot が未設定の場合だけ単一ベンダーを候補の既定値にし、既存値は保持します。
+
+レビュー用CLIが両方ある場合と両方ない場合は、解決済みの実行ターゲットからクロスベンダーレビューの担当を決定します。`claude-cli`と`cloud-routine`はCodex、`codex-cli`・`codex-cloud`・`agy-cli`・`grok-cli`はClaudeへレビューを依頼します。この選択は`--dispatch-target auto`が具体的なターゲットへ解決された後に行われます。設定ファイル（`orchestune.toml`）の `reviewer-bot = "claude"` または `reviewer-bot = "codex"` で、全ターゲットのレビュアーを固定できます。ターゲットごとに変えたい場合は `reviewer-bot = "auto"` のまま `[reviewer_by_target]` に `grok-cli = "codex"` のように書きます。書いたターゲットだけが既定から変わり、書かなかったターゲットは既定のままです。`local` もここで指定できます。キーは実行ターゲット名（`auto` 以外）、値は `"claude"` か `"codex"` です。カスタム `local-cmd` では `{reviewer_bot}` プレースホルダーを利用でき、それ以外の任意コマンドにはレビュー指示を自動追記しません。
 
 > [!IMPORTANT]
 > **信頼モデルとセキュリティ上の危険性について**
