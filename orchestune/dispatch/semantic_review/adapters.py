@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 from orchestune.dispatch.config.model import DispatcherConfig
-from orchestune.dispatch.reviewer import resolve_reviewer_bot
+from orchestune.dispatch.reviewer import reviewer_for_installed_vendors
 from orchestune.forge import Forge
 from orchestune.infra.git_cli import (
     fetch_remote_branch,
@@ -176,10 +176,11 @@ def validate_semantic_review_preflight(
         return _preflight_error(
             "reviewer_unresolved", None, trigger, "reviewer could not be resolved"
         )
-    reviewer = resolve_reviewer_bot(
+    reviewer = reviewer_for_installed_vendors(
         cast(Literal["auto", "claude", "codex"], provider),
         target_name,
         config.reviewer_by_target,
+        config.installed_review_vendors,
     )
     if reviewer is None:
         return _preflight_error(

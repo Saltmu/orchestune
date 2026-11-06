@@ -53,7 +53,10 @@ from orchestune.dispatch.reporting.summary import (
     render_skipped_markdown,
 )
 from orchestune.dispatch.result import PhaseResult, PhaseStatus
-from orchestune.dispatch.reviewer import ReviewerBotSetting, resolve_reviewer_bot
+from orchestune.dispatch.reviewer import (
+    ReviewerBotSetting,
+    reviewer_for_installed_vendors,
+)
 from orchestune.forge import Forge, ForgeAuthError
 from orchestune.integrator.parent_completion import process_parent_completion
 from orchestune.issue_notice import NoticeOutcome, post_notice_if_changed
@@ -351,10 +354,11 @@ def _final_acceptance_reviewer(config: DispatcherConfig) -> str | None:
     if config.final_acceptance_review == "off":
         return None
     target = getattr(config.dispatch_target, "target_name", None)
-    return resolve_reviewer_bot(
+    return reviewer_for_installed_vendors(
         cast(ReviewerBotSetting, config.semantic_review_provider),
         target if isinstance(target, str) else "local",
         config.reviewer_by_target,
+        config.installed_review_vendors,
     )
 
 

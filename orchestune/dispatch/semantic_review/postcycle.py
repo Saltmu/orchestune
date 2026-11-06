@@ -768,6 +768,7 @@ class SemanticReviewCycleRunner:
             self._config.semantic_review_provider,
             target if isinstance(target, str) else "local",
             self._config.reviewer_by_target,
+            self._config.installed_review_vendors,
         )
         if resolution.reviewer is None:
             raise _Stop("reviewer_unresolved")

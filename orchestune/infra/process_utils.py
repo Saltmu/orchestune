@@ -315,6 +315,13 @@ def assert_run_state_lock_held(lock_path: Path) -> None:
         raise RuntimeError(f"run_state lock must be held: {norm_path}")
 
 
+def platform_ci_script_relative() -> Path:
+    """Return the platform's repository-relative default CI script."""
+    return Path(
+        "scripts/local-ci.ps1" if sys.platform == "win32" else "scripts/local-ci.sh"
+    )
+
+
 def default_ci_command() -> list[str]:
     """Return the repository-local CI command appropriate for this platform."""
     if sys.platform == "win32":

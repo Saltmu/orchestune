@@ -12,7 +12,11 @@ from datetime import datetime
 from typing import Any, Literal, cast
 
 from orchestune.dispatch.config.model import DispatcherConfig
-from orchestune.dispatch.reviewer import ReviewerBot, resolve_reviewer_bot
+from orchestune.dispatch.reviewer import (
+    ReviewerBot,
+    resolve_reviewer_bot,
+    reviewer_for_installed_vendors,
+)
 from orchestune.dispatch.semantic_review.ack import AckAssessment, assess_review_ack
 from orchestune.review.semantic_gate import SemanticReviewStateV1
 
@@ -30,6 +34,7 @@ def describe_reviewer(
     provider: str,
     target_name: str,
     overrides: Mapping[str, ReviewerBot] | None = None,
+    installed: frozenset[str] | None = None,
 ) -> ReviewerResolution:
     """The reviewer Layer-2 asks and why (explicit setting or auto + target)."""
     if provider in {"claude", "codex"}:
@@ -38,8 +43,8 @@ def describe_reviewer(
         )
     if provider != "auto":
         return ReviewerResolution(None, f"unsupported provider `{provider}`")
-    reviewer = resolve_reviewer_bot(
-        cast(Literal["auto"], provider), target_name, overrides
+    reviewer = reviewer_for_installed_vendors(
+        cast(Literal["auto"], provider), target_name, overrides, installed
     )
     if reviewer is None:
         return ReviewerResolution(
@@ -50,6 +55,10 @@ def describe_reviewer(
             reviewer,
             f"`auto` with `reviewer_by_target` entry for dispatch target "
             f"`{target_name}`",
+        )
+    if reviewer != resolve_reviewer_bot("auto", target_name, overrides):
+        return ReviewerResolution(
+            reviewer, f"`auto`: only `{reviewer}` review CLI is on PATH"
         )
     return ReviewerResolution(
         reviewer,
@@ -146,6 +155,7 @@ def build_review_diagnostics(
         config.semantic_review_provider,
         target if isinstance(target, str) else "local",
         config.reviewer_by_target,
+        config.installed_review_vendors,
     )
     ack = assess_review_ack(
         trigger_times=[at for _, at in requests],

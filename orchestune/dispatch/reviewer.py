@@ -43,3 +43,19 @@ def resolve_reviewer_bot(
     if overrides and resolved_target_name in overrides:
         return overrides[resolved_target_name]
     return _AUTO_REVIEWER_BY_TARGET.get(resolved_target_name)
+
+
+def reviewer_for_installed_vendors(
+    setting: ReviewerBotSetting,
+    target_name: str,
+    overrides: Mapping[str, ReviewerBot] | None = None,
+    installed: frozenset[str] | None = None,
+) -> ReviewerBot | None:
+    """Prefer the sole installed review vendor for an unoverridden auto target."""
+    reviewer = resolve_reviewer_bot(setting, target_name, overrides)
+    if setting != "auto" or (overrides and target_name in overrides):
+        return reviewer
+    vendors = (installed or frozenset()) & {"claude", "codex"}
+    if reviewer is not None and len(vendors) == 1:
+        return "claude" if "claude" in vendors else "codex"
+    return reviewer

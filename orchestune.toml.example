@@ -1,5 +1,12 @@
 # Orchestune configuration template
 #
+# First settings to decide (find each key in Dispatcher defaults below):
+# dispatch-target: select the execution CLI or cloud target in its target block.
+# ci-command: set your repository's CI command in the CI command block.
+# reviewer-bot: choose auto or an explicit reviewer in the reviewer block.
+# max-concurrent: set the number of simultaneous tasks at Dispatcher defaults.
+# child-review-gate: choose the child review evidence policy in its gate block.
+#
 # Copy this file to `orchestune.toml` in the project root and edit only the
 # repository-specific values you need. `orchestune.toml` is intentionally
 # ignored by Git; this public example is the source-controlled template.

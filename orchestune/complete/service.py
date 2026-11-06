@@ -18,7 +18,9 @@ from orchestune.claim.workspace import (
     repository_identities_equal,
     resolve_claim_workspace,
 )
+from orchestune.complete.ci_command import configured_ci_command
 from orchestune.complete.ci_evidence import (
+    CiEvidence,
     CiEvidenceError,
     run_local_ci_if_needed,
     validate_ci_evidence,
@@ -528,6 +530,17 @@ def _preview(request: CompleteRequest) -> CompleteResult:
     )
 
 
+def _run_configured_ci(request: CompleteRequest) -> CiEvidence:
+    if request.dry_run:
+        return run_local_ci_if_needed(request)
+    command = configured_ci_command(request.worktree_root)
+    return (
+        run_local_ci_if_needed(request)
+        if command is None
+        else run_local_ci_if_needed(request, ci_command=command)
+    )
+
+
 def _policy_for_request(
     request: CompleteRequest,
     state: RunState,
@@ -543,7 +556,7 @@ def _policy_for_request(
             (
                 validate_ci_evidence(request)
                 if pending is not None
-                else run_local_ci_if_needed(request)
+                else _run_configured_ci(request)
             ).to_dict(),
         )
         if request.result == "done"

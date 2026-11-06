@@ -19,6 +19,7 @@ from typing import TypedDict, cast
 
 from orchestune.complete.contracts import CompleteRequest
 from orchestune.infra.git_cli import WorktreeStatus, inspect_worktree_status, run_git
+from orchestune.infra.process_utils import platform_ci_script_relative
 from orchestune.outcome_record import RESULT_DONE
 
 CI_EVIDENCE_FILENAME = "ci_evidence.json"
@@ -893,6 +894,13 @@ def _execute_local_ci(
     initial_tree: str,
 ) -> None:
     """Execute local CI runner command with appropriate environment variables."""
+    if (
+        ci_command is None
+        and not (worktree_path / platform_ci_script_relative()).is_file()
+    ):
+        raise CiExecutionError(
+            'Default CI script is missing. Set ci-command = "pytest" in orchestune.toml or [tool.orchestune] in pyproject.toml.'
+        )
     cmd = (
         _resolve_default_ci_command(worktree_path)
         if ci_command is None
@@ -907,10 +915,24 @@ def _execute_local_ci(
         initial_head,
         initial_tree,
     )
+    started_at = datetime.datetime.now(datetime.UTC).isoformat()
     res = subprocess.run(cmd, cwd=worktree_path, env=env, check=False)
     if res.returncode != 0:
         raise CiExecutionError(
             f"Local CI execution failed with exit code {res.returncode}"
+        )
+    if ci_command is not None:
+        if inspect_worktree_status(worktree_path) != WorktreeStatus.CLEAN:
+            raise CiExecutionError("Worktree became dirty during configured CI run")
+        record_ci_evidence(
+            worktree_path,
+            CiRecordOptions(
+                started_at=started_at,
+                completed_at=datetime.datetime.now(datetime.UTC).isoformat(),
+                base_sha=expected_base_sha,
+                expected_head=initial_head,
+                expected_tree=initial_tree,
+            ),
         )
 
 
