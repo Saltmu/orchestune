@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -197,6 +198,143 @@ class TestPostIssueOutcome:
 
         with pytest.raises(OutcomeLookupUnknownError):
             post_issue_outcome(PostingRequest(1003, _record()), forge=forge)
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            subprocess.TimeoutExpired(["gh", "api"], timeout=30),
+            ValueError("invalid page shape"),
+            json.JSONDecodeError("invalid JSON", "{", 1),
+        ],
+    )
+    def test_lookup_failure_is_unknown_and_never_posts(self, error) -> None:
+        from orchestune.complete.posting import (
+            OutcomeLookupUnknownError,
+            PostingRequest,
+            post_issue_outcome,
+        )
+
+        forge = SimpleNamespace(
+            list_all_issue_comments=Mock(side_effect=error),
+            create_issue_comment=Mock(),
+        )
+
+        with pytest.raises(
+            OutcomeLookupUnknownError,
+            match="Unable to retrieve every Issue comment page",
+        ) as raised:
+            post_issue_outcome(PostingRequest(1003, _record()), forge=forge)
+
+        assert raised.value.__cause__ is error
+        forge.create_issue_comment.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            subprocess.TimeoutExpired(["gh", "api"], timeout=30),
+            ValueError("invalid page shape"),
+            json.JSONDecodeError("invalid JSON", "{", 1),
+        ],
+    )
+    def test_readback_failure_preserves_unknown_post_result(self, error) -> None:
+        from orchestune.complete.posting import (
+            OutcomeLookupUnknownError,
+            PostingRequest,
+            post_issue_outcome,
+        )
+
+        forge = SimpleNamespace(
+            list_all_issue_comments=Mock(side_effect=[[], error]),
+            create_issue_comment=Mock(side_effect=ForgeError("POST response lost")),
+        )
+
+        with pytest.raises(
+            OutcomeLookupUnknownError,
+            match="POST result is unknown and Issue comments could not be rechecked",
+        ) as raised:
+            post_issue_outcome(PostingRequest(1003, _record()), forge=forge)
+
+        assert isinstance(raised.value.__cause__, OutcomeLookupUnknownError)
+        assert raised.value.__cause__.__cause__ is error
+        assert forge.list_all_issue_comments.call_count == 2
+        assert forge.create_issue_comment.call_count == 1
+
+    def test_retry_reuses_comment_after_a_failed_readback(self) -> None:
+        from orchestune.complete.posting import (
+            OutcomeLookupUnknownError,
+            PostingRequest,
+            post_issue_outcome,
+        )
+
+        matching = {
+            "id": 17,
+            "html_url": "https://example.test/comments/17",
+            "body": _record().render(),
+        }
+        forge = SimpleNamespace(
+            list_all_issue_comments=Mock(
+                side_effect=[[], ValueError("malformed page"), [matching]]
+            ),
+            create_issue_comment=Mock(side_effect=ForgeError("POST response lost")),
+        )
+        request = PostingRequest(1003, _record())
+
+        with pytest.raises(OutcomeLookupUnknownError):
+            post_issue_outcome(request, forge=forge)
+
+        result = post_issue_outcome(request, forge=forge)
+
+        assert result.comment_id == "17"
+        assert result.reused is True
+        assert forge.list_all_issue_comments.call_count == 3
+        assert forge.create_issue_comment.call_count == 1
+
+    @pytest.mark.parametrize("error", [RuntimeError("bug"), TypeError("bug")])
+    def test_unexpected_lookup_errors_propagate(self, error) -> None:
+        from orchestune.complete.posting import PostingRequest, post_issue_outcome
+
+        forge = SimpleNamespace(
+            list_all_issue_comments=Mock(side_effect=error),
+            create_issue_comment=Mock(),
+        )
+
+        with pytest.raises(type(error), match="bug"):
+            post_issue_outcome(PostingRequest(1003, _record()), forge=forge)
+
+        forge.create_issue_comment.assert_not_called()
+
+    def test_execution_scope_timeout_propagates_from_initial_lookup(self) -> None:
+        from orchestune.complete.posting import PostingRequest, post_issue_outcome
+        from orchestune.infra.execution_deadline import ExecutionCommandTimeout
+
+        timeout = ExecutionCommandTimeout("gh api", 30, "normal")
+        forge = SimpleNamespace(
+            list_all_issue_comments=Mock(side_effect=timeout),
+            create_issue_comment=Mock(),
+        )
+
+        with pytest.raises(ExecutionCommandTimeout) as raised:
+            post_issue_outcome(PostingRequest(1003, _record()), forge=forge)
+
+        assert raised.value is timeout
+        forge.create_issue_comment.assert_not_called()
+
+    def test_execution_scope_timeout_propagates_from_readback(self) -> None:
+        from orchestune.complete.posting import PostingRequest, post_issue_outcome
+        from orchestune.infra.execution_deadline import ExecutionCommandTimeout
+
+        timeout = ExecutionCommandTimeout("gh api", 30, "normal")
+        forge = SimpleNamespace(
+            list_all_issue_comments=Mock(side_effect=[[], timeout]),
+            create_issue_comment=Mock(side_effect=ForgeError("POST response lost")),
+        )
+
+        with pytest.raises(ExecutionCommandTimeout) as raised:
+            post_issue_outcome(PostingRequest(1003, _record()), forge=forge)
+
+        assert raised.value is timeout
+        assert forge.list_all_issue_comments.call_count == 2
+        assert forge.create_issue_comment.call_count == 1
 
 
 class TestCompletionService:
