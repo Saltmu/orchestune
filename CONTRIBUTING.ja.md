@@ -131,6 +131,19 @@ with patch("orchestune.dispatch.worktree._branch_exists", autospec=True) as mock
 
 ## ローカルCIスクリプト
 
+### 既定文字コードの警告
+
+Linux と Windows の local CI は、pytest の実行中だけ
+`PYTHONWARNDEFAULTENCODING=1` を設定します。Python の `EncodingWarning` は pytest の警告
+サマリーに集約され、初期導入ではテストを失敗させません。サマリーには警告箇所が表示されます。
+リポジトリ由来の警告は整理対象として扱い、依存ライブラリ由来の警告はパッケージ名と箇所を分けて
+記録してください。どちらも一括 ignore で隠さないでください。
+
+UTF-8 のファイルには `open`、`Path.read_text`、`Path.write_text` で
+`encoding="utf-8"` を指定してください。OS ロケールの文字コードを意図的に使う場合は、その選択を
+明示し、対応対象のロケールでテストします。リポジトリ内の既存警告を調査・解消した後、自リポジトリの
+`EncodingWarning` をエラーへ昇格し、依存ライブラリの警告は別途評価する方針です。
+
 コミットまたはプッシュする前に、ローカルCIスクリプトを実行してフォーマット、型チェック、およびテストを確認します。
 * **POSIX (Linux / macOS)**:
   ```bash

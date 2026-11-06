@@ -137,10 +137,18 @@ foreach ($var in $CiContextVars) {
     if ($null -ne $value) { $SavedCiContext[$var] = $value }
     Remove-Item "Env:$var" -ErrorAction SilentlyContinue
 }
+$HadEncodingWarningSetting = Test-Path "Env:PYTHONWARNDEFAULTENCODING"
+$SavedEncodingWarningSetting = $env:PYTHONWARNDEFAULTENCODING
 try {
+    $env:PYTHONWARNDEFAULTENCODING = "1"
     uv run pytest @PytestWorkerArgs --cov=orchestune --cov-branch --cov-fail-under=90 --cov-report=term-missing:skip-covered
     $PytestExitCode = $LASTEXITCODE
 } finally {
+    if ($HadEncodingWarningSetting) {
+        $env:PYTHONWARNDEFAULTENCODING = $SavedEncodingWarningSetting
+    } else {
+        Remove-Item Env:PYTHONWARNDEFAULTENCODING -ErrorAction SilentlyContinue
+    }
     foreach ($var in $SavedCiContext.Keys) {
         Set-Item "Env:$var" $SavedCiContext[$var]
     }

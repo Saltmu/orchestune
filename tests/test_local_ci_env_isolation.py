@@ -19,6 +19,7 @@ _COMPLETION_CONTEXT = (
     "ORCHESTUNE_STATE_PATH",
     "ORCHESTUNE_ISSUE_NUMBER",
     "ORCHESTUNE_CI_EVIDENCE_PATH",
+    "PYTHONWARNDEFAULTENCODING",
 )
 
 
@@ -109,9 +110,10 @@ def _assert_ci_isolation(tmp_path: Path, script_name: str, command: list[str]) -
     record_env = tmp_path / "record-env.txt"
     record_args = tmp_path / "record-args.txt"
     env = os.environ.copy()
-    env.update({name: "a" * 40 for name in _COMPLETION_CONTEXT})
+    env.update({name: "a" * 40 for name in _COMPLETION_CONTEXT[:-1]})
     env.update(
         {
+            "PYTHONWARNDEFAULTENCODING": "0",
             "PATH": f"{mock_bin}{os.pathsep}{env['PATH']}",
             "GITLEAKS_INSTALL_DIR": str(mock_bin),
             "CI_PYTEST_ENV": str(pytest_env),
@@ -131,9 +133,12 @@ def _assert_ci_isolation(tmp_path: Path, script_name: str, command: list[str]) -
     )
 
     assert run.returncode == 0, run.stdout + run.stderr
-    assert json.loads(pytest_env.read_text(encoding="utf-8")) == {}
+    assert json.loads(pytest_env.read_text(encoding="utf-8")) == {
+        "PYTHONWARNDEFAULTENCODING": "1"
+    }
     assert json.loads(record_env.read_text(encoding="utf-8")) == {
-        name: "a" * 40 for name in _COMPLETION_CONTEXT
+        **{name: "a" * 40 for name in _COMPLETION_CONTEXT[:-1]},
+        "PYTHONWARNDEFAULTENCODING": "0",
     }
     args = json.loads(record_args.read_text(encoding="utf-8"))
     assert {"--expected-head", "--expected-tree"} <= set(args)
