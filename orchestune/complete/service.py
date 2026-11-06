@@ -5,15 +5,16 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Protocol, TypedDict, cast
 from uuid import uuid4
 
 from orchestune.claim.local_identity import validate_local_claim
 from orchestune.claim.ownership import owner_token_digest
 from orchestune.claim.workspace import (
+    ClaimWorkspace,
     repository_identities_equal,
     resolve_claim_workspace,
 )
@@ -49,20 +50,104 @@ from orchestune.complete.publication import (
     publish_reserved_completion_locked,
 )
 from orchestune.complete.replay import find_replay
-from orchestune.complete.review_evidence import verify_review_evidence
+from orchestune.complete.review_evidence import (
+    ReviewEvidenceForge,
+    verify_review_evidence,
+)
 from orchestune.complete.unclaimed import complete_unclaimed, validate_unclaimed
-from orchestune.forge import ForgeError, GitHubForge
+from orchestune.forge import Forge, ForgeError, GitHubForge
 from orchestune.infra.git_cli import run_git
 from orchestune.labels import StatusLabel
 from orchestune.ledger.active_codec import encode_active_worktree
+from orchestune.ledger.active_records import ActiveWorktree, ClaimInfo
 from orchestune.ledger.completion_records import (
     CompletionJournalRecord,
     InvalidLedgerRecord,
+    PrepublicationPolicyEvidence,
 )
-from orchestune.ledger.run_state import load_run_state_readonly
-from orchestune.outcome_record import ReviewSummary
+from orchestune.ledger.run_state import RunState, load_run_state_readonly
+from orchestune.outcome_record import OutcomeRecord, ReviewSummary
 
 logger = logging.getLogger(__name__)
+
+
+class _FetchedPullRequest(Protocol):
+    """Pull request attributes completion reads from an untyped forge fetch."""
+
+    number: int
+    head_sha: str
+    head_ref: str
+    base_ref: str
+    changed_files: Sequence[str]
+    is_ci_passing: bool
+
+
+class _PolicyCi(TypedDict, total=False):
+    head_sha: str
+
+
+class _ReviewSummaryPayload(TypedDict, total=False):
+    bot: str | None
+    rounds: int | None
+    verdict: str | None
+    reviewed_head_sha: str | None
+    review_target_sha_source: str | None
+    judgment_digest: str | None
+    judgment_counts: dict[str, int]
+
+
+class _PolicyReview(TypedDict, total=False):
+    summary: _ReviewSummaryPayload
+    snapshot_digest: str
+
+
+class _PolicyPullRequest(TypedDict, total=False):
+    number: object
+    head_ref: object
+    base_ref: object
+    changed_files: object
+    head_sha: object
+    is_ci_passing: object
+    state: object
+
+
+class _PolicyValidation(TypedDict, total=False):
+    ci: _PolicyCi | None
+    review: _PolicyReview
+    pr: _PolicyPullRequest
+
+
+class _PolicyContext(TypedDict, total=False):
+    active: object
+
+
+class _InitialIssueEvidence(TypedDict):
+    labels: list[str]
+    state: str
+
+
+class _PublicationPolicy(TypedDict, total=False):
+    decision: str
+    validation: _PolicyValidation
+    initial_issue: _InitialIssueEvidence
+    context: _PolicyContext
+    escalation: object
+
+
+def _as_json_dict(value: object) -> dict[str, Any]:
+    """Adapt a typed policy object to a neighbor that still stores open JSON."""
+    return cast(dict[str, Any], value)
+
+
+def _pr_attr(pr: _FetchedPullRequest, name: str) -> object:
+    return cast(object, getattr(pr, name, None))
+
+
+def _fetched_pr(
+    forge: Forge, pr_number: int
+) -> tuple[_FetchedPullRequest | None, bool, str | None]:
+    pr, supported, error = _fetch_pr(forge, pr_number)
+    return cast(_FetchedPullRequest | None, pr), supported, error
 
 
 def _failure(
@@ -89,7 +174,7 @@ def _head_sha(worktree: Path) -> str | None:
 
 
 def _validate_claim_context(
-    active: Any | None,
+    active: ActiveWorktree | None,
     repository: str,
     worktree: Path,
     state_path: Path,
@@ -120,7 +205,9 @@ def _validate_claim_context(
         ) from error
 
 
-def _check(request: CompleteRequest, state: Any, worktree: Path, forge: Any) -> None:
+def _check(
+    request: CompleteRequest, state: RunState, worktree: Path, forge: Forge
+) -> None:
     active = state.active_worktrees.get(str(request.issue_number))
     if active is not None and request.claim_id != active.claim.claim_id:
         raise CompletionJournalError(
@@ -141,7 +228,7 @@ def _check(request: CompleteRequest, state: Any, worktree: Path, forge: Any) -> 
 
 
 def _pending(
-    request: CompleteRequest, state: Any, repository: str, generation: str
+    request: CompleteRequest, state: RunState, repository: str, generation: str
 ) -> CompletionJournalRecord | None:
     records: list[CompletionJournalRecord] = []
     for raw in state.completion_journal.values():
@@ -187,23 +274,23 @@ def _pending(
 
 def _downstream_policies(
     request: CompleteRequest,
-    active: Any,
+    active: ActiveWorktree,
     repository: str,
     completion_id: str,
-    policy: dict[str, Any],
+    policy: _PublicationPolicy,
 ) -> tuple[DownstreamPolicyRecord, ...]:
     return not_needed_policies(
         request,
         active,
         repository,
-        active.claim.claim_id,
+        cast(str, active.claim.claim_id),
         completion_id,
-        policy["context"],
+        _as_json_dict(policy["context"]),
     )
 
 
 def _ensure_validated_head(
-    request: CompleteRequest, head_sha: str | None, policy: dict[str, Any]
+    request: CompleteRequest, head_sha: str | None, policy: _PublicationPolicy
 ) -> None:
     if request.result != "done":
         return
@@ -216,7 +303,7 @@ def _ensure_validated_head(
 
 
 def _check_adopted_pr(
-    claim: Any, result: str, pr: int | None, head: str | None
+    claim: ClaimInfo, result: str, pr: int | None, head: str | None
 ) -> None:
     if result != "done" or claim.adopted_pr_number is None:
         return
@@ -227,7 +314,7 @@ def _check_adopted_pr(
         )
 
 
-def _initial_issue_evidence(forge: Any, issue: int) -> dict[str, Any]:
+def _initial_issue_evidence(forge: Forge, issue: int) -> _InitialIssueEvidence:
     try:
         return {
             "labels": list(forge.get_issue_labels(issue)),
@@ -241,8 +328,8 @@ def _initial_issue_evidence(forge: Any, issue: int) -> dict[str, Any]:
 
 
 def _reviewed_outcome(
-    outcome: Any, request: CompleteRequest, policy: dict[str, Any]
-) -> Any:
+    outcome: OutcomeRecord, request: CompleteRequest, policy: _PublicationPolicy
+) -> OutcomeRecord:
     review = policy.get("validation", {}).get("review")
     if request.result == "done" and review is not None:
         outcome = replace(outcome, review=ReviewSummary(**review["summary"]))
@@ -256,11 +343,11 @@ def _reviewed_outcome(
 
 def _new_record(
     request: CompleteRequest,
-    active: Any,
+    active: ActiveWorktree,
     repository: str,
     worktree: Path,
-    forge: Any,
-    policy: dict[str, Any],
+    forge: Forge,
+    policy: _PublicationPolicy,
 ) -> CompletionJournalRecord:
     completion_id = request.completion_id or f"completion-{uuid4().hex}"
     outcome = replace(
@@ -284,7 +371,7 @@ def _new_record(
     return CompletionJournalRecord(
         repository,
         request.issue_number,
-        active.claim.claim_id,
+        cast(str, active.claim.claim_id),
         completion_id,
         active.claim.owner_token_digest
         or owner_token_digest(active.claim.claim_id or ""),
@@ -298,14 +385,14 @@ def _new_record(
             "head_sha": outcome.head_sha,
         },
         CompleteStage.RESERVED,
-        prepublication_policy_evidence=policy,
+        prepublication_policy_evidence=cast(PrepublicationPolicyEvidence, policy),
         downstream_policy_records=policies,
     )
 
 
 def _record_policy(
-    policy: dict[str, Any], forge: Any, issue: int, active: Any
-) -> dict[str, Any]:
+    policy: _PublicationPolicy, forge: Forge, issue: int, active: ActiveWorktree
+) -> _PublicationPolicy:
     return {
         **policy,
         "initial_issue": _initial_issue_evidence(forge, issue),
@@ -321,10 +408,16 @@ def _reject_policy(
         return
     if policy.get("decision") == "exceeded":
         escalation = escalate_token_limit_locked(
-            context.forge, record.issue_number, record.completion_id, policy
+            context.forge,
+            record.issue_number,
+            record.completion_id,
+            _as_json_dict(policy),
         )
         record = replace(
-            record, prepublication_policy_evidence={**policy, "escalation": escalation}
+            record,
+            prepublication_policy_evidence=cast(
+                PrepublicationPolicyEvidence, {**policy, "escalation": escalation}
+            ),
         )
         state = load_run_state_readonly(context.state_path)
         state.completion_journal[record.journal_key] = record
@@ -336,13 +429,20 @@ def _reject_policy(
 
 
 def _fresh_review(
-    request: CompleteRequest, forge: Any, pr: Any, ci: dict[str, Any] | None
-) -> dict[str, Any]:
-    review: dict[str, Any] = {}
+    request: CompleteRequest,
+    forge: Forge,
+    pr: _FetchedPullRequest,
+    ci: _PolicyCi | None,
+) -> _PolicyReview:
+    review: _PolicyReview = {}
     verify_review_evidence(
-        request, forge, pr, ci.get("head_sha") if ci else None, snapshot=review
+        request,
+        cast(ReviewEvidenceForge, forge),
+        pr,
+        ci.get("head_sha") if ci else None,
+        snapshot=_as_json_dict(review),
     )
-    latest, _, error = _fetch_pr(forge, pr.number)
+    latest, _, error = _fetched_pr(forge, pr.number)
     if error or latest is None:
         raise CompletionJournalError(
             CompleteFailureReason.EVIDENCE_MISSING,
@@ -358,38 +458,43 @@ def _fresh_review(
 
 def _validation_policy(
     request: CompleteRequest,
-    forge: Any,
-    policy: dict[str, Any],
-    ci: dict[str, Any] | None,
+    forge: Forge,
+    policy: _PublicationPolicy,
+    ci: _PolicyCi | None,
     *,
     legacy_review: bool = False,
-) -> dict[str, Any]:
+) -> _PublicationPolicy:
     if request.result != "done":
         return policy
     pr_number = request.to_outcome_record().pr
     assert pr_number is not None
-    pr, supported, error = _fetch_pr(forge, pr_number)
+    pr, supported, error = _fetched_pr(forge, pr_number)
     if not supported or pr is None or error:
         raise CompletionJournalError(
             CompleteFailureReason.EVIDENCE_MISSING, "PR evidence is unavailable"
         )
-    review = {} if legacy_review else _fresh_review(request, forge, pr, ci)
+    review: _PolicyReview = (
+        {} if legacy_review else _fresh_review(request, forge, pr, ci)
+    )
     return {
         **policy,
         "validation": {
             "ci": ci,
             **({"review": review} if not legacy_review else {}),
-            "pr": {
-                name: getattr(pr, name, None)
-                for name in (
-                    "number",
-                    "head_ref",
-                    "base_ref",
-                    "changed_files",
-                    "head_sha",
-                    "is_ci_passing",
-                )
-            },
+            "pr": cast(
+                _PolicyPullRequest,
+                {
+                    name: _pr_attr(pr, name)
+                    for name in (
+                        "number",
+                        "head_ref",
+                        "base_ref",
+                        "changed_files",
+                        "head_sha",
+                        "is_ci_passing",
+                    )
+                },
+            ),
         },
     }
 
@@ -424,24 +529,34 @@ def _preview(request: CompleteRequest) -> CompleteResult:
 
 
 def _policy_for_request(
-    request: CompleteRequest, state: Any, repository: str, worktree: Path, forge: Any
-) -> dict[str, Any]:
+    request: CompleteRequest,
+    state: RunState,
+    repository: str,
+    worktree: Path,
+    forge: Forge,
+) -> _PublicationPolicy:
     active = state.active_worktrees[str(request.issue_number)]
     pending = _pending(request, state, repository, active.claim.claim_id or "")
-    ci = None
-    if request.result == "done":
-        ci = (
-            validate_ci_evidence(request)
-            if pending is not None
-            else run_local_ci_if_needed(request)
-        ).to_dict()
-    policy = (
-        evaluate_publication_policy(active, worktree, forge)
+    ci = (
+        cast(
+            _PolicyCi,
+            (
+                validate_ci_evidence(request)
+                if pending is not None
+                else run_local_ci_if_needed(request)
+            ).to_dict(),
+        )
         if request.result == "done"
-        else {"decision": "allowed"}
+        else None
+    )
+    allowed: _PublicationPolicy = {"decision": "allowed"}
+    policy = (
+        cast(_PublicationPolicy, evaluate_publication_policy(active, worktree, forge))
+        if request.result == "done"
+        else allowed
     )
     return cast(
-        dict[str, Any],
+        _PublicationPolicy,
         json.loads(
             json.dumps(
                 _validation_policy(
@@ -462,11 +577,31 @@ def _policy_for_request(
     )
 
 
+def _store_retried_policy(
+    record: CompletionJournalRecord,
+    policy: _PublicationPolicy,
+    state_path: Path,
+) -> CompletionJournalRecord:
+    previous = record.prepublication_policy_evidence or {}
+    if previous.get("decision") != "unknown":
+        return record
+    updated = replace(
+        record,
+        prepublication_policy_evidence=cast(
+            PrepublicationPolicyEvidence, {**previous, **policy}
+        ),
+    )
+    state = load_run_state_readonly(state_path)
+    state.completion_journal[updated.journal_key] = updated
+    _save_or_raise(state, state_path)
+    return updated
+
+
 def _select_record(
     context: PublicationContext,
-    state: Any,
+    state: RunState,
     repository: str,
-    policy: dict[str, Any],
+    policy: _PublicationPolicy,
     progress: _Progress,
 ) -> CompletionJournalRecord:
     request, active = context.request, context.active
@@ -494,21 +629,19 @@ def _select_record(
         )
     previous = record.prepublication_policy_evidence or {}
     _ensure_validated_head(request, record.outcome_payload.get("head_sha"), policy)
-    if request.result == "done" and not _same_validation(previous, policy):
+    if request.result == "done" and not _same_validation(
+        cast(_PublicationPolicy, previous), policy
+    ):
         raise CompletionJournalError(
             CompleteFailureReason.REQUEST_FINGERPRINT_MISMATCH,
             "CI or PR evidence changed since reservation",
         )
-    if previous.get("decision") == "unknown":
-        record = replace(record, prepublication_policy_evidence={**previous, **policy})
-        state = load_run_state_readonly(context.state_path)
-        state.completion_journal[record.journal_key] = record
-        _save_or_raise(state, context.state_path)
+    record = _store_retried_policy(record, policy, context.state_path)
     progress.report(record)
     return record
 
 
-def _same_validation(previous: dict[str, Any], current: dict[str, Any]) -> bool:
+def _same_validation(previous: _PublicationPolicy, current: _PublicationPolicy) -> bool:
     old = json.loads(json.dumps(previous.get("validation")))
     new = json.loads(json.dumps(current.get("validation")))
     if isinstance(old, dict) and isinstance(new, dict):
@@ -528,8 +661,8 @@ def _publish_request(
     repository: str,
     state_path: Path,
     worktree: Path,
-    forge: Any,
-    policy: dict[str, Any],
+    forge: Forge,
+    policy: _PublicationPolicy,
     progress: _Progress,
 ) -> CompleteResult:
     with completion_journal_lock(state_path, 30):
@@ -557,14 +690,18 @@ def _publish_request(
         return publish_reserved_completion_locked(context, record)
 
 
-def _request_worktree(request: CompleteRequest, workspace: Any) -> Path:
+def _request_worktree(request: CompleteRequest, workspace: ClaimWorkspace) -> Path:
     return Path(
         getattr(workspace, "repository_root", request.worktree_root or Path.cwd())
     ).resolve()
 
 
 def _active_preflight(
-    request: CompleteRequest, state: Any, workspace: Any, worktree: Path, forge: Any
+    request: CompleteRequest,
+    state: RunState,
+    workspace: ClaimWorkspace,
+    worktree: Path,
+    forge: Forge,
 ) -> None:
     active = state.active_worktrees[str(request.issue_number)]
     _check_adopted_pr(
@@ -588,7 +725,7 @@ def _active_preflight(
 
 
 def _complete(
-    request: CompleteRequest, forge: Any | None, progress: _Progress
+    request: CompleteRequest, forge: Forge | None, progress: _Progress
 ) -> CompleteResult:
     request.validate()
     workspace = resolve_claim_workspace(
@@ -655,7 +792,7 @@ def _failure_stage(progress: _Progress) -> CompleteStage:
 def complete_task(
     request: CompleteRequest,
     *,
-    forge: Any | None = None,
+    forge: Forge | None = None,
     on_progress: Callable[[str, CompleteStage], None] | None = None,
 ) -> CompleteResult:
     """Replay first, validate CI outside the lock, then publish one frozen transaction."""

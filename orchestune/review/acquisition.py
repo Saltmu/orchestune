@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, TypedDict, Unpack, cast
 
 from orchestune.review.markers import is_review_reply
 from orchestune.review.progress_tracker import (
@@ -23,6 +23,9 @@ from orchestune.review.tracker_activity import (
     tracker_digest,
     tracker_is_current,
 )
+
+# Callers outside this module still read acquisition results as open JSON.
+JsonObject = dict[str, Any]
 
 SCHEMA_VERSION = 1
 
@@ -37,8 +40,101 @@ EXIT_ACQUIRED = 0
 EXIT_IN_PROGRESS = 11
 EXIT_NO_RESULT = 30
 
-ReviewState = dict[str, list[dict[str, Any]]]
+
+class _CommentUser(TypedDict, total=False):
+    login: str
+
+
+class ReviewItem(TypedDict, total=False):
+    """GitHub comment, review, or inline comment fields this module reads."""
+
+    id: int | str | None
+    user: _CommentUser
+    body: str | None
+    created_at: str
+    updated_at: str
+    submitted_at: str
+    state: str | None
+    commit_id: str | None
+    path: str
+    line: int | str | None
+    original_line: int | str | None
+    diff_hunk: str
+    side: str
+    start_line: int | str | None
+    start_side: str
+    original_commit_id: str | None
+    context: object
+    pull_request_review_id: int | str | None
+    position_line: int | str | None
+    kind: str
+    provenance: str
+    provenance_reason: str | None
+
+
+class _ActivityBounds(TypedDict, total=False):
+    exclude_issue_comment_ids: set[int | str] | None
+    round_started_at: str
+    round_ended_at: str
+    requested_head_sha: str | None
+    activity_started_at: str
+    activity_ended_at: str
+
+
+class _ReviewContent(TypedDict):
+    review_items: list[ReviewItem]
+    review_body: str
+    inline_comments: list[ReviewItem]
+    timestamp: str
+
+
+class ReviewResultRecord(TypedDict, total=False):
+    """Canonical acquisition result, including optional wait metadata."""
+
+    schema_version: int
+    acquisition_status: str
+    reason: str
+    repository: str | None
+    pr_number: int | None
+    reviewer: str | None
+    round: int | None
+    trigger_id: int | str | None
+    triggered_at: str | None
+    requested_head_sha: str | None
+    reviewed_head_sha: str | None
+    current_head_sha: str | None
+    review_target_sha: str | None
+    review_target_sha_source: str | None
+    review_items: list[ReviewItem]
+    review_body: str
+    inline_comments: list[ReviewItem]
+    jev_evaluations: object
+    completeness: object
+    timestamp: str
+    reason_code: str
+    exit_code: int
+    wait_diagnostics: object
+
+
+ReviewState = dict[str, list[ReviewItem]]
 _STATE_SECTIONS = ("issue_comments", "reviews", "inline_comments")
+_INLINE_COPY_KEYS = (
+    "id",
+    "diff_hunk",
+    "side",
+    "start_line",
+    "start_side",
+    "commit_id",
+    "original_commit_id",
+    "original_line",
+    "context",
+    "pull_request_review_id",
+)
+
+
+def _tracker_item(item: ReviewItem) -> JsonObject:
+    """Boundary for tracker helpers that still accept an open comment dict."""
+    return cast(JsonObject, item)
 
 
 def normalize_review_state(value: object) -> ReviewState:
@@ -53,7 +149,7 @@ def normalize_review_state(value: object) -> ReviewState:
             raise ValueError(f"review state section {section!r} must be a list")
         if not all(isinstance(item, Mapping) for item in items):
             raise ValueError(f"review state section {section!r} must contain objects")
-        normalized[section] = [dict(item) for item in items]
+        normalized[section] = [cast(ReviewItem, dict(item)) for item in items]
     return normalized
 
 
@@ -68,10 +164,10 @@ def _is_bot_user(user_login: str, bot_name: str) -> bool:
 
 
 def _filter_bot_items(
-    items: list[dict[str, Any]],
+    items: list[ReviewItem],
     bot_name: str,
     exclude_ids: set[int | str] | None = None,
-) -> list[dict[str, Any]]:
+) -> list[ReviewItem]:
     excluded = exclude_ids or set()
     return [
         item
@@ -83,11 +179,11 @@ def _filter_bot_items(
 
 
 def _filter_bot_issue_comments(
-    items: list[dict[str, Any]],
+    items: list[ReviewItem],
     bot_name: str,
     exclude_ids: set[int | str] | None = None,
     exclude_issue_comment_ids: set[int | str] | None = None,
-) -> list[dict[str, Any]]:
+) -> list[ReviewItem]:
     """Bot PR comments minus review replies, which are judgments, not review evidence.
 
     Only normal PR comments can declare a reply (first non-blank line marker);
@@ -103,7 +199,7 @@ def _filter_bot_issue_comments(
     ]
 
 
-def _get_item_timestamp(item: dict[str, Any]) -> str:
+def _get_item_timestamp(item: ReviewItem) -> str:
     return str(
         item.get("updated_at")
         or item.get("submitted_at")
@@ -112,17 +208,17 @@ def _get_item_timestamp(item: dict[str, Any]) -> str:
     )
 
 
-def _get_item_created_timestamp(item: dict[str, Any]) -> str:
+def _get_item_created_timestamp(item: ReviewItem) -> str:
     return str(item.get("submitted_at") or item.get("created_at") or "")
 
 
-def _activity_signature(item: dict[str, Any], bot_name: str) -> str:
+def _activity_signature(item: ReviewItem, bot_name: str) -> str:
     """Change fingerprint of one comment / review: time, length, and for a Codex
     tracker a body digest, so a same-length Running -> Pending edit still shows.
     The body itself is never part of the signature."""
     signature = f"{_get_item_timestamp(item)}:{len(str(item.get('body') or ''))}"
-    if bot_name.lower() == "codex" and is_codex_tracker(item):
-        signature += f":{tracker_digest(item)}"
+    if bot_name.lower() == "codex" and is_codex_tracker(_tracker_item(item)):
+        signature += f":{tracker_digest(_tracker_item(item))}"
     return signature
 
 
@@ -131,7 +227,7 @@ def _bot_candidate_items(
     bot_name: str,
     exclude_ids: set[int | str] | None = None,
     exclude_issue_comment_ids: set[int | str] | None = None,
-) -> list[dict[str, Any]]:
+) -> list[ReviewItem]:
     return [
         *_filter_bot_issue_comments(
             data["issue_comments"], bot_name, exclude_ids, exclude_issue_comment_ids
@@ -140,7 +236,7 @@ def _bot_candidate_items(
     ]
 
 
-def _is_finished_progress_tracker(item: dict[str, Any], bot_name: str) -> bool:
+def _is_finished_progress_tracker(item: ReviewItem, bot_name: str) -> bool:
     """Keep progress telemetry out of review content.
 
     The legacy name is retained because `scripts.review_verdict` re-exports it;
@@ -157,7 +253,7 @@ def _is_finished_progress_tracker(item: dict[str, Any], bot_name: str) -> bool:
     )
 
 
-def _in_round(item: dict[str, Any], round_started_at: str, round_ended_at: str) -> bool:
+def _in_round(item: ReviewItem, round_started_at: str, round_ended_at: str) -> bool:
     """Created inside [start, end); an item without a creation time is never inside."""
     created = _get_item_created_timestamp(item)
     return (
@@ -168,7 +264,7 @@ def _in_round(item: dict[str, Any], round_started_at: str, round_ended_at: str) 
 
 
 def _in_activity_round(
-    item: dict[str, Any],
+    item: ReviewItem,
     bot_name: str,
     round_started_at: str,
     round_ended_at: str,
@@ -181,9 +277,9 @@ def _in_activity_round(
     item keeps the creation-time rule (#1210). `round_started_at` /
     `round_ended_at` are the activity bounds here (#1274).
     """
-    if bot_name.lower() == "codex" and is_codex_tracker(item):
+    if bot_name.lower() == "codex" and is_codex_tracker(_tracker_item(item)):
         return tracker_is_current(
-            item,
+            _tracker_item(item),
             started_at=round_started_at,
             ended_at=round_ended_at,
             requested_head_sha=requested_head_sha,
@@ -202,7 +298,7 @@ def _latest_bot_activity_item(
     requested_head_sha: str | None = None,
     activity_started_at: str = "",
     activity_ended_at: str = "",
-) -> dict[str, Any] | None:
+) -> ReviewItem | None:
     """Latest bot activity; with round bounds only that round's own activity.
 
     A past tracker edited later (newer `updated_at`) belongs to its own round and
@@ -251,7 +347,7 @@ def _latest_current_tracker(
     round_started_at: str = "",
     round_ended_at: str = "",
     requested_head_sha: str | None = None,
-) -> dict[str, Any] | None:
+) -> ReviewItem | None:
     """The Codex tracker that is current activity of the round, or None.
 
     Its status (Running / Completed / unknown) is telemetry about the round, not
@@ -264,9 +360,9 @@ def _latest_current_tracker(
         for item in _bot_candidate_items(
             data, bot_name, exclude_ids, exclude_issue_comment_ids
         )
-        if is_codex_tracker(item)
+        if is_codex_tracker(_tracker_item(item))
         and tracker_is_current(
-            item,
+            _tracker_item(item),
             started_at=round_started_at,
             ended_at=round_ended_at,
             requested_head_sha=requested_head_sha,
@@ -277,7 +373,7 @@ def _latest_current_tracker(
 
 def _latest_bot_summary_item(
     data: ReviewState, bot_name: str, exclude_ids: set[int | str] | None = None
-) -> dict[str, Any] | None:
+) -> ReviewItem | None:
     candidates = _bot_candidate_items(data, bot_name, exclude_ids)
     summaries = [
         item for item in candidates if not _is_finished_progress_tracker(item, bot_name)
@@ -298,7 +394,7 @@ def _latest_bot_summary_item(
     )
 
 
-def _is_explicitly_in_progress(item: dict[str, Any]) -> bool:
+def _is_explicitly_in_progress(item: ReviewItem) -> bool:
     body = str(item.get("body") or "")
     if parse_codex_tracker_status(body) is CodexTrackerStatus.IN_PROGRESS:
         return True
@@ -365,9 +461,9 @@ def _build_snapshot(
             signature = (
                 f"{_get_item_timestamp(item)}:{len(str(item.get('body') or ''))}"
             )
-            if bot_name.lower() == "codex" and is_codex_tracker(item):
+            if bot_name.lower() == "codex" and is_codex_tracker(_tracker_item(item)):
                 # Same-length edits (Running -> Pending) must still register.
-                signature += f":{tracker_digest(item)}"
+                signature += f":{tracker_digest(_tracker_item(item))}"
             snapshot[f"{prefix}_{item.get('id')}"] = signature
     for item in _filter_bot_items(data["inline_comments"], bot_name, exclude_ids):
         snapshot[f"inline_{item.get('id')}"] = _get_item_timestamp(item)
@@ -375,9 +471,9 @@ def _build_snapshot(
 
 
 def _normalize_review_item(
-    item: dict[str, Any], kind: str, provenance: str, reason: str | None = None
-) -> dict[str, Any]:
-    normalized: dict[str, Any] = {
+    item: ReviewItem, kind: str, provenance: str, reason: str | None = None
+) -> ReviewItem:
+    normalized: ReviewItem = {
         "id": item.get("id"),
         "kind": kind,
         "body": item.get("body") or "",
@@ -395,32 +491,21 @@ def _normalize_review_item(
 
 
 def _normalize_inline_item(
-    item: dict[str, Any], provenance: str, reason: str | None = None
-) -> dict[str, Any]:
-    return {
-        "path": item.get("path", "unknown"),
-        "line": item.get("line") or item.get("original_line") or "N/A",
-        "body": item.get("body") or "",
-        **{
-            key: item[key]
-            for key in (
-                "id",
-                "diff_hunk",
-                "side",
-                "start_line",
-                "start_side",
-                "commit_id",
-                "original_commit_id",
-                "original_line",
-                "context",
-                "pull_request_review_id",
-            )
-            if key in item
+    item: ReviewItem, provenance: str, reason: str | None = None
+) -> ReviewItem:
+    raw = cast(Mapping[str, object], item)
+    return cast(
+        ReviewItem,
+        {
+            "path": item.get("path", "unknown"),
+            "line": item.get("line") or item.get("original_line") or "N/A",
+            "body": item.get("body") or "",
+            **{key: raw[key] for key in _INLINE_COPY_KEYS if key in raw},
+            "position_line": raw.get("position_line", item.get("line")),
+            "provenance": provenance,
+            **({"provenance_reason": reason} if reason else {}),
         },
-        "position_line": item.get("position_line", item.get("line")),
-        "provenance": provenance,
-        **({"provenance_reason": reason} if reason else {}),
-    }
+    )
 
 
 AFTER_ROUND_END = "after_round_end"
@@ -454,9 +539,9 @@ def _classify_provenance(
 
 
 def _classify_inline_round(
-    item: dict[str, Any],
+    item: ReviewItem,
     round_started_at: str,
-    review_provenance_by_id: dict[Any, tuple[str, str | None]],
+    review_provenance_by_id: dict[int | str, tuple[str, str | None]],
     round_ended_at: str = "",
 ) -> tuple[str, str | None]:
     """Prefer the parent review's confirmed provenance over the comment's own
@@ -484,9 +569,9 @@ def _classify_inline_round(
 
 
 def _classify_inline_provenance(
-    item: dict[str, Any],
+    item: ReviewItem,
     round_started_at: str,
-    review_provenance_by_id: dict[Any, str],
+    review_provenance_by_id: dict[int | str, str],
 ) -> str:
     return _classify_inline_round(
         item,
@@ -500,7 +585,7 @@ def _review_candidates(
     bot_name: str,
     exclude_ids: set[int | str] | None,
     exclude_issue_comment_ids: set[int | str] | None = None,
-) -> list[tuple[dict[str, Any], str]]:
+) -> list[tuple[ReviewItem, str]]:
     """Bot PR comments (replies excluded) and formal reviews, tagged with their kind."""
     return [
         *(
@@ -517,11 +602,11 @@ def _review_candidates(
 
 
 def _normalize_review_items(
-    candidates: list[tuple[dict[str, Any], str]],
+    candidates: list[tuple[ReviewItem, str]],
     bot_name: str,
     round_started_at: str,
     round_ended_at: str,
-) -> list[dict[str, Any]]:
+) -> list[ReviewItem]:
     """Review-content items only: execution telemetry -- a "job finished" tracker
     or a body still explicitly reporting in-progress -- is not review content,
     even when it is the most recent item in the round (Codex PR #1114 round 3
@@ -551,7 +636,7 @@ def extract_review_result(
     *,
     round_ended_at: str = "",
     exclude_issue_comment_ids: set[int | str] | None = None,
-) -> dict[str, Any] | None:
+) -> JsonObject | None:
     """Collect every bot review item and inline comment, tagged with round provenance.
 
     Unlike the previous single-latest-item extraction, this returns *all* bot
@@ -590,14 +675,17 @@ def extract_review_result(
     timestamps = [_get_item_timestamp(item) for item, _ in review_candidates] + [
         _get_item_timestamp(item) for item in inline_candidates
     ]
-    return _review_content_result(review_items, inline_items, timestamps)
+    return cast(
+        JsonObject | None,
+        _review_content_result(review_items, inline_items, timestamps),
+    )
 
 
 def _review_content_result(
-    review_items: list[dict[str, Any]],
-    inline_items: list[dict[str, Any]],
+    review_items: list[ReviewItem],
+    inline_items: list[ReviewItem],
     timestamps: list[str],
-) -> dict[str, Any] | None:
+) -> _ReviewContent | None:
     """Keep only current content as evidence of a round result."""
     # A lone "job finished" tracker comment, or a review/comment record with no
     # body and no inline comments (empty review, trigger-only, all-sections-empty),
@@ -636,27 +724,42 @@ def _review_content_result(
 
 
 def _status_result(
-    status: str, reason: str, result: dict[str, Any] | None, timestamp: str
-) -> dict[str, Any]:
+    status: str, reason: str, result: _ReviewContent | None, timestamp: str
+) -> JsonObject:
     """A non-acquired result; any content already seen is kept for context."""
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "acquisition_status": status,
-        "reason": reason,
-        "review_items": result["review_items"] if result else [],
-        "review_body": result["review_body"] if result else "",
-        "inline_comments": result["inline_comments"] if result else [],
-        "timestamp": timestamp,
-    }
+    return cast(
+        JsonObject,
+        {
+            "schema_version": SCHEMA_VERSION,
+            "acquisition_status": status,
+            "reason": reason,
+            "review_items": result["review_items"] if result else [],
+            "review_body": result["review_body"] if result else "",
+            "inline_comments": result["inline_comments"] if result else [],
+            "timestamp": timestamp,
+        },
+    )
+
+
+def _acquired_result(result: _ReviewContent) -> JsonObject:
+    return cast(
+        JsonObject,
+        {
+            "schema_version": SCHEMA_VERSION,
+            "acquisition_status": ACQUISITION_ACQUIRED,
+            "reason": "",
+            **result,
+        },
+    )
 
 
 def _in_progress_result(
     data: ReviewState,
     bot_name: str,
-    result: dict[str, Any] | None,
+    result: _ReviewContent | None,
     exclude_ids: set[int | str] | None,
-    **bounds: Any,
-) -> dict[str, Any] | None:
+    **bounds: Unpack[_ActivityBounds],
+) -> JsonObject | None:
     """An in-progress status when the round's latest bot activity says so.
 
     A single snapshot (no polling loop available to its callers) whose latest
@@ -716,7 +819,7 @@ def collect_review_state(
     requested_head_sha: str | None = None,
     activity_started_at: str = "",
     activity_ended_at: str = "",
-) -> dict[str, Any]:
+) -> JsonObject:
     """Assemble an acquisition-state result from an externally acquired snapshot.
 
     Used by the offline `--review-state-file` path and by completion. Online
@@ -727,19 +830,21 @@ def collect_review_state(
     tracker counts when updated inside it (#1274, see `_in_activity_round`).
     """
     data = normalize_review_state(value)
-    result = extract_review_result(
-        data,
-        bot_name,
-        exclude_ids,
-        round_started_at,
-        round_ended_at=round_ended_at,
-        exclude_issue_comment_ids=exclude_issue_comment_ids,
+    content = cast(
+        _ReviewContent | None,
+        extract_review_result(
+            data,
+            bot_name,
+            exclude_ids,
+            round_started_at,
+            round_ended_at=round_ended_at,
+            exclude_issue_comment_ids=exclude_issue_comment_ids,
+        ),
     )
-
     in_progress = _in_progress_result(
         data,
         bot_name,
-        result,
+        content,
         exclude_ids,
         exclude_issue_comment_ids=exclude_issue_comment_ids,
         round_started_at=round_started_at,
@@ -750,19 +855,14 @@ def collect_review_state(
     )
     if in_progress is not None:
         return in_progress
-    if result is None:
+    if content is None:
         return _status_result(
             ACQUISITION_UNAVAILABLE,
             f"no @{bot_name} activity found in the supplied review state",
             None,
             "",
         )
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "acquisition_status": ACQUISITION_ACQUIRED,
-        "reason": "",
-        **result,
-    }
+    return _acquired_result(content)
 
 
 _RESULT_KEYS = (
@@ -792,7 +892,7 @@ _TRAILING_RESULT_KEYS = ("wait_diagnostics",)
 _LIST_RESULT_KEYS = ("review_items", "inline_comments", "jev_evaluations")
 
 
-def reviewed_head_sha(review_items: list[dict[str, Any]]) -> str | None:
+def reviewed_head_sha(review_items: list[ReviewItem]) -> str | None:
     """The current review commit when every current review names the same one."""
     shas = {
         item.get("commit_id")
@@ -806,7 +906,7 @@ def reviewed_head_sha(review_items: list[dict[str, Any]]) -> str | None:
     return None
 
 
-def _result_default(key: str) -> Any:
+def _result_default(key: str) -> object:
     if key == "schema_version":
         return SCHEMA_VERSION
     if key == "acquisition_status":
@@ -820,31 +920,32 @@ def _result_default(key: str) -> Any:
     return None
 
 
-def review_result_record(**fields: Any) -> dict[str, Any]:
+def review_result_record(**fields: Unpack[ReviewResultRecord]) -> JsonObject:
     """Canonical wait result: every key in schema order, unset ones at defaults.
 
     `completeness` is required. `reason_code` and `exit_code` are inserted after
     `reason` only when supplied. `wait_diagnostics` is the only trailing key.
     """
+    supplied = cast(dict[str, object], fields)
     allowed = set(_RESULT_KEYS) | set(_AFTER_REASON) | set(_TRAILING_RESULT_KEYS)
-    unknown = sorted(set(fields) - allowed)
+    unknown = sorted(set(supplied) - allowed)
     if unknown:
         raise ValueError(f"unknown review result field: {', '.join(unknown)}")
-    if "completeness" not in fields:
+    if "completeness" not in supplied:
         raise ValueError("completeness is required")
-    record = {
-        key: fields[key] if key in fields else _result_default(key)
+    record: dict[str, object] = {
+        key: supplied[key] if key in supplied else _result_default(key)
         for key in _RESULT_KEYS
     }
-    extras = [key for key in _AFTER_REASON if key in fields]
+    extras = [key for key in _AFTER_REASON if key in supplied]
     if extras:
-        ordered: dict[str, Any] = {}
+        ordered: dict[str, object] = {}
         for key, value in record.items():
             ordered[key] = value
             if key == "reason":
                 for extra in extras:
-                    ordered[extra] = fields[extra]
+                    ordered[extra] = supplied[extra]
         record = ordered
-    if "wait_diagnostics" in fields:
-        record["wait_diagnostics"] = fields["wait_diagnostics"]
-    return record
+    if "wait_diagnostics" in supplied:
+        record["wait_diagnostics"] = supplied["wait_diagnostics"]
+    return cast(JsonObject, record)

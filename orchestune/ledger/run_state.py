@@ -5,11 +5,11 @@ from __future__ import annotations
 import dataclasses
 import json
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from hashlib import sha256
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Protocol, Self, TypedDict, TypeVar, cast
 
 from orchestune.footprint_paths import canonicalize_footprint
 from orchestune.infra.json_state import read_json_with_recovery, write_json_atomic
@@ -50,6 +50,24 @@ from orchestune.ledger.recovery_receipts import (
 from orchestune.models import Usage
 from orchestune.ownership_contracts import ClaimStage, OwnerKind, ReservationKind
 
+RawJson = dict[str, Any]
+_Decoded = TypeVar("_Decoded")
+_CompletionValue = (
+    InvalidLedgerRecord
+    | CompletionJournalRecord
+    | CompletionReservation
+    | CompletionReplayReceipt
+)
+
+
+class _OpenPullRequest(Protocol):
+    @property
+    def closes_issue_numbers(self) -> Sequence[int]: ...
+
+    @property
+    def head_ref(self) -> str: ...
+
+
 _COMPLETION_LEDGER_CODECS = {
     "completion_journal": (
         decode_completion_journal,
@@ -72,7 +90,7 @@ _COMPLETION_LEDGER_CODECS = {
 }
 
 
-class _CompletionLedgerMap(dict):
+class _CompletionLedgerMap(dict[str, object]):
     """Keep completion map values typed across standard dict mutation APIs.
 
     Copy-like dict operations return ordinary dictionaries; assigning those back
@@ -81,10 +99,10 @@ class _CompletionLedgerMap(dict):
 
     def __init__(
         self,
-        values: Any = (),
+        values: object = (),
         *,
-        decoder: Any = None,
-        expected_type: type[Any] | None = None,
+        decoder: Callable[[RawJson], object] | None = None,
+        expected_type: type[object] | None = None,
         record_type: str = "",
         key_attribute: str = "",
     ) -> None:
@@ -95,17 +113,17 @@ class _CompletionLedgerMap(dict):
         super().__init__()
         self.update(values)
 
-    def __setitem__(self, key: str, value: Any) -> None:
-        raw: dict[str, Any] | None = None
+    def __setitem__(self, key: str, value: object) -> None:
+        raw: RawJson | None = None
         if isinstance(value, dict):
-            raw = value
+            raw = cast(RawJson, value)
         elif (
             not isinstance(value, InvalidLedgerRecord)
             and self._expected_type is not None
             and not isinstance(value, self._expected_type)
         ):
             try:
-                raw = encode_completion_value(value)
+                raw = encode_completion_value(cast(_CompletionValue, value))
             except TypeError as error:
                 raise TypeError(
                     f"{self.record_type} values must be typed completion records or JSON objects"
@@ -118,7 +136,7 @@ class _CompletionLedgerMap(dict):
             if getattr(value, self._key_attribute) != key:
                 if raw is None:
                     # Only a correctly typed record can reach this branch.
-                    raw = encode_completion_value(value)
+                    raw = encode_completion_value(cast(_CompletionValue, value))
                 value = InvalidLedgerRecord(
                     self._record_type,
                     f"map key {key!r} does not match record identity",
@@ -130,46 +148,46 @@ class _CompletionLedgerMap(dict):
     def record_type(self) -> str:
         return self._record_type
 
-    def update(self, *args: Any, **kwargs: Any) -> None:
+    def update(self, *args: object, **kwargs: object) -> None:
         for key, value in dict(*args, **kwargs).items():
-            self[key] = value
+            self[cast(str, key)] = value
 
-    def setdefault(self, key: str, default: Any = None) -> Any:
+    def setdefault(self, key: str, default: object = None) -> object:
         if key not in self:
             self[key] = default
         return self[key]
 
-    def __ior__(self, other: Any) -> Any:  # type: ignore[override, misc]
+    def __ior__(self, other: object) -> Self:  # type: ignore[override, misc]
         self.update(other)
         return self
 
 
-class _RecoveryLedgerMap(dict):
+class _RecoveryLedgerMap(dict[str, RecoveryReceiptValue]):
     """Keep recovery receipt values typed across normal mapping mutations."""
 
-    def __init__(self, values: Any = ()) -> None:
+    def __init__(self, values: object = ()) -> None:
         super().__init__()
         self.update(values)
 
-    def __setitem__(self, key: str, value: Any) -> None:
+    def __setitem__(self, key: str, value: object) -> None:
         if isinstance(value, dict):
             value = decode_recovery_receipt(value)
         elif not isinstance(value, InvalidLedgerRecord | RecoveryReceiptBase):
             raise TypeError(
                 "recovery_receipts values must be typed receipts or JSON objects"
             )
-        super().__setitem__(key, value)
+        super().__setitem__(key, cast(RecoveryReceiptValue, value))
 
-    def update(self, *args: Any, **kwargs: Any) -> None:
+    def update(self, *args: object, **kwargs: object) -> None:
         for key, value in dict(*args, **kwargs).items():
-            self[key] = value
+            self[cast(str, key)] = value
 
-    def setdefault(self, key: str, default: Any = None) -> Any:
+    def setdefault(self, key: str, default: object = None) -> RecoveryReceiptValue:
         if key not in self:
             self[key] = default
         return self[key]
 
-    def __ior__(self, other: Any) -> Any:  # type: ignore[override, misc]
+    def __ior__(self, other: object) -> Self:  # type: ignore[override, misc]
         self.update(other)
         return self
 
@@ -273,7 +291,7 @@ class RunState:
     # accountの識別が無いため、同じ台帳を使うtargetを1つの制限scopeとして扱う。
     usage_limit_cooldowns: dict[str, float] = field(default_factory=dict)
 
-    def __setattr__(self, name: str, value: Any) -> None:
+    def __setattr__(self, name: str, value: object) -> None:
         if name == "recovery_receipts" and not isinstance(value, _RecoveryLedgerMap):
             if not isinstance(value, dict):
                 raise ValueError("recovery_receipts must be an object")
@@ -386,6 +404,124 @@ def _parse_task_reclaim_counts(raw: object) -> dict[int, TaskReclaimRecord]:
     return records
 
 
+class _TaskReclaimCore(TypedDict):
+    count: int
+    last_reclaimed_at: float
+    pending: bool
+    early_death_retry_count: int
+    early_death_retry_at: float
+    early_death_retry_pending: bool
+    review_timeout_retry_count: int
+    review_timeout_retry_at: float
+    review_timeout_retry_pending: bool
+
+
+class TaskReclaimJson(_TaskReclaimCore, total=False):
+    usage_limit_retry_count: int
+    usage_limit_retry_at: float
+    usage_limit_retry_pending: bool
+    usage_limit_retry_run: str | None
+
+
+class _ActiveRequired(TypedDict):
+    issue_number: int
+    branch: str
+    worktree_path: str
+    pid: int | None
+    started_at: object
+    declared_footprint: list[str]
+    owner_kind: str
+    claim_id: str
+    claim_stage: str
+    base_ref: str
+    base_sha: str | None
+    reservation_kind: str
+    repository_id: str
+    claimed_at: object
+    owner_token_digest: str
+
+
+class ActiveWorktreeRecord(_ActiveRequired, total=False):
+    recompute_count: object
+    forced_serial: object
+    external_id: object
+    external_url: object
+    base_branch: object
+    estimated_tokens: object
+    token_estimate_recorded: object
+    profile: object
+    model: object
+    reasoning_effort: object
+    selection_reason: object
+    launch_attempt_id: object
+    launch_phase: object
+    launch_target: object
+    launch_log_path: object
+    launch_log_offset: object
+    adopted_pr_number: object
+    adopted_pr_head_sha: object
+    completion_policy_config: object
+    completion_id: object
+    completion_result: object
+    completion_stage: object
+    completion_payload: object
+    completion_comment_id: object
+    completion_comment_url: object
+    completion_handoff_ready: object
+
+
+class _CompletionFields(TypedDict):
+    completion_policy_config: object
+    completion_id: str | None
+    completion_result: str | None
+    completion_stage: str | None
+    completion_payload: RawJson | None
+    completion_comment_id: str | None
+    completion_comment_url: str | None
+    completion_handoff_ready: bool
+
+
+class _LaunchAttribution(TypedDict):
+    launch_target: str | None
+    launch_log_path: str | None
+    launch_log_offset: object
+
+
+class _ActiveLaunchFields(TypedDict):
+    profile: object
+    model: object
+    reasoning_effort: object
+    selection_reason: object
+    launch_attempt_id: object
+    launch_phase: object
+
+
+class _RunStateJson(TypedDict):
+    active_worktrees: dict[str, RawJson]
+    launch_history: list[float]
+    completed_worktrees: list[RawJson]
+    last_reconciled_at: float | None
+    task_reclaim_counts: dict[str, TaskReclaimJson]
+    task_reclaim_lookup_cursor: int
+    pending_lock_release_notices: list[int]
+
+
+class _OptionalRunStateMaps(TypedDict, total=False):
+    completion_journal: dict[str, RawJson]
+    completion_reservations: dict[str, RawJson]
+    completion_replay_receipts: dict[str, RawJson]
+    recovery_receipts: dict[str, RawJson]
+    usage_limit_cooldowns: dict[str, float]
+
+
+class _RunStateFile(_RunStateJson, total=False):
+    completion_journal: dict[str, RawJson]
+    completion_reservations: dict[str, RawJson]
+    completion_replay_receipts: dict[str, RawJson]
+    recovery_receipts: dict[str, RawJson]
+    usage_limit_cooldowns: dict[str, float]
+
+
 _USAGE_LIMIT_RECORD_FIELDS = (
     "usage_limit_retry_count",
     "usage_limit_retry_at",
@@ -394,14 +530,14 @@ _USAGE_LIMIT_RECORD_FIELDS = (
 )
 
 
-def _task_reclaim_record_data(record: TaskReclaimRecord) -> dict[str, Any]:
+def _task_reclaim_record_data(record: TaskReclaimRecord) -> TaskReclaimJson:
     """#1270: 専用枠が既定値のあいだはキーを出さず、旧台帳の保存形を変えない。"""
     data = dataclasses.asdict(record)
     defaults = dataclasses.asdict(TaskReclaimRecord())
     if all(data[name] == defaults[name] for name in _USAGE_LIMIT_RECORD_FIELDS):
         for name in _USAGE_LIMIT_RECORD_FIELDS:
             del data[name]
-    return data
+    return cast(TaskReclaimJson, data)
 
 
 def _parse_usage_limit_cooldowns(raw: object) -> dict[str, float]:
@@ -489,7 +625,7 @@ def recovery_repository_id(path: Path) -> str:
     return str(path.resolve().parent)
 
 
-def _required_active_string(value: dict[str, object], name: str, key: object) -> str:
+def _required_active_string(value: Mapping[str, object], name: str, key: object) -> str:
     item = value[name]
     if not isinstance(item, str) or not item:
         raise _active_worktree_schema_error(key, f"{name} must be a non-empty string")
@@ -497,7 +633,7 @@ def _required_active_string(value: dict[str, object], name: str, key: object) ->
 
 
 def _validate_active_identity(
-    key: object, value: dict[str, object]
+    key: object, value: Mapping[str, object]
 ) -> tuple[str, str, str, float, str | None]:
     owner_kind = _required_active_string(value, "owner_kind", key)
     claim_stage = _required_active_string(value, "claim_stage", key)
@@ -520,7 +656,7 @@ def _validate_active_identity(
 
 
 def _parse_optional_completion_str(
-    value: dict[str, object], name: str, key: object
+    value: Mapping[str, object], name: str, key: object
 ) -> str | None:
     item = value.get(name)
     if item is not None and not isinstance(item, str):
@@ -529,17 +665,17 @@ def _parse_optional_completion_str(
 
 
 def _parse_completion_payload(
-    value: dict[str, object], key: object
-) -> dict[str, Any] | None:
+    value: Mapping[str, object], key: object
+) -> RawJson | None:
     item = value.get("completion_payload")
     if item is not None and not isinstance(item, dict):
         raise _active_worktree_schema_error(
             key, "completion_payload must be an object or null"
         )
-    return item
+    return cast(RawJson, item) if item is not None else None
 
 
-def _parse_completion_handoff_ready(value: dict[str, object], key: object) -> bool:
+def _parse_completion_handoff_ready(value: Mapping[str, object], key: object) -> bool:
     item = value.get("completion_handoff_ready", False)
     if not isinstance(item, bool):
         raise _active_worktree_schema_error(
@@ -549,8 +685,8 @@ def _parse_completion_handoff_ready(value: dict[str, object], key: object) -> bo
 
 
 def _parse_completion_journal_fields(
-    value: dict[str, Any], key: object
-) -> dict[str, Any]:
+    value: ActiveWorktreeRecord, key: object
+) -> _CompletionFields:
     return {
         "completion_policy_config": value.get("completion_policy_config"),
         "completion_id": _parse_optional_completion_str(value, "completion_id", key),
@@ -571,7 +707,9 @@ def _parse_completion_journal_fields(
     }
 
 
-def _launch_attribution_fields(value: dict[str, Any], key: object) -> dict[str, Any]:
+def _launch_attribution_fields(
+    value: ActiveWorktreeRecord, key: object
+) -> _LaunchAttribution:
     """#1270: absent in records written before launch attribution existed.
 
     Rejected here, like every other persisted field, so a malformed value cannot
@@ -594,7 +732,7 @@ def _launch_attribution_fields(value: dict[str, Any], key: object) -> dict[str, 
 
 
 def _build_active_worktree(
-    value: dict[str, Any],
+    value: ActiveWorktreeRecord,
     *,
     key: object,
     issue_number: int,
@@ -644,18 +782,21 @@ def _build_active_worktree(
     return active
 
 
-def _active_launch_fields(value: dict[str, Any]) -> dict[str, Any]:
-    return {
-        name: value.get(name)
-        for name in (
-            "profile",
-            "model",
-            "reasoning_effort",
-            "selection_reason",
-            "launch_attempt_id",
-            "launch_phase",
-        )
-    }
+def _active_launch_fields(value: ActiveWorktreeRecord) -> _ActiveLaunchFields:
+    return cast(
+        _ActiveLaunchFields,
+        {
+            name: value.get(name)
+            for name in (
+                "profile",
+                "model",
+                "reasoning_effort",
+                "selection_reason",
+                "launch_attempt_id",
+                "launch_phase",
+            )
+        },
+    )
 
 
 def _parse_active_worktree(key: object, value: object) -> ActiveWorktree:
@@ -699,7 +840,7 @@ def _parse_active_worktree(key: object, value: object) -> ActiveWorktree:
         )
 
     return _build_active_worktree(
-        value,
+        cast(ActiveWorktreeRecord, value),
         key=key,
         issue_number=issue_number,
         branch=branch,
@@ -711,7 +852,7 @@ def _parse_active_worktree(key: object, value: object) -> ActiveWorktree:
     )
 
 
-def parse_active_worktrees(data: dict[str, object]) -> dict[str, ActiveWorktree]:
+def parse_active_worktrees(data: Mapping[str, object]) -> dict[str, ActiveWorktree]:
     raw_active = data.get("active_worktrees", {})
     if not isinstance(raw_active, dict):
         raise ValueError("active_worktrees schema error: value must be an object")
@@ -721,12 +862,12 @@ def parse_active_worktrees(data: dict[str, object]) -> dict[str, ActiveWorktree]
 
 
 def _parse_completion_records(
-    data: dict[str, object], key: str
-) -> dict[str, dict[str, Any]]:
+    data: Mapping[str, object], key: str
+) -> dict[str, RawJson]:
     raw_records = data.get(key, {})
     if not isinstance(raw_records, dict):
         raise ValueError(f"{key} schema error: value must be an object")
-    records: dict[str, dict[str, Any]] = {}
+    records: dict[str, RawJson] = {}
     for record_key, value in raw_records.items():
         if not isinstance(record_key, str) or not isinstance(value, dict):
             raise ValueError(f"{key} schema error: entries must be named objects")
@@ -746,17 +887,23 @@ def _parse_completion_records(
                 raise ValueError(
                     f"{key} downstream policy schema_version is unsupported"
                 )
-        records[record_key] = value
+        records[record_key] = cast(RawJson, value)
     return records
 
 
-def _parse_completion_ledger(data: dict[str, Any], key: str, decoder: Any) -> dict:
+def _parse_completion_ledger(
+    data: Mapping[str, object],
+    key: str,
+    decoder: Callable[[RawJson], _Decoded],
+) -> dict[str, _Decoded]:
     """Decode one structurally valid completion map into typed values."""
     records = _parse_completion_records(data, key)
     return {record_key: decoder(raw) for record_key, raw in records.items()}
 
 
-def _parse_recovery_ledger(data: dict[str, Any]) -> dict[str, RecoveryReceiptValue]:
+def _parse_recovery_ledger(
+    data: Mapping[str, object],
+) -> dict[str, RecoveryReceiptValue]:
     records = _parse_completion_records(data, "recovery_receipts")
     return {
         record_key: decode_recovery_receipt(raw) for record_key, raw in records.items()
@@ -813,7 +960,7 @@ def load_run_state_readonly(path: str | Path) -> RunState:
     return _run_state_from_data(data)
 
 
-def _run_state_from_data(data: dict[str, Any]) -> RunState:
+def _run_state_from_data(data: RawJson) -> RunState:
     return RunState(
         active_worktrees=parse_active_worktrees(data),
         launch_history=list(data.get("launch_history", [])),
@@ -871,7 +1018,7 @@ def _retained_task_reclaim_counts(state: RunState) -> dict[int, TaskReclaimRecor
 
 def _collect_protected_completed(
     completed_worktrees: list[CompletedWorktree],
-    open_prs: Sequence[Any] | None,
+    open_prs: Sequence[_OpenPullRequest] | None,
 ) -> set[int]:
     if not open_prs:
         return set()
@@ -899,7 +1046,7 @@ def _collect_protected_completed(
 def _prune_completed_worktrees(
     completed_worktrees: list[CompletedWorktree],
     min_completed_time: float,
-    open_prs: Sequence[Any] | None,
+    open_prs: Sequence[_OpenPullRequest] | None,
     max_completed: int,
 ) -> list[CompletedWorktree]:
     protected_ids = _collect_protected_completed(completed_worktrees, open_prs)
@@ -931,7 +1078,7 @@ def prune_run_state(
     now: float | None = None,
     launch_window_seconds: float = 86400.0,
     completed_retention_seconds: float = 30 * 86400.0,
-    open_prs: Sequence[Any] | None = None,
+    open_prs: Sequence[_OpenPullRequest] | None = None,
     max_completed_worktrees: int = 500,
 ) -> RunState:
     """#214: 長期運用による run_state.json の単調肥大化を防止するための有界刈り込み処理。"""
@@ -974,7 +1121,7 @@ def _materialize_active_worktree_for_persistence(active: ActiveWorktree) -> None
     active.materialize_claim_for_persistence()
 
 
-def _active_worktree_data(active: ActiveWorktree) -> dict[str, Any]:
+def _active_worktree_data(active: ActiveWorktree) -> RawJson:
     return encode_active_worktree(active)
 
 
@@ -984,7 +1131,7 @@ def save_run_state(
     now: float | None = None,
     launch_window_seconds: float = 86400.0,
     completed_retention_seconds: float = 30 * 86400.0,
-    open_prs: Sequence[Any] | None = None,
+    open_prs: Sequence[_OpenPullRequest] | None = None,
     max_completed_worktrees: int = 500,
 ) -> None:
     path = Path(path)
@@ -999,7 +1146,7 @@ def save_run_state(
     )
     for active in state.active_worktrees.values():
         _materialize_active_worktree_for_persistence(active)
-    data: dict[str, Any] = {
+    data: _RunStateFile = {
         "active_worktrees": {
             key: _active_worktree_data(value)
             for key, value in state.active_worktrees.items()
@@ -1024,13 +1171,13 @@ def save_run_state(
     write_json_atomic(path, data)
 
 
-def _populated_optional_maps(state: RunState) -> dict[str, Any]:
+def _populated_optional_maps(state: RunState) -> _OptionalRunStateMaps:
     """Keep the established serialization of older state unchanged.
 
     The #1108 completion maps and the #1270 cooldowns appear only once populated;
     none of them is retention-pruned.
     """
-    candidates: dict[str, Any] = {
+    candidates: _OptionalRunStateMaps = {
         "completion_journal": {
             key: encode_completion_value(value)
             for key, value in state.completion_journal.items()
@@ -1049,7 +1196,10 @@ def _populated_optional_maps(state: RunState) -> dict[str, Any]:
         },
         "usage_limit_cooldowns": dict(state.usage_limit_cooldowns),
     }
-    return {name: value for name, value in candidates.items() if value}
+    return cast(
+        _OptionalRunStateMaps,
+        {name: value for name, value in candidates.items() if value},
+    )
 
 
 def usage_limit_wait(

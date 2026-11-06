@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
-from typing import Any, TypeVar
+from typing import Any, TypedDict, TypeVar, Unpack, cast
 
 from orchestune.ledger.preserved_json import _preserved_json
 from orchestune.outcome_record import VALID_RESULTS
@@ -18,6 +18,81 @@ from orchestune.ownership_contracts import (
     required_text,
     validate_fixed_outcome,
 )
+
+RawJson = dict[str, Any]
+
+
+class OutcomePayload(TypedDict, total=False):
+    issue: int
+    issue_number: int
+    result: str
+    body: str
+    head_sha: str | None
+    pr: int
+    reason: str
+    outcome: str
+    extra: list[object]
+
+
+class PostingEvidence(TypedDict, total=False):
+    comment_id: str | None
+    comment_url: str | None
+
+
+class LabelEvidence(TypedDict, total=False):
+    status: str
+    observed_labels: list[str] | tuple[str, ...]
+    target_label: str
+
+
+class PrepublicationPolicyEvidence(TypedDict, total=False):
+    decision: str
+    escalation: RawJson
+    context: RawJson
+    initial_issue: RawJson
+    validation: RawJson
+    limit: object
+    usage: object
+    config: object
+    error: str
+
+
+class CompletionAdvanceEvidence(TypedDict, total=False):
+    posting_evidence: PostingEvidence | None
+    label_evidence: LabelEvidence | None
+    prepublication_policy_evidence: PrepublicationPolicyEvidence | None
+    downstream_policy_records: tuple[DownstreamPolicyRecord, ...]
+
+
+class CompletionJournalJson(TypedDict):
+    schema_version: int
+    repository_id: str
+    issue_number: int
+    generation_id: str
+    completion_id: str
+    owner_token_digest: str
+    request_fingerprint: str
+    result: str
+    target_label: str
+    outcome_payload: OutcomePayload
+    stage: str
+    posting_evidence: PostingEvidence | None
+    label_evidence: LabelEvidence | None
+    prepublication_policy_evidence: PrepublicationPolicyEvidence | None
+    downstream_policy_records: dict[str, RawJson]
+
+
+class CompletionReservationJson(TypedDict):
+    schema_version: int
+    repository_id: str
+    issue_number: int
+    generation_id: str
+    completion_id: str
+    owner_token_digest: str
+    request_fingerprint: str
+    result: str
+    target_label: str
+    outcome_payload: OutcomePayload
 
 
 def _has_posting_evidence(comment_id: str | None, comment_url: str | None) -> bool:
@@ -47,7 +122,7 @@ class InvalidLedgerRecord:
 
     record_type: str
     reason: str
-    raw_json: dict[str, Any]
+    raw_json: RawJson
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "raw_json", deepcopy(self.raw_json))
@@ -65,17 +140,16 @@ class CompletionJournalRecord:
     request_fingerprint: str
     result: str
     target_label: str
-    outcome_payload: dict[str, Any]
+    outcome_payload: OutcomePayload
     stage: CompleteStage
-    posting_evidence: dict[str, Any] | None = None
-    label_evidence: dict[str, Any] | None = None
-    prepublication_policy_evidence: dict[str, Any] | None = None
+    posting_evidence: PostingEvidence | None = None
+    # Callers may pass a plain dict with these keys before it is stored.
+    label_evidence: LabelEvidence | dict[str, str | list[str]] | None = None
+    prepublication_policy_evidence: PrepublicationPolicyEvidence | None = None
     downstream_policy_records: tuple[DownstreamPolicyRecord, ...] = ()
     schema_version: int = _COMPLETION_SCHEMA_VERSION
-    _codec_source_json: dict[str, Any] | None = field(
-        default=None, repr=False, compare=False
-    )
-    _codec_original_fields: dict[str, Any] | None = field(
+    _codec_source_json: RawJson | None = field(default=None, repr=False, compare=False)
+    _codec_original_fields: RawJson | None = field(
         default=None, repr=False, compare=False
     )
 
@@ -113,7 +187,9 @@ class CompletionJournalRecord:
     def _validate_payload(self) -> None:
         if not isinstance(self.outcome_payload, dict):
             raise ValueError("outcome_payload must be an object")
-        validate_fixed_outcome(self.outcome_payload, self.issue_number, self.result)
+        validate_fixed_outcome(
+            cast(RawJson, self.outcome_payload), self.issue_number, self.result
+        )
         if not isinstance(self.stage, CompleteStage):
             try:
                 object.__setattr__(self, "stage", CompleteStage(self.stage))
@@ -174,23 +250,23 @@ class CompletionJournalRecord:
             CompleteStage.LABEL_CONFIRMED,
             CompleteStage.HANDED_OFF,
         }:
-            evidence = self.posting_evidence
-            if not evidence or not _has_posting_evidence(
-                evidence.get("comment_id"), evidence.get("comment_url")
+            posting = self.posting_evidence
+            if not posting or not _has_posting_evidence(
+                posting.get("comment_id"), posting.get("comment_url")
             ):
                 raise ValueError(
                     "outcome-posted stage requires durable comment id and url"
                 )
         if self.stage in {CompleteStage.LABEL_CONFIRMED, CompleteStage.HANDED_OFF}:
-            evidence = self.label_evidence
+            confirmed = self.label_evidence
             if (
-                not evidence
-                or evidence.get("status") != CompletionLabelStatus.CONFIRMED.value
+                not confirmed
+                or confirmed.get("status") != CompletionLabelStatus.CONFIRMED.value
             ):
                 raise ValueError(
                     "label-confirmed stage requires confirmed label evidence"
                 )
-            observed = evidence.get("observed_labels")
+            observed = confirmed.get("observed_labels")
             if (
                 not isinstance(observed, list | tuple)
                 or self.target_label not in observed
@@ -216,8 +292,8 @@ class CompletionJournalRecord:
     def receipt_key(self) -> str:
         return self.journal_key
 
-    def to_dict(self) -> dict[str, Any]:
-        current = {
+    def to_dict(self) -> RawJson:
+        current: CompletionJournalJson = {
             "schema_version": self.schema_version,
             "repository_id": self.repository_id,
             "issue_number": self.issue_number,
@@ -230,7 +306,7 @@ class CompletionJournalRecord:
             "outcome_payload": self.outcome_payload,
             "stage": self.stage.value,
             "posting_evidence": self.posting_evidence,
-            "label_evidence": self.label_evidence,
+            "label_evidence": cast(LabelEvidence | None, self.label_evidence),
             "prepublication_policy_evidence": self.prepublication_policy_evidence,
             "downstream_policy_records": {
                 record.policy_key: record.to_dict()
@@ -238,11 +314,13 @@ class CompletionJournalRecord:
             },
         }
         return _preserved_json(
-            self._codec_source_json, self._codec_original_fields, current
+            self._codec_source_json,
+            self._codec_original_fields,
+            cast(RawJson, current),
         )
 
     @classmethod
-    def from_dict(cls, value: dict[str, Any]) -> CompletionJournalRecord:
+    def from_dict(cls, value: RawJson) -> CompletionJournalRecord:
         if (
             not isinstance(value, dict)
             or value.get("schema_version") != _COMPLETION_SCHEMA_VERSION
@@ -273,7 +351,9 @@ class CompletionJournalRecord:
         object.__setattr__(record, "_codec_original_fields", deepcopy(record.to_dict()))
         return record
 
-    def advance(self, stage: CompleteStage, **evidence: Any) -> CompletionJournalRecord:
+    def advance(
+        self, stage: CompleteStage, **evidence: Unpack[CompletionAdvanceEvidence]
+    ) -> CompletionJournalRecord:
         if not can_transition(self.stage, stage):
             raise ValueError(
                 f"invalid completion stage transition: {self.stage.value} -> {stage.value}"
@@ -301,12 +381,10 @@ class CompletionReservation:
     request_fingerprint: str
     result: str
     target_label: str
-    outcome_payload: dict[str, Any]
+    outcome_payload: OutcomePayload
     schema_version: int = _COMPLETION_SCHEMA_VERSION
-    _codec_source_json: dict[str, Any] | None = field(
-        default=None, repr=False, compare=False
-    )
-    _codec_original_fields: dict[str, Any] | None = field(
+    _codec_source_json: RawJson | None = field(default=None, repr=False, compare=False)
+    _codec_original_fields: RawJson | None = field(
         default=None, repr=False, compare=False
     )
 
@@ -328,7 +406,9 @@ class CompletionReservation:
             self.outcome_payload, dict
         ):
             raise ValueError("reservation result or outcome_payload is invalid")
-        validate_fixed_outcome(self.outcome_payload, self.issue_number, self.result)
+        validate_fixed_outcome(
+            cast(RawJson, self.outcome_payload), self.issue_number, self.result
+        )
         if (
             not isinstance(self.schema_version, int)
             or isinstance(self.schema_version, bool)
@@ -342,8 +422,8 @@ class CompletionReservation:
     def reservation_key(self) -> str:
         return reservation_key_for(self.repository_id, self.issue_number)
 
-    def to_dict(self) -> dict[str, Any]:
-        current = {
+    def to_dict(self) -> RawJson:
+        current: CompletionReservationJson = {
             "schema_version": self.schema_version,
             "repository_id": self.repository_id,
             "issue_number": self.issue_number,
@@ -356,11 +436,13 @@ class CompletionReservation:
             "outcome_payload": self.outcome_payload,
         }
         return _preserved_json(
-            self._codec_source_json, self._codec_original_fields, current
+            self._codec_source_json,
+            self._codec_original_fields,
+            cast(RawJson, current),
         )
 
     @classmethod
-    def from_dict(cls, value: dict[str, Any]) -> CompletionReservation:
+    def from_dict(cls, value: RawJson) -> CompletionReservation:
         if (
             not isinstance(value, dict)
             or value.get("schema_version") != _COMPLETION_SCHEMA_VERSION
@@ -407,11 +489,11 @@ class CompletionReplayReceipt:
     def receipt_key(self) -> str:
         return self.record.receipt_key
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> RawJson:
         return self.record.to_dict()
 
     @classmethod
-    def from_dict(cls, value: dict[str, Any]) -> CompletionReplayReceipt:
+    def from_dict(cls, value: RawJson) -> CompletionReplayReceipt:
         return cls(CompletionJournalRecord.from_dict(value))
 
 
@@ -425,8 +507,8 @@ _DecodedRecord = TypeVar("_DecodedRecord")
 
 def _decode_record(
     record_type: str,
-    raw: dict[str, Any],
-    decoder: Callable[[dict[str, Any]], _DecodedRecord],
+    raw: RawJson,
+    decoder: Callable[[RawJson], _DecodedRecord],
 ) -> _DecodedRecord | InvalidLedgerRecord:
     try:
         return decoder(raw)
@@ -434,25 +516,30 @@ def _decode_record(
         return InvalidLedgerRecord(record_type, str(error), raw)
 
 
-def decode_completion_journal(raw: dict[str, Any]) -> CompletionJournalValue:
+def decode_completion_journal(raw: RawJson) -> CompletionJournalValue:
     return _decode_record("completion_journal", raw, CompletionJournalRecord.from_dict)
 
 
-def decode_completion_reservation(raw: dict[str, Any]) -> CompletionReservationValue:
+def decode_completion_reservation(raw: RawJson) -> CompletionReservationValue:
     return _decode_record(
         "completion_reservations", raw, CompletionReservation.from_dict
     )
 
 
 def decode_completion_replay_receipt(
-    raw: dict[str, Any],
+    raw: RawJson,
 ) -> CompletionReplayReceiptValue:
     return _decode_record(
         "completion_replay_receipts", raw, CompletionReplayReceipt.from_dict
     )
 
 
-def encode_completion_value(value: Any) -> dict[str, Any]:
+def encode_completion_value(
+    value: InvalidLedgerRecord
+    | CompletionJournalRecord
+    | CompletionReservation
+    | CompletionReplayReceipt,
+) -> RawJson:
     if isinstance(value, InvalidLedgerRecord):
         return deepcopy(value.raw_json)
     if isinstance(

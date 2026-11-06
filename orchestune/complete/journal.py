@@ -9,10 +9,10 @@ CI validation runs before acquiring that lock.
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, overload
+from typing import Any, TypedDict, cast, overload
 from uuid import uuid4
 
 from orchestune.complete.contracts import (
@@ -40,17 +40,40 @@ from orchestune.ledger.active_records import (
 )
 from orchestune.ledger.completion_records import (
     InvalidLedgerRecord,
+    LabelEvidence,
+    PostingEvidence,
     journal_key_for,
 )
-from orchestune.ledger.run_state import load_run_state, save_run_state
+from orchestune.ledger.run_state import RunState, load_run_state, save_run_state
+
+type _JsonValue = (
+    None | bool | int | float | str | list[_JsonValue] | dict[str, _JsonValue]
+)
 
 
-def thaw_json(value: Any) -> Any:
-    """Copy immutable JSON views back into dict/list containers."""
-    if isinstance(value, Mapping):
-        return {key: thaw_json(item) for key, item in value.items()}
-    if isinstance(value, list | tuple):
-        return [thaw_json(item) for item in value]
+class _CompletionPayload(TypedDict, total=False):
+    """Outcome fields this journal reads or copies onto an active completion."""
+
+    outcome: str
+    body: str
+    issue: int
+    result: str
+    head_sha: str | None
+
+
+def thaw_json(value: _JsonValue) -> Any:
+    """Copy immutable JSON views back into dict/list containers.
+
+    Callers index an open snapshot, so this boundary stays Any.
+    """
+    raw: object = value
+    if isinstance(raw, Mapping):
+        thawed: dict[str, _JsonValue] = {}
+        for key, item in raw.items():
+            thawed[cast(str, key)] = thaw_json(cast(_JsonValue, item))
+        return thawed
+    if isinstance(raw, list | tuple):
+        return [thaw_json(cast(_JsonValue, item)) for item in raw]
     return value
 
 
@@ -91,7 +114,7 @@ def active_completion_from_record(
     record: CompletionJournalRecord,
     *,
     handoff: bool = False,
-    completion_policy_config: Any | None = None,
+    completion_policy_config: Mapping[str, object] | None = None,
 ) -> ActiveCompletionJournal:
     """Explicitly convert durable CompletionJournalRecord to transient ActiveCompletionJournal."""
     payload = {
@@ -139,15 +162,16 @@ def apply_completion_record(
     return with_completion(active, completion)
 
 
-def _to_journal(active: Any) -> CompletionJournal:
+def _to_journal(active: ActiveWorktree) -> CompletionJournal:
     completion = active.completion
-    assert completion.completion_id is not None
+    completion_id = completion.completion_id
+    assert completion_id is not None
     assert completion.completion_result is not None
     assert completion.completion_stage is not None
     return CompletionJournal(
         issue_number=active.core.issue_number,
-        claim_id=active.claim.claim_id,
-        completion_id=completion.completion_id,
+        claim_id=cast(str, active.claim.claim_id),
+        completion_id=completion_id,
         result=completion.completion_result,
         stage=completion.completion_stage,
         payload=dict(completion.completion_payload)
@@ -159,7 +183,7 @@ def _to_journal(active: Any) -> CompletionJournal:
     )
 
 
-def _save_or_raise(run_state: Any, state_path: Path) -> None:
+def _save_or_raise(run_state: RunState, state_path: Path) -> None:
     try:
         save_run_state(run_state, state_path)
     except (OSError, TypeError, ValueError) as e:
@@ -169,7 +193,9 @@ def _save_or_raise(run_state: Any, state_path: Path) -> None:
         ) from e
 
 
-def _acquire_run_state_lock(lock_path: Path, timeout_seconds: float) -> Any:
+def _acquire_run_state_lock(
+    lock_path: Path, timeout_seconds: float
+) -> AbstractContextManager[object]:
     try:
         cm = run_state_lock(lock_path, timeout=timeout_seconds)
         cm.__enter__()
@@ -182,7 +208,7 @@ def _acquire_run_state_lock(lock_path: Path, timeout_seconds: float) -> Any:
 
 
 def _apply_or_reject_conflicting_payload(
-    active: ActiveWorktree, payload: dict[str, Any] | None
+    active: ActiveWorktree, payload: _CompletionPayload | None
 ) -> tuple[ActiveWorktree, bool]:
     """Apply a first-time payload, accept an identical resend as a no-op, or
     reject a differing one.
@@ -210,8 +236,8 @@ def _resume_existing_reservation(
     issue_number: int,
     completion_id: str | None,
     result: str,
-    payload: dict[str, Any] | None,
-    run_state: Any,
+    payload: _CompletionPayload | None,
+    run_state: RunState,
     state_path: Path,
 ) -> CompletionJournal:
     """Idempotently resume an already-reserved completion, or reject the attempt."""
@@ -258,7 +284,7 @@ def _apply_handoff_evidence(
     active: ActiveWorktree,
     comment_id: str | None,
     comment_url: str | None,
-    payload: dict[str, Any] | None,
+    payload: _CompletionPayload | None,
 ) -> tuple[ActiveWorktree, bool]:
     """Apply new posting evidence onto ``active``.
 
@@ -328,14 +354,14 @@ def _invalid_completion_state(message: str) -> CompletionJournalError:
     )
 
 
-def _load_contract_state(state_path: Path) -> Any:
+def _load_contract_state(state_path: Path) -> RunState:
     try:
         return load_run_state(state_path)
     except (TypeError, ValueError) as error:
         raise _invalid_completion_state(str(error)) from error
 
 
-def _parse_contract_record(raw: Any) -> CompletionJournalRecord:
+def _parse_contract_record(raw: object) -> CompletionJournalRecord:
     if isinstance(raw, CompletionJournalRecord):
         return raw
     if isinstance(raw, InvalidLedgerRecord):
@@ -343,7 +369,7 @@ def _parse_contract_record(raw: Any) -> CompletionJournalRecord:
     raise _invalid_completion_state("completion journal value is not a typed record")
 
 
-def _parse_contract_reservation(raw: Any) -> CompletionReservation:
+def _parse_contract_reservation(raw: object) -> CompletionReservation:
     if isinstance(raw, CompletionReservation):
         return raw
     if isinstance(raw, InvalidLedgerRecord):
@@ -353,7 +379,9 @@ def _parse_contract_reservation(raw: Any) -> CompletionReservation:
     )
 
 
-def _has_durable_handoff_receipt(state: Any, record: CompletionJournalRecord) -> bool:
+def _has_durable_handoff_receipt(
+    state: RunState, record: CompletionJournalRecord
+) -> bool:
     return (
         record.stage is CompleteStage.HANDED_OFF
         and state.completion_replay_receipts.get(record.receipt_key)
@@ -362,7 +390,7 @@ def _has_durable_handoff_receipt(state: Any, record: CompletionJournalRecord) ->
 
 
 def _new_contract_record(
-    state: Any, candidate: CompletionJournalRecord
+    state: RunState, candidate: CompletionJournalRecord
 ) -> CompletionJournalRecord | None:
     raw = state.completion_journal.get(candidate.journal_key)
     if raw is not None:
@@ -439,7 +467,7 @@ def _validate_reservation_request(
 def _resume_reserved_contract(
     record: CompletionJournalRecord,
     current: CompletionJournalRecord | None,
-    raw_reservation: Any,
+    raw_reservation: object,
     owner_token: str,
 ) -> CompletionJournalRecord:
     reservation = _parse_contract_reservation(raw_reservation)
@@ -471,7 +499,7 @@ def _resume_reserved_contract(
 
 
 def _allow_terminal_generation_replacement(
-    state: Any,
+    state: RunState,
     reservation: CompletionReservation,
     candidate: CompletionJournalRecord,
 ) -> None:
@@ -556,7 +584,7 @@ def _reserve_legacy_completion(
     owner_token: str,
     result: str,
     completion_id: str | None,
-    payload: dict[str, Any] | None,
+    payload: _CompletionPayload | None,
     state_path: Path,
     timeout_seconds: float,
 ) -> CompletionJournal:
@@ -616,7 +644,7 @@ def reserve_completion(
     owner_token: str = "",
     result: str,
     completion_id: str | None = None,
-    payload: dict[str, Any] | None = None,
+    payload: _CompletionPayload | None = None,
     state_path: Path,
     timeout_seconds: float = 0.0,
 ) -> CompletionJournal: ...
@@ -629,7 +657,7 @@ def reserve_completion(
     owner_token: str | None = None,
     result: str | None = None,
     completion_id: str | None = None,
-    payload: dict[str, Any] | None = None,
+    payload: _CompletionPayload | None = None,
     state_path: Path,
     timeout_seconds: float = 0.0,
     record: CompletionJournalRecord | None = None,
@@ -667,7 +695,7 @@ def _mark_legacy_handoff_ready(
     *,
     comment_id: str | None = None,
     comment_url: str | None = None,
-    payload: dict[str, Any] | None = None,
+    payload: _CompletionPayload | None = None,
     state_path: Path,
     timeout_seconds: float = 0.0,
 ) -> CompletionJournal:
@@ -721,7 +749,7 @@ def _mark_legacy_handoff_ready(
 
 
 def _load_contract_for_update(
-    run_state: Any,
+    run_state: RunState,
     candidate: CompletionJournalRecord,
     owner_token: str,
 ) -> CompletionJournalRecord:
@@ -772,7 +800,10 @@ def record_posting_evidence(
     with completion_journal_lock(state_path, timeout_seconds):
         run_state = _load_contract_state(state_path)
         persisted = _load_contract_for_update(run_state, record, owner_token)
-        evidence = {"comment_id": comment_id, "comment_url": comment_url}
+        evidence: PostingEvidence = {
+            "comment_id": comment_id,
+            "comment_url": comment_url,
+        }
         if persisted.stage is not CompleteStage.RESERVED:
             if persisted.posting_evidence != evidence:
                 raise CompletionJournalError(
@@ -807,7 +838,7 @@ def record_label_confirmation(
             CompleteFailureReason.LABEL_CONFLICT,
             "Observed target label does not match the reserved completion label",
         )
-    evidence = {
+    evidence: LabelEvidence = {
         "status": result.status.value,
         "target_label": result.target_label,
         "observed_labels": sorted(set(result.observed_labels)),
@@ -874,7 +905,7 @@ def mark_handoff_ready(
     *,
     comment_id: str | None = None,
     comment_url: str | None = None,
-    payload: dict[str, Any] | None = None,
+    payload: _CompletionPayload | None = None,
     state_path: Path,
     timeout_seconds: float = 0.0,
 ) -> CompletionJournal: ...
@@ -895,7 +926,7 @@ def mark_handoff_ready(
     *,
     comment_id: str | None = None,
     comment_url: str | None = None,
-    payload: dict[str, Any] | None = None,
+    payload: _CompletionPayload | None = None,
     owner_token: str | None = None,
     state_path: Path,
     timeout_seconds: float = 0.0,
