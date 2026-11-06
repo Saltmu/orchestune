@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -144,6 +145,8 @@ def _run_basic_questions(doc: ConfigDocument, prompt: PromptPort) -> None:
         curr = doc.get_value(q.key)
         suggested = curr
         if q.key == "ci-command":
+            if isinstance(curr, list):
+                suggested = shlex.join(curr)
             candidates = suggest_ci_commands(doc.target_path.parent)
             if curr is None and candidates:
                 suggested = candidates[0]
@@ -156,6 +159,8 @@ def _run_basic_questions(doc: ConfigDocument, prompt: PromptPort) -> None:
             if curr is None:
                 suggested = reviewer
         new_val = _ask_single_question(q, suggested, prompt)
+        if q.key == "ci-command" and isinstance(curr, list) and new_val == suggested:
+            new_val = curr
         if new_val is not None:
             doc.set_value(q.key, new_val)
         elif curr is not None and new_val is None and q.allow_unset:

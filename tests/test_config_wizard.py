@@ -209,3 +209,40 @@ def test_dispatch_target_question_offers_grok_cli():
     assert question.choices is not None
     assert "grok-cli" in question.choices
     assert "grok-cli" in question.help_text
+
+
+@pytest.mark.parametrize(
+    "reviewer, override", [("codex", None), ("auto", None), (None, "codex")]
+)
+def test_existing_ci_and_reviewer_defaults_are_preserved(
+    tmp_path, monkeypatch, reviewer, override
+):
+    from orchestune.config_wizard.document import ConfigDocument
+    from orchestune.config_wizard.wizard import _run_basic_questions
+
+    monkeypatch.setattr(
+        wizard.shutil, "which", lambda name: name if name == "claude" else None
+    )
+    doc = ConfigDocument.load(tmp_path, mode="init")
+    doc.set_value("dispatch-target", "claude-cli")
+    doc.set_value("ci-command", ["python", "check with spaces.py"])
+    if reviewer:
+        doc.set_value("reviewer-bot", reviewer)
+    if override:
+        doc.set_value("reviewer_by_target", {"claude-cli": override})
+    defaults = {}
+
+    class Prompt(MockPromptPort):
+        def prompt_text(self, message, default=None, allow_empty=True):
+            defaults["ci"] = default
+            return default
+
+        def prompt_choice(self, message, choices, default=None, allow_empty=True):
+            if "reviewer-bot" in message:
+                defaults["reviewer"] = default
+            return default
+
+    _run_basic_questions(doc, Prompt())
+    assert defaults["ci"] == "python 'check with spaces.py'"
+    assert defaults["reviewer"] == reviewer
+    assert doc.get_value("ci-command") == ["python", "check with spaces.py"]
