@@ -42,13 +42,12 @@ def duplicate_marker(pr: PrRecord) -> str:
     return f"<!-- orchestune:duplicate-pr:{pr.number}:{pr.head_sha} -->"
 
 
-def validate_escalation_reason(
+def _adoption_reason(
     comments: Sequence[dict[str, Any]],
-    marker: str,
+    marker: str | None,
+    duplicate: str | None,
     trusted: Callable[[dict[str, Any]], bool],
-    *,
-    duplicate: str | None = None,
-) -> None:
+) -> str:
     relevant = [
         comment
         for comment in comments
@@ -56,15 +55,28 @@ def validate_escalation_reason(
         or "<!-- orchestune:orphaned-pr:" in str(comment.get("body", ""))
         or "<!-- orchestune:duplicate-pr:" in str(comment.get("body", ""))
     ]
-    if (
-        not relevant
-        or not any(
-            value and value in str(relevant[-1].get("body", ""))
-            for value in (marker, duplicate)
-        )
-        or not trusted(relevant[-1])
-    ):
-        raise ValueError("Latest escalation is not a trusted matching orphan PR notice")
+    if not relevant:
+        raise ValueError("Latest escalation is not a trusted matching PR notice")
+    latest = relevant[-1]
+    body = str(latest.get("body", ""))
+    reasons = [
+        reason
+        for reason, value in (("orphaned-pr", marker), ("duplicate-pr", duplicate))
+        if value and value in body
+    ]
+    if len(reasons) != 1 or not trusted(latest):
+        raise ValueError("Latest escalation is not a trusted matching PR notice")
+    return reasons[0]
+
+
+def validate_escalation_reason(
+    comments: Sequence[dict[str, Any]],
+    marker: str,
+    trusted: Callable[[dict[str, Any]], bool],
+    *,
+    duplicate: str | None = None,
+) -> None:
+    _adoption_reason(comments, marker, duplicate, trusted)
 
 
 def validate_adoption_pr(
@@ -236,6 +248,41 @@ def _check_active_claims(
         raise ValueError("An active claim still exists for the issue")
 
 
+def _validate_adoption_notice_and_receipt(
+    state: RunState,
+    repository: str,
+    issue_number: int,
+    pr: PrRecord,
+    forge: Forge,
+    stopped: Callable[[ActiveWorktree], bool],
+    allowed_claim_id: str | None,
+) -> None:
+    _check_active_claims(state, issue_number, allowed_claim_id)
+    records = _orphan_records(state, repository, issue_number)
+    old_claim_id = None
+    if len(records) == 1 and isinstance(records[0][1], OrphanedPrReceipt):
+        old_claim_id = records[0][1].active.value.claim.claim_id
+    trust = TrustContext(forge)
+    reason = _adoption_reason(
+        forge.list_all_issue_comments(issue_number),
+        orphan_marker(old_claim_id, pr) if old_claim_id else None,
+        duplicate_marker(pr),
+        lambda comment: trust.evaluate_candidate_markers([comment])[0]
+        is NoticePresence.PRESENT,
+    )
+    if reason == "orphaned-pr" or records:
+        old = validate_orphan_evidence(
+            state,
+            repository,
+            issue_number,
+            pr,
+            stopped,
+            allowed_claim_id=allowed_claim_id,
+        )
+        if reason == "orphaned-pr" and old.claim.claim_id != old_claim_id:
+            raise ValueError("Orphan execution evidence does not match the notice")
+
+
 def validate_adoption_evidence(
     pr: PrRecord,
     issue_number: int,
@@ -263,21 +310,14 @@ def validate_adoption_evidence(
             )
         return old.launch.pid is not None and old.launch.started_at is not None
 
-    old = validate_orphan_evidence(
+    _validate_adoption_notice_and_receipt(
         state,
         workspace.repository_identity,
         issue_number,
         pr,
+        forge,
         stopped,
-        allowed_claim_id=allowed_claim_id,
-    )
-    trust = TrustContext(forge)
-    validate_escalation_reason(
-        forge.list_comments(issue_number),
-        orphan_marker(old.claim.claim_id or "", pr),
-        lambda comment: trust.evaluate_candidate_markers([comment])[0]
-        is NoticePresence.PRESENT,
-        duplicate=duplicate_marker(pr),
+        allowed_claim_id,
     )
     tip = git(
         ["ls-remote", "--heads", "origin", f"refs/heads/{pr.head_ref}"],

@@ -906,7 +906,7 @@ orchestune claim 123
 | :--- | :--- | :--- |
 | `--no-apply` | 無効 | Git、GitHub、台帳の変更を行わず、事前検証と予定値の表示のみを行うプレビュー（ドライラン）モード。 |
 | `--resume <claim_id>` | なし | 途中停止した既存の claim を、期待する世代と登録worktreeを照合して再開する。 |
-| `--adopt-pr <番号>` | なし | 検証済みの孤立 PR を `status:blocked-human-review` から claim する。`--resume`、`--amend-footprint` とは併用不可。 |
+| `--adopt-pr <番号>` | なし | 検証済みの孤立 PR または duplicate-pr 通知の PR を `status:blocked-human-review` から claim する。`--resume`、`--amend-footprint` とは併用不可。 |
 | `--amend-footprint` | 無効 | 保持中の claim のファイル予約を拡張する。`--resume` とは併用不可。詳細は後述。 |
 | `--add-path <path>` | なし | 保持中の claim のファイル予約に追加するパス（複数指定可。`--amend-footprint` と併用）。 |
 | `--state <path>` | `run_state.json` | 実行状態台帳ファイルのパスを指定。 |
@@ -924,9 +924,9 @@ cd <表示されたworktree>
 orchestune complete --issue <issue> --pr <pr> --result done --reviewer <bot> --review-reply <file>
 ```
 
-旧実行の記録と停止状態、信頼できる対応するエスカレーション通知、同一リポジトリの一意な open PR、正規 head ブランチ、親 base、リモート HEAD の一致を確認します。証跡の欠落・曖昧さ、他の claim、未完了の completion、fork、HEAD の変更があれば拒否します。PR 番号と HEAD は claim に結び付けられ、その後 HEAD が変わると完了できません。通常のローカル CI とレビュー証跡のゲートも必要です。手動マージは Layer-1 ゲートを通らない代替手段です。
+最新の信頼できる通知が現在の PR 番号と HEAD に一致すること、同一リポジトリの一意な open PR、正規 head ブランチ、親 base、リモート HEAD の一致を確認します。`orphaned-pr` 通知では旧実行の一意な記録と停止確認を必須とします。`duplicate-pr` 通知に対応する孤立 receipt がない場合は、競合する claim や未完了 completion などの通常の admission gate を通れば引き継げます。孤立 receipt が残っている場合は `orphaned-pr` と同じ厳密な検証と停止確認を行います。receipt がない duplicate-pr では台帳外の旧実行が止まっていることを `--adopt-pr` の前に運用者が確認してください。通知や証跡の欠落・曖昧さ、他の claim、未完了の completion、fork、HEAD の変更があれば拒否します。PR 番号と HEAD は claim に結び付けられ、その後 HEAD が変わると完了できません。通常のローカル CI とレビュー証跡のゲートも必要です。手動マージは Layer-1 ゲートを通らない代替手段です。
 
-孤立通知の後に `status:blocked-human-review` に言及するコメントがあると、最新のエスカレーション理由を特定できず、引き継ぎが拒否されることがあります。
+新しい不一致通知、信頼できない通知、PR/HEAD と一致しない marker が後から追加された場合は、最新通知が一致しないため拒否されます。
 
 ### 失敗時の対応
 
