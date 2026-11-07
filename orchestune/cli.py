@@ -142,6 +142,12 @@ _COMMAND_SPECS: tuple[_Command, ...] = (
         exit_with_return=True,
     ),
     _Command(
+        "reviewer",
+        "Resolve the interactive review bot (read-only)",
+        "orchestune.dispatch.reviewer_cli",
+        exit_with_return=True,
+    ),
+    _Command(
         "config",
         "Create or edit orchestune.toml interactively",
         "orchestune.config_wizard.cli",

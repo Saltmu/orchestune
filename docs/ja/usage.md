@@ -694,6 +694,14 @@ grok-cli   = "codex"
 - 不正なキーや値は起動時に設定エラーになります。テーブル名は `reviewer-by-target` とも書けますが、同時に両方は書けません。
 - 設定ウィザードはこの表を質問しません。手で書いてください。
 
+対話モードの初回レビュー担当は、次の読み取り専用コマンドで決めます。GitHubへは書き込みません。標準出力は `claude`、`codex`、`skip` のいずれか1つです。`--json` は `target`、`reviewer`、`source`、`config_source` を出します。`--override` は設定より優先されます。設定が壊れているとき、または `local` のように解決できないターゲットのときは、推測した担当を出さずに終了コード1で止まります。ただし `--override` を渡したときはその値を出します。後続ラウンドは、投稿済みtriggerの担当を継承し、設定を読み直して切り替えません。
+
+```bash
+orchestune reviewer resolve --target codex-cli
+orchestune reviewer resolve --target grok-cli --override skip
+orchestune reviewer resolve --target codex-cli --json
+```
+
 ---
 
 ## 5. 統合（Integration）と自動リベース
@@ -757,7 +765,7 @@ Orchestuneでは、子タスクから親ブランチ（`parent/issue-{N}`）へ�
 
 | 担当 | 責務 |
 | :--- | :--- |
-| 開発スキル（レビューループ・Step 11） | 対話モードでは着手依頼の直後（claim前）にDispatcher起動時と同じポリシー（またはプロンプトでの明示指定）でreviewer botを解決して記録し、PR作成後は再質問せずその選択で子PR上のレビューを実行し、指摘ごとにLLMの判断（`adopt` / `decline` / `already_addressed` / `needs_information` / `duplicate`）を判断表へ記録する。 |
+| 開発スキル（レビューループ・Step 11） | 対話モードでは着手依頼の直後（claim前）に `orchestune reviewer resolve` の結果を記録し、PR作成後はその値で子PR上のレビューを実行する。後続ラウンドは投稿済みtriggerの担当を継承し、設定の再読込では切り替えない。指摘ごとにLLMの判断（`adopt` / `decline` / `already_addressed` / `needs_information` / `duplicate`）を判断表へ記録する。 |
 | `orchestune complete --issue <N> --pr <PR> --result done --reviewer <bot> --review-reply <file>` | PRのレビュー状態を取得し直し、判断表が現在の全指摘を網羅していること、`unresolved`が残っていないこと、`needs_information`と必須指摘（`adopt`）の`deferred`は最終巡（`MAX_REVIEW_ROUNDS`＝5巡以上）に限り、`evidence`がこのリポジトリのOPENなフォローアップIssue（PR・CLOSED・別リポジトリ・タスク自身は不可）を指す場合だけ許可されること（`required_deferred`として件数を記録。参照の取得に失敗した場合は`evidence_missing`）、レビュー対象SHAがPRのheadおよびローカルHEADと一致することを確認する。`verdict`・`reviewed_head_sha`・判断表のdigestをdone Outcome Recordへ保存する。不一致の場合はcompleteを拒否し（`review_evidence_invalid`・`review_head_mismatch`・`evidence_missing`）、何も投稿しない。`skip`は`verdict=skipped`として記録され、合格にはならない。 |
 | Integrator | 保存済みの証跡を検証するだけで、レビュー自体は実行しない。 |
 

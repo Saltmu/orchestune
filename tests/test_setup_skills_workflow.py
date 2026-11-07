@@ -358,7 +358,8 @@ def test_setup_skills_with_workflow_skill_distributes_modern_portability_procedu
         and "agy-cli" in skill_md
         and "grok-cli" in skill_md
     )
-    assert "`local` and unlisted targets have no default" in skill_md.lower()
+    assert "orchestune reviewer resolve --target" in skill_md
+    assert "do not reimplement the mapping" in skill_md.lower()
     assert "unresolved uses `--bot-name skip` without asking user" in skill_md
     assert "bypass" in skill_md.lower()
 

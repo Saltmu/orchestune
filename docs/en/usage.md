@@ -710,6 +710,14 @@ grok-cli   = "codex"
 - An invalid key or value is a configuration error at startup. The table may also be spelled `reviewer-by-target`, but not both at once.
 - The configuration wizard does not ask about this table; write it by hand.
 
+The first interactive review bot is chosen with this read-only command. It does not write to GitHub. Plain output is one of `claude`, `codex`, or `skip`. `--json` includes `target`, `reviewer`, `source`, and `config_source`. `--override` wins over config. Invalid config, or a target such as `local` that cannot be resolved, exits 1 and prints no guessed reviewer. An `--override` still prints that value. Later rounds inherit the reviewer on the posted trigger and do not switch because the config was reread.
+
+```bash
+orchestune reviewer resolve --target codex-cli
+orchestune reviewer resolve --target grok-cli --override skip
+orchestune reviewer resolve --target codex-cli --json
+```
+
 ---
 
 ## 5. Integration & Auto-Rebase
@@ -773,7 +781,7 @@ Orchestune uses a two-tier review gate architecture for integrating child tasks 
 
 | Actor | Responsibility |
 | :--- | :--- |
-| Development skill (review loop, Step 11) | In interactive mode, resolves reviewer bot using the Dispatcher policy (or explicit prompt request) right after the start request (before claim) and records it; after the PR is created, runs the review on the child PR with that selection without re-asking, and records an LLM judgment (`adopt` / `decline` / `already_addressed` / `needs_information` / `duplicate`) for every finding in a judgment table. |
+| Development skill (review loop, Step 11) | In interactive mode, runs `orchestune reviewer resolve` right after the start request (before claim) and records the printed reviewer; after the PR is created, runs the review on the child PR with that recorded value. Later rounds inherit the posted trigger and do not switch because config was reread. Records an LLM judgment (`adopt` / `decline` / `already_addressed` / `needs_information` / `duplicate`) for every finding in a judgment table. |
 | `orchestune complete --issue <N> --pr <PR> --result done --reviewer <bot> --review-reply <file>` | Re-acquires the PR's review state and checks that the table covers every current finding, that none is `unresolved`, that a `needs_information` or required (`adopt`) `deferred` row appears only in the final round (round >= `MAX_REVIEW_ROUNDS`, 5) and whose `evidence` names an OPEN follow-up Issue of this repository (never a PR, a closed Issue, another repository or the task itself; a lookup failure is `evidence_missing`), counted as `required_deferred`, and that the review target SHA equals the PR head and the local HEAD. It saves `verdict`, `reviewed_head_sha` and the judgment digest in the done Outcome Record. On any mismatch it rejects the completion (`review_evidence_invalid`, `review_head_mismatch` or `evidence_missing`) and posts nothing. `skip` is recorded as `verdict=skipped`, never as a pass. |
 | Integrator | Only verifies the saved evidence; it never runs a review. |
 
