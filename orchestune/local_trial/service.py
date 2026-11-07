@@ -263,11 +263,7 @@ def _handle_plan_error(
     err: TrialError,
     deps: TrialDependencies,
 ) -> TrialState:
-    pending = (
-        state.pending_attempt
-        if err.code == "interrupted"
-        else None
-    )
+    pending = state.pending_attempt if err.code == "interrupted" else None
     new_state = replace(
         state,
         pending_attempt=pending,
@@ -309,7 +305,11 @@ def _run_plan_stage(
     deps.store.save(state, expected_revision=state.revision - 1)
 
     try:
-        req_candidates = (preferred_ci,) if preferred_ci is not None and not candidates else candidates
+        req_candidates = (
+            (preferred_ci,)
+            if preferred_ci is not None and not candidates
+            else candidates
+        )
         req = build_agent_request(
             state, plan_inp, diff="", previous_results=(), ci_candidates=req_candidates
         )
@@ -467,6 +467,24 @@ def _commit_implementation(state: TrialState, deps: TrialDependencies) -> TrialS
     return state
 
 
+def _create_attempt_input(
+    state: TrialState, deps: TrialDependencies, kind: AttemptKind
+) -> AttemptInput:
+    att_id = deps.new_id()
+    return AttemptInput(
+        trial_id=state.trial_id,
+        attempt_id=att_id,
+        kind=kind,
+        input_head_sha=state.head_sha,
+        base_sha=state.repository.base_sha,
+        plan_digest=state.approved_plan_digest,
+        plan_revision=state.budget.plan_revision,
+        cwd=state.workspace.implementation_path,
+        artifact_dir=f"{state.workspace.implementation_path}/.orchestune/artifacts/{att_id}",
+        started_at=deps.clock(),
+    )
+
+
 def _execute_implement(state: TrialState, deps: TrialDependencies) -> TrialState:
     if state.budget.cycles_started >= 3:
         state = replace(
@@ -482,19 +500,7 @@ def _execute_implement(state: TrialState, deps: TrialDependencies) -> TrialState
         AttemptKind.IMPLEMENT if state.budget.cycles_started == 0 else AttemptKind.FIX
     )
     budget = replace(state.budget, cycles_started=state.budget.cycles_started + 1)
-    att_id = deps.new_id()
-    att_inp = AttemptInput(
-        trial_id=state.trial_id,
-        attempt_id=att_id,
-        kind=kind,
-        input_head_sha=state.head_sha,
-        base_sha=state.repository.base_sha,
-        plan_digest=state.approved_plan_digest,
-        plan_revision=state.budget.plan_revision,
-        cwd=state.workspace.implementation_path,
-        artifact_dir=f"{state.workspace.implementation_path}/.orchestune/artifacts/{att_id}",
-        started_at=deps.clock(),
-    )
+    att_inp = _create_attempt_input(state, deps, kind)
     state = replace(
         state, budget=budget, pending_attempt=att_inp, revision=state.revision + 1
     )
@@ -519,7 +525,7 @@ def _execute_implement(state: TrialState, deps: TrialDependencies) -> TrialState
     state = replace(
         state,
         pending_attempt=None,
-        attempt_ids=(*state.attempt_ids, att_id),
+        attempt_ids=(*state.attempt_ids, att_inp.attempt_id),
         responses=responses,
     )
     return _commit_implementation(state, deps)
@@ -619,9 +625,7 @@ def _handle_ci_result(
             state.checkpoint,
         )
 
-    pending_att = (
-        state.pending_attempt if proc_rec.stop_confirmed is False else None
-    )
+    pending_att = state.pending_attempt if proc_rec.stop_confirmed is False else None
 
     return replace(
         state,
