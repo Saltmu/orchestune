@@ -462,6 +462,22 @@ class TestInteractiveFlowAndExitCodes:
             code = main(["resume", trial_id])
             assert code == 130
 
+    @pytest.mark.parametrize("err_code", ["agent_failed", "ci_failed", "review_failed"])
+    def test_resume_trial_error_execution_failure_returns_one(self, err_code):
+        trial_id = "1" * 32
+        fake_deps = _make_fake_deps()
+        with (
+            patch.object(trial_cli, "make_dependencies", return_value=fake_deps),
+            patch.object(
+                trial_cli,
+                "resume_trial",
+                side_effect=TrialError(err_code, f"Execution failed: {err_code}"),
+            ),
+            patch("sys.stdin.isatty", return_value=False),
+        ):
+            code = main(["resume", trial_id])
+            assert code == 1
+
 
 class TestStatusAndResult:
     def test_status_returns_zero_even_when_needs_attention(self, capsys):

@@ -557,6 +557,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Error ({exc.code}): {exc.message}", file=sys.stderr)
         if exc.code == "interrupted":
             return 130
+        if exc.code in ("agent_failed", "ci_failed", "review_failed"):
+            return 1
         return 2
     except Exception as exc:  # noqa: BLE001 - boundary: render unexpected trial failures safely
         print(f"Error: {exc}", file=sys.stderr)
