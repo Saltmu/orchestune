@@ -44,6 +44,47 @@ class TestParseCiCommand:
         with pytest.raises(ConfigError, match="string or list of strings"):
             parse_ci_command(123)  # type: ignore
 
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            r"C:\tools\ci.bat",
+            r".\scripts\ci.bat",
+            r".\scripts\ci.sh",
+            r"scripts\ci.bat",
+            r"..\scripts\ci.bat",
+            r"\scripts\ci.bat",
+            r"powershell -File .\scripts\local-ci.ps1",
+            r"C:\bin\ci.bat -v",
+        ],
+    )
+    def test_parse_windows_path_separator_in_string_raises(self, cmd):
+        with pytest.raises(
+            ConfigError,
+            match=r"ci-command string contains Windows path separators \('\\'\); use forward slashes \('/'\) or an array format",
+        ):
+            parse_ci_command(cmd)
+
+    def test_parse_windows_path_in_list_is_allowed(self):
+        assert parse_ci_command([r"C:\tools\ci.bat", "-v"]) == [
+            r"C:\tools\ci.bat",
+            "-v",
+        ]
+        assert parse_ci_command([r".\scripts\ci.bat"]) == [r".\scripts\ci.bat"]
+
+    def test_parse_forward_slashes_and_posix_escapes_allowed(self):
+        assert parse_ci_command("./scripts/ci.sh") == ["./scripts/ci.sh"]
+        assert parse_ci_command("C:/tools/ci.bat") == ["C:/tools/ci.bat"]
+        assert parse_ci_command('pytest "foo bar"') == ["pytest", "foo bar"]
+        assert parse_ci_command(r"echo hello\ world") == ["echo", "hello world"]
+
+    def test_parse_quoted_inline_code_preserves_backslashes(self):
+        cmd = "python -c 'import pytest; print(\"CI\\n\"); raise SystemExit(pytest.main())'"
+        assert parse_ci_command(cmd) == [
+            "python",
+            "-c",
+            'import pytest; print("CI\\n"); raise SystemExit(pytest.main())',
+        ]
+
 
 class TestValidateTomlConfigSharedEnhancements:
     def test_retired_model_tier_message_points_to_execution_profile(self):

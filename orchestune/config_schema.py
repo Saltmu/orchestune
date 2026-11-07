@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shlex
 from pathlib import Path
 from typing import Any, cast
@@ -22,6 +23,8 @@ from orchestune.targets.cloud_routine import ROUTINE_TOKEN_ENV_VAR
 from orchestune.targets.contracts import ReviewerBot
 
 VALID_FINAL_ACCEPTANCE_REVIEW_MODES = frozenset({"advisory", "off"})
+
+_WIN_PATH_SEPARATOR_RE = re.compile(r"[a-zA-Z]:\\|(?:^|[\\/\s\w.-])\\[\w.-]")
 
 PROHIBITED_TOML_KEYS: dict[str, str] = {
     "model_tiers": config_contracts.retired_model_tiers_message("model_tiers"),
@@ -259,6 +262,12 @@ def parse_ci_command(value: Any) -> list[str]:
     if isinstance(value, str):
         if not value.strip():
             raise config_contracts.ConfigError("ci-command must not be empty")
+        unquoted = re.sub(r"'[^']*'", "", value)
+        if _WIN_PATH_SEPARATOR_RE.search(unquoted):
+            raise config_contracts.ConfigError(
+                "ci-command string contains Windows path separators ('\\'); "
+                "use forward slashes ('/') or an array format (e.g. ['path\\\\to\\\\executable']) instead"
+            )
         try:
             parts = shlex.split(value)
         except ValueError as exc:
