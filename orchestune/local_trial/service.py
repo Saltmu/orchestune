@@ -38,6 +38,7 @@ from orchestune.local_trial.models import (
     DisciplineStatus,
     Evidence,
     GitIntent,
+    ImplementationPayload,
     Observation,
     PlanPayload,
     ProcessRecord,
@@ -262,9 +263,14 @@ def _handle_plan_error(
     err: TrialError,
     deps: TrialDependencies,
 ) -> TrialState:
+    pending = (
+        state.pending_attempt
+        if err.code == "interrupted"
+        else None
+    )
     new_state = replace(
         state,
-        pending_attempt=None,
+        pending_attempt=pending,
         phase=TrialPhase.NEEDS_ATTENTION,
         reason=err.code,
         revision=state.revision + 1,
@@ -504,8 +510,16 @@ def _execute_implement(state: TrialState, deps: TrialDependencies) -> TrialState
     res = deps.agents.run(req, state.agent)
     deps.store.record_attempt(res)
     validate_attempt(res, state, kind, state.head_sha, state.approved_plan_digest)
+    responses = state.responses
+    if res.agent_payload is not None and isinstance(
+        res.agent_payload.payload, ImplementationPayload
+    ):
+        responses = (*responses, *res.agent_payload.payload.responses)
     state = replace(
-        state, pending_attempt=None, attempt_ids=(*state.attempt_ids, att_id)
+        state,
+        pending_attempt=None,
+        attempt_ids=(*state.attempt_ids, att_id),
+        responses=responses,
     )
     return _commit_implementation(state, deps)
 
