@@ -513,6 +513,58 @@ def test_codex_completed_tracker_only_is_not_review_content():
     assert result["review_items"] == []
 
 
+def test_codex_replacement_receipt_binds_from_completed_tracker_full_sha():
+    head = "ca3cc0ff5dd5b17ae04c926d118a02fbaec51c64"
+    tracker_body = (
+        CODEX_TRACKER.format(status="Completed").replace("`abc1234`", f"`{head[:7]}`")
+        + "\n<!-- codex-review-state:v1 "
+        + '{"code_review":{"commit_sha":"'
+        + head
+        + '","status":"completed"}} -->'
+    )
+    receipt_body = (
+        "<!-- codex-review-receipt:v1 -->\n\n"
+        "Codex Review: Didn't find any major issues.\n\n"
+        f"**Reviewed commit:** `{head[:10]}`"
+    )
+    receipt = _comment(
+        2, receipt_body, "chatgpt-codex-connector[bot]", "2026-10-04T03:13:00Z"
+    )
+    tracker = _comment(
+        3, tracker_body, "chatgpt-codex-connector[bot]", "2026-10-04T03:12:00Z"
+    )
+
+    result = _bounded({"issue_comments": [receipt, tracker]})
+
+    assert result["acquisition_status"] == "acquired"
+    assert _items(result)[2]["commit_id"] == head
+
+
+def test_codex_receipt_does_not_bind_to_different_tracker_commit():
+    head = "ca3cc0ff5dd5b17ae04c926d118a02fbaec51c64"
+    other = "b" * 40
+    tracker_body = (
+        CODEX_TRACKER.format(status="Completed").replace("`abc1234`", f"`{other[:7]}`")
+        + "\n<!-- codex-review-state:v1 "
+        + '{"code_review":{"commit_sha":"'
+        + other
+        + '","status":"completed"}} -->'
+    )
+    receipt = _comment(
+        2,
+        "<!-- codex-review-receipt:v1 -->\n\n" f"**Reviewed commit:** `{head[:10]}`",
+        "chatgpt-codex-connector[bot]",
+        "2026-10-04T03:13:00Z",
+    )
+    tracker = _comment(
+        3, tracker_body, "chatgpt-codex-connector[bot]", "2026-10-04T03:12:00Z"
+    )
+
+    result = _bounded({"issue_comments": [receipt, tracker]})
+
+    assert "commit_id" not in _items(result)[2]
+
+
 CODEX_BOT = "chatgpt-codex-connector[bot]"
 SHA_A = "abc1234" + "0" * 33
 SHA_B = "def5678" + "0" * 33

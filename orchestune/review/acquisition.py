@@ -9,6 +9,7 @@ review-loop.md); this module never computes a pass/fail verdict.
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Mapping
 from typing import Any, TypedDict, Unpack, cast
@@ -28,6 +29,13 @@ from orchestune.review.tracker_activity import (
 JsonObject = dict[str, Any]
 
 SCHEMA_VERSION = 1
+_CODEX_REVIEW_STATE_RE = re.compile(
+    r"<!--\s*codex-review-state:v1\s+(\{.*?\})\s*-->", re.S
+)
+_CODEX_REVIEWED_COMMIT_RE = re.compile(
+    r"\*\*Reviewed commit:\*\*\s*`([0-9a-fA-F]{7,40})`"
+)
+_FULL_SHA_RE = re.compile(r"[0-9a-fA-F]{40}")
 
 ACQUISITION_ACQUIRED = "acquired"
 ACQUISITION_UNAVAILABLE = "unavailable"
@@ -210,6 +218,60 @@ def _get_item_timestamp(item: ReviewItem) -> str:
 
 def _get_item_created_timestamp(item: ReviewItem) -> str:
     return str(item.get("submitted_at") or item.get("created_at") or "")
+
+
+def _codex_review_commit_sha(item: ReviewItem) -> str | None:
+    """Full commit SHA from Codex's completed review-state receipt, if present."""
+    body = str(item.get("body") or "")
+    match = _CODEX_REVIEW_STATE_RE.search(body)
+    if not match:
+        return None
+    try:
+        state = json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return None
+    code_review = state.get("code_review") if isinstance(state, dict) else None
+    commit = code_review.get("commit_sha") if isinstance(code_review, dict) else None
+    status = code_review.get("status") if isinstance(code_review, dict) else None
+    return (
+        commit.lower()
+        if status == "completed"
+        and isinstance(commit, str)
+        and _FULL_SHA_RE.fullmatch(commit)
+        else None
+    )
+
+
+def _bind_codex_receipt_commits(
+    result: _ReviewContent,
+    comments: list[ReviewItem],
+    round_started_at: str,
+    round_ended_at: str,
+) -> None:
+    """Bind Codex receipt comments to matching completed full-SHA tracker data."""
+    completed = [
+        (item, sha)
+        for item in comments
+        if is_codex_tracker(_tracker_item(item))
+        and _classify_round(
+            _get_item_timestamp(item), round_started_at, round_ended_at
+        )[0]
+        == "current"
+        and (sha := _codex_review_commit_sha(item)) is not None
+    ]
+    for receipt in result["review_items"]:
+        if receipt["kind"] != "issue_comment" or receipt["provenance"] != "current":
+            continue
+        body = str(receipt.get("body") or "")
+        if "<!-- codex-review-receipt:v1 -->" not in body:
+            continue
+        reviewed = _CODEX_REVIEWED_COMMIT_RE.search(body)
+        if not reviewed:
+            continue
+        prefix = reviewed.group(1).lower()
+        matching = {sha for _, sha in completed if sha.startswith(prefix)}
+        if len(matching) == 1:
+            receipt["commit_id"] = matching.pop()
 
 
 def _activity_signature(item: ReviewItem, bot_name: str) -> str:
@@ -675,10 +737,12 @@ def extract_review_result(
     timestamps = [_get_item_timestamp(item) for item, _ in review_candidates] + [
         _get_item_timestamp(item) for item in inline_candidates
     ]
-    return cast(
-        JsonObject | None,
-        _review_content_result(review_items, inline_items, timestamps),
-    )
+    result = _review_content_result(review_items, inline_items, timestamps)
+    if result is not None and bot_name.lower() == "codex":
+        _bind_codex_receipt_commits(
+            result, data["issue_comments"], round_started_at, round_ended_at
+        )
+    return cast(JsonObject | None, result)
 
 
 def _review_content_result(

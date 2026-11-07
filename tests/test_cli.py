@@ -1,5 +1,8 @@
+import importlib
 import io
+import subprocess
 import sys
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -8,6 +11,83 @@ import pytest
 class _TTYStringIO(io.StringIO):
     def isatty(self) -> bool:
         return True
+
+
+def test_cli_command_specs_resolve_to_callable_entrypoints():
+    from orchestune.cli import _COMMAND_SPECS
+
+    for spec in _COMMAND_SPECS:
+        if spec.module is not None:
+            assert callable(
+                getattr(importlib.import_module(spec.module), spec.function)
+            )
+
+    assert callable(
+        importlib.import_module("orchestune.dispatch.runtime_reader").read_runtime
+    )
+    assert callable(importlib.import_module("orchestune.setup_skills").setup_skills)
+
+
+def test_cli_help_does_not_import_command_modules():
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; sys.argv=['orchestune', '--help']; "
+            "from orchestune.cli import main; main(); "
+            "assert not any(name in sys.modules for name in ("
+            "'orchestune.dag.cli', 'orchestune.dispatch.dispatcher', "
+            "'orchestune.claim.cli', 'orchestune.complete.cli'))",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    "argv,expected_kwargs",
+    [
+        (["orchestune", "123"], {}),
+        (["orchestune", "123", "--adopt-pr", "42"], {"observe_external": True}),
+        (["orchestune", "123", "--adopt-pr=42"], {"observe_external": True}),
+        (["orchestune", "123", "--resume", "claim-id"], {"observe_external": True}),
+        (["orchestune", "123", "--resume=claim-id"], {"observe_external": True}),
+    ],
+)
+def test_claim_runtime_reader_is_loaded_only_for_adoption_or_resume(
+    argv, expected_kwargs
+):
+    from orchestune import cli
+
+    requested_modules = []
+    reader = object()
+
+    def import_module(name):
+        requested_modules.append(name)
+        if name == "orchestune.claim.cli":
+            return SimpleNamespace(main=lambda **kwargs: kwargs)
+        if name == "orchestune.dispatch.runtime_reader":
+            return SimpleNamespace(read_runtime=reader)
+        raise AssertionError(f"Unexpected import: {name}")
+
+    with (
+        patch("sys.argv", argv),
+        patch.object(cli.importlib, "import_module", side_effect=import_module),
+        patch.object(cli.sys, "exit", side_effect=SystemExit) as exit_call,
+        pytest.raises(SystemExit),
+    ):
+        cli._dispatch_command("claim")
+
+    expected_runtime = bool(expected_kwargs)
+    assert (
+        "orchestune.dispatch.runtime_reader" in requested_modules
+    ) is expected_runtime
+    if expected_runtime:
+        exit_call.assert_called_once_with({"observe_external": reader})
+    else:
+        exit_call.assert_called_once_with({})
 
 
 def test_cli_delegates_to_dag():

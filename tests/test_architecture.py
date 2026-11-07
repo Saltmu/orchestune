@@ -209,8 +209,6 @@ def test_internal_imports_are_not_hidden_inside_functions() -> None:
     modules = _package_modules()
     for module, tree in _package_asts().items():
         short_name = module.removeprefix(f"{PACKAGE_NAME}.")
-        if short_name == "cli":
-            continue
         is_package = modules[module].name == "__init__.py"
         for function in (
             node
