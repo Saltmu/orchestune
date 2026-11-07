@@ -15,6 +15,7 @@ from orchestune.local_trial.contracts import (
     TrialError,
     TrialWorkspace,
     canonical_digest,
+    workspace_digest,
 )
 from orchestune.local_trial.models import (
     Change,
@@ -381,6 +382,7 @@ class LocalTrialWorkspace(TrialWorkspace):
             raise TrialError("out_of_scope", "Plan write_paths must be configured")
         allowed_paths = self._validate_write_paths(state.plan.write_paths)
 
+        self._verify_workspace_branch(impl, state)
         cur_head = self._run(["rev-parse", "HEAD"], cwd=impl).stdout.strip().lower()
         if cur_head != state.head_sha.lower():
             raise TrialError(
@@ -388,14 +390,14 @@ class LocalTrialWorkspace(TrialWorkspace):
                 f"HEAD changed: expected {state.head_sha}, got {cur_head}",
             )
 
-        self._check_index_staged(impl, state)
         snap = self.inspect(state.repository, state.workspace)
         if not snap.changes:
             raise TrialError("no_changes", "No changes to commit")
+        self._check_index_staged(impl, state, snap)
         target_paths = self._collect_commit_targets(snap, allowed_paths)
         self._verify_git_user(impl)
 
-        self._run(["add", "--"] + sorted(target_paths), cwd=impl)
+        self._stage_commit_paths(impl, target_paths)
         tree_sha = self._run(["write-tree"], cwd=impl).stdout.strip().lower()
 
         return GitIntent(
@@ -406,19 +408,52 @@ class LocalTrialWorkspace(TrialWorkspace):
             allowed_paths=tuple(sorted(target_paths)),
         )
 
-    def _check_index_staged(self, impl: str, state: TrialState) -> None:
+    def _verify_workspace_branch(self, impl: str, state: TrialState) -> None:
+        branch_res = self._run(["symbolic-ref", "-q", "HEAD"], cwd=impl, check=False)
+        cur_branch = (
+            branch_res.stdout.strip().removeprefix("refs/heads/")
+            if branch_res.returncode == 0
+            else None
+        )
+        expected = state.workspace.branch.removeprefix("refs/heads/")
+        if cur_branch != expected:
+            raise TrialError(
+                "identity_mismatch",
+                f"Workspace branch {cur_branch} != expected {expected}",
+            )
+
+    def _check_index_staged(
+        self, impl: str, state: TrialState, snap: WorkspaceSnapshot
+    ) -> None:
         ls_res = self._run(["ls-files", "--stage", "-z"], cwd=impl)
         current_index_digest = hashlib.sha256(ls_res.stdout.encode("utf-8")).hexdigest()
         diff_cached = self._run(
             ["diff-index", "--cached", "--name-status", "HEAD", "--"], cwd=impl
         ).stdout.strip()
         if diff_cached:
+            current_ws_digest = workspace_digest(snap)
             if not (
                 state.approved_index_digest
                 and state.approved_index_digest == current_index_digest
                 and state.approved_worktree_digest
+                and state.approved_worktree_digest == current_ws_digest
             ):
                 raise TrialError("worktree_dirty", "Unapproved staged changes in index")
+
+    def _stage_commit_paths(self, impl: str, target_paths: set[str]) -> None:
+        paths_to_add: list[str] = []
+        for p in sorted(target_paths):
+            target = Path(impl) / p
+            if target.exists():
+                paths_to_add.append(p)
+            else:
+                unmatch = self._run(
+                    ["ls-files", "--error-unmatch", "--", p], cwd=impl, check=False
+                )
+                if unmatch.returncode == 0:
+                    self._run(["add", "-u", "--", p], cwd=impl)
+        if paths_to_add:
+            self._run(["add", "--"] + paths_to_add, cwd=impl)
 
     def _collect_commit_targets(
         self, snap: WorkspaceSnapshot, allowed_paths: set[str]
@@ -474,6 +509,7 @@ class LocalTrialWorkspace(TrialWorkspace):
 
     def finish_commit(self, state: TrialState, intent: GitIntent) -> str:
         impl = state.workspace.implementation_path
+        self._verify_workspace_branch(impl, state)
         cur_head = self._run(["rev-parse", "HEAD"], cwd=impl).stdout.strip().lower()
         if cur_head != intent.pre_head_sha.lower():
             raise TrialError(
@@ -494,6 +530,7 @@ class LocalTrialWorkspace(TrialWorkspace):
 
     def reconcile_commit(self, state: TrialState, intent: GitIntent) -> str | None:
         impl = state.workspace.implementation_path
+        self._verify_workspace_branch(impl, state)
         cur_head = self._run(["rev-parse", "HEAD"], cwd=impl).stdout.strip().lower()
         if cur_head == intent.pre_head_sha.lower():
             return None
@@ -524,9 +561,11 @@ class LocalTrialWorkspace(TrialWorkspace):
                 "head_changed", "Commit message missing Orchestune-Trial trailer"
             )
 
-        diff_tree = self._run(
-            ["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"], cwd=impl
-        ).stdout.splitlines()
+        diff_tree_raw = self._run(
+            ["diff-tree", "-z", "--no-commit-id", "--name-only", "-r", "HEAD"],
+            cwd=impl,
+        ).stdout
+        diff_tree = [p for p in diff_tree_raw.split("\0") if p]
         allowed = set(intent.allowed_paths)
         for p in diff_tree:
             if p and p not in allowed:

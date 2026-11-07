@@ -27,7 +27,7 @@ from orchestune.local_trial.models import (
     TrialState,
     WorkspaceIdentity,
 )
-from orchestune.local_trial.workspace import LocalTrialWorkspace
+from orchestune.local_trial.workspace import LocalTrialWorkspace, workspace_digest
 
 
 def _init_git_repo(path: Path) -> None:
@@ -523,6 +523,7 @@ def test_stage_commit_approved_index_digest(tmp_path: Path) -> None:
     assert exc.value.code == "worktree_dirty"
 
     # With matching approved_index_digest and approved_worktree_digest, stage_commit accepts
+    snap = ws_impl.inspect(repo_id, paths)
     state_approved = _make_state(
         repo_id,
         paths,
@@ -530,7 +531,7 @@ def test_stage_commit_approved_index_digest(tmp_path: Path) -> None:
         head_sha=repo_id.base_sha,
         write_paths=("foo.py",),
         approved_index_digest=approved_digest,
-        approved_worktree_digest="approved",
+        approved_worktree_digest=workspace_digest(snap),
     )
     intent = ws_impl.stage_commit(state_approved)
     assert intent.expected_tree_sha is not None
@@ -645,3 +646,106 @@ def test_reconcile_commit_mismatches(tmp_path: Path) -> None:
     with pytest.raises(TrialError) as exc:
         ws_impl.reconcile_commit(state, intent)
     assert exc.value.code == "head_changed"
+
+
+def test_stage_commit_verifies_branch(tmp_path: Path) -> None:
+    repo_path = tmp_path / "repo"
+    _init_git_repo(repo_path)
+    ws_impl = LocalTrialWorkspace()
+    repo_id = ws_impl.discover(str(repo_path))
+    ws_impl.ensure_storage_ignored(repo_id)
+
+    trial_id = "e" * 32
+    paths = ws_impl.paths(repo_id, trial_id)
+    ws_impl.prepare(repo_id, paths)
+    impl_path = Path(paths.implementation_path)
+    (impl_path / "foo.py").write_text("x = 1\n", encoding="utf-8")
+
+    state = _make_state(
+        repo_id,
+        paths,
+        trial_id=trial_id,
+        head_sha=repo_id.base_sha,
+        write_paths=("foo.py",),
+    )
+
+    # Switch to unrelated branch
+    run_git(["checkout", "-b", "unrelated-branch"], cwd=impl_path)
+    with pytest.raises(TrialError) as exc:
+        ws_impl.stage_commit(state)
+    assert exc.value.code == "identity_mismatch"
+
+
+def test_stage_commit_stale_worktree_digest(tmp_path: Path) -> None:
+    repo_path = tmp_path / "repo"
+    _init_git_repo(repo_path)
+    ws_impl = LocalTrialWorkspace()
+    repo_id = ws_impl.discover(str(repo_path))
+    ws_impl.ensure_storage_ignored(repo_id)
+
+    trial_id = "f" * 32
+    paths = ws_impl.paths(repo_id, trial_id)
+    ws_impl.prepare(repo_id, paths)
+    impl_path = Path(paths.implementation_path)
+    (impl_path / "foo.py").write_text("x = 1\n", encoding="utf-8")
+
+    # Stage foo.py
+    run_git(["add", "foo.py"], cwd=impl_path)
+    snap = ws_impl.inspect(repo_id, paths)
+    ls_res = run_git(["ls-files", "--stage", "-z"], cwd=impl_path)
+    approved_index = hashlib.sha256(ls_res.stdout.encode("utf-8")).hexdigest()
+    approved_ws = workspace_digest(snap)
+
+    # Now modify foo.py unstaged
+    (impl_path / "foo.py").write_text("x = 2\n", encoding="utf-8")
+
+    # The current workspace digest no longer matches approved_ws
+    state = _make_state(
+        repo_id,
+        paths,
+        trial_id=trial_id,
+        head_sha=repo_id.base_sha,
+        write_paths=("foo.py",),
+        approved_index_digest=approved_index,
+        approved_worktree_digest=approved_ws,
+    )
+    with pytest.raises(TrialError) as exc:
+        ws_impl.stage_commit(state)
+    assert exc.value.code == "worktree_dirty"
+
+
+def test_stage_commit_with_deleted_path(tmp_path: Path) -> None:
+    repo_path = tmp_path / "repo"
+    _init_git_repo(repo_path)
+    ws_impl = LocalTrialWorkspace()
+    repo_id = ws_impl.discover(str(repo_path))
+    ws_impl.ensure_storage_ignored(repo_id)
+
+    trial_id = "1" * 31 + "a"
+    paths = ws_impl.paths(repo_id, trial_id)
+    ws_impl.prepare(repo_id, paths)
+    impl_path = Path(paths.implementation_path)
+
+    # Initial file committed in implementation worktree
+    (impl_path / "to_delete.txt").write_text("delete me\n", encoding="utf-8")
+    run_git(["add", "to_delete.txt"], cwd=impl_path)
+    run_git(["commit", "-m", "add to_delete"], cwd=impl_path)
+    new_base = run_git(["rev-parse", "HEAD"], cwd=impl_path).stdout.strip()
+
+    # git rm to_delete.txt
+    run_git(["rm", "to_delete.txt"], cwd=impl_path)
+
+    state = _make_state(
+        repo_id,
+        paths,
+        trial_id=trial_id,
+        head_sha=new_base,
+        write_paths=("to_delete.txt",),
+        approved_index_digest=hashlib.sha256(
+            run_git(["ls-files", "--stage", "-z"], cwd=impl_path).stdout.encode("utf-8")
+        ).hexdigest(),
+        approved_worktree_digest=workspace_digest(ws_impl.inspect(repo_id, paths)),
+    )
+    # stage_commit should succeed without failing on missing pathspec
+    intent = ws_impl.stage_commit(state)
+    assert "to_delete.txt" in intent.allowed_paths
