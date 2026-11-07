@@ -30,6 +30,7 @@ from orchestune.dispatch.doctor.models import (
     ExecutionMode,
     WorkflowFile,
 )
+from orchestune.dispatch.doctor.readiness import run_readiness_checks
 from orchestune.dispatch.doctor.repository import run_repository_checks
 from orchestune.infra.git_cli import get_git_repository_paths
 from orchestune.infra.repository_config import find_and_load_config_file
@@ -46,6 +47,7 @@ class DoctorRequest:
     mode: ExecutionMode
     repo_root: Path
     workflows: tuple[str, ...] = ()
+    online: bool = False
 
 
 def resolve_repository_root(cwd: Path | None = None) -> Path:
@@ -239,5 +241,13 @@ def run_doctor(request: DoctorRequest) -> DoctorReport:
         diagnostics.append(check_workflow_readable(context.specified))
         diagnostics.extend(run_actions_checks(context))
     diagnostics.extend(run_repository_checks(context))
+    diagnostics.extend(
+        run_readiness_checks(
+            request.repo_root,
+            context.config,
+            context.config_valid,
+            online=request.online,
+        )
+    )
     diagnostics.extend(ownership_diagnostics(request.mode))
     return DoctorReport(request.mode, tuple(diagnostics))

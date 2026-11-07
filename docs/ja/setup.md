@@ -15,6 +15,8 @@ Orchestuneは「エージェントが標準開発ワークフローに従って�
 3. **(c) `ci_command` を自リポジトリのCIエントリーポイントに設定すること**
    `orchestune.toml` のトップレベル、または `pyproject.toml` の `[tool.orchestune]` に、例えば `ci-command = "make ci"` や `"npm run ci"` を設定してください。CLI の `--ci-command` はありません。未設定の場合、POSIX は `scripts/local-ci.sh`、Windows は `scripts/local-ci.ps1` があるときだけ既定値を使います。無い場合、apply の dispatch はレポート予約やタスク状態変更より前に終了コード 2 で停止します。`--no-apply` は利用できます。`orchestune complete` は primary checkout の設定を読み、タスク worktree で実行し、成功して HEAD・tree が変わらず worktree が clean な場合に証跡を記録します。`config init` はローカルスクリプト、Makefile、package.json、pytest 設定から候補を提示し、候補コマンドは実行しません。
 
+導入前の準備状況（(a)〜(c)、実行先、レビュー担当、gitignore、認証）は、`orchestune doctor --execution-mode local`（認証確認を含む場合は `--online`）で一括診断できます。不足項目がある場合は warning として直すコマンドや設定例が提示されます。
+
 ### 設定ファイルの作成と編集
 
 プロジェクト固有の `orchestune.toml` は、対話式ウィザードまたは手動コピーで作成できます。実ファイルはローカル設定や認証先を含み得るためGit管理外とし、共有する変更は設定例へ反映してください（別リポジトリへ導入する場合も `.gitignore` に追加してください）。
@@ -357,9 +359,10 @@ concurrency:
 orchestune doctor --execution-mode actions --workflow .github/workflows/orchestune-dispatch.yml
 orchestune doctor --execution-mode actions --workflow .github/workflows/orchestune-dispatch.yml --json
 orchestune doctor --execution-mode local
+orchestune doctor --execution-mode local --online
 ```
 
-`--workflow` は複数回指定できます。診断は常にオフラインで、GitHub APIの呼出し・認証確認・状態変更を行いません。
+`--workflow` は複数回指定できます。診断は既定ではオフラインで、GitHub APIの呼出し・状態変更を行いません。`--online` を付けた場合のみ、GitHub 認証の確認（`dispatch.readiness.auth`）を行います。
 
 - 終了コード: `0` = 静的設定にerrorなし、`1` = 設定errorあり、`2` = 引数不正。warning／not_checkedだけなら `0` です。
 - **設定診断は運用所有権の保証ではありません。** 終了コード0でも、別マシン・別clone・Actions外の入口との競合がないことは確認されていません。
@@ -375,6 +378,13 @@ orchestune doctor --execution-mode local
 | `dispatch.actions.entrypoint` | 同期dispatch入口を特定できればok。検出できなければnot_checked |
 | `dispatch.actions.target` | 外部target（`cloud-routine`／`codex-cloud`）はok、ローカルプロセスtargetはerror、静的に決定できなければnot_checked |
 | `dispatch.actions.credentials` | 外部targetに必要な資格情報が制御stepから見える `env:` で受け渡されていればok、欠落はerror |
+| `dispatch.readiness.discipline` | `AGENTS.md`、`CLAUDE.md`、`.agents/AGENTS.md` のいずれかがファイルならok。無ければwarning |
+| `dispatch.readiness.ci_definition` | `.github/workflows/` 直下に `*.yml` / `*.yaml` がある、CI コマンド候補が検出される、または明示された `ci-command` の先頭実行ファイルが存在すればok。無ければwarning |
+| `dispatch.readiness.ci_command` | 設定された `ci-command`（または未設定時のフォールバック先 `platform_ci_script_relative()`）の実行ファイルが存在すればok。無ければwarning |
+| `dispatch.readiness.executor` | 実行先（local、CLI、cloud設定）の実行ファイルまたは必須設定が確認できればok。不足時はwarning |
+| `dispatch.readiness.reviewer` | 子タスクのレビュー担当（設定または自動解決）のCLIが確認できればok。未解決またはCLI不足時はwarning |
+| `dispatch.readiness.ignore` | `.gitignore` に `orchestune.toml` と `.orchestune/` の除外設定があればok。不足時はwarning |
+| `dispatch.readiness.auth` | `--online` 指定時のみ診断。GitHub 認証が確認できればok。未認証・失敗時はwarning |
 | `dispatch.local.serialization` | localモードでは常にnot_checked（単一所有者とCLI全体の直列実行を運用で確認） |
 | `dispatch.repository.other_entrypoints` | 指定外workflowの直接dispatch。標準groupならwarning、欠落・非標準groupはerror（旧workflowの残置を含む）。localモードでは直接dispatchを含むworkflowがあればwarning |
 | `dispatch.repository.other_control_entrypoints` | 適用モードの `orchestune gc`／`orchestune recover --apply` を検出。標準groupならok、それ以外はwarning |

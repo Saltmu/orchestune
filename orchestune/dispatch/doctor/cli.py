@@ -49,6 +49,9 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help="Workflow file to diagnose (actions mode; repeatable).",
     )
+    parser.add_argument(
+        "--online", action="store_true", help="Include online authentication checks."
+    )
     parser.add_argument("--json", action="store_true", help="Emit JSON.")
     return parser
 
@@ -126,7 +129,14 @@ def main(argv: list[str] | None = None, *, output: CliOutput | None = None) -> i
     except DoctorInputError as exc:
         print(f"orchestune doctor: {exc}", file=sys.stderr)
         return 2
-    report = run_doctor(DoctorRequest(args.execution_mode, repo_root, workflows))
+    report = run_doctor(
+        DoctorRequest(
+            args.execution_mode,
+            repo_root,
+            workflows,
+            online=args.online,
+        )
+    )
     out = output if output is not None else make_output(machine=args.json)
     if args.json:
         out.payload(json.dumps(report.to_json(), ensure_ascii=False, indent=2))
