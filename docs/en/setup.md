@@ -398,3 +398,31 @@ The direct dispatch entrypoints detected are `orchestune dispatch`, `orchestune-
 Note that this repository does not currently run its own `orchestune dispatch` on a GitHub Actions schedule (dispatch here goes through the Cloud Routine or a local CLI), so the above is a configuration for adopting repositories. If you enable a real scheduled run here, add a workflow file under `.github/workflows/` that includes the concurrency settings above.
 
 New not-needed completions and backfilled journal generations preserve dependency holds through `not-needed-review:pending` and the fixed Outcome after ledger loss. Ownership recovery and automatic review relaunch are excluded. Legacy histories lost before recording distinguishing evidence require an audit. See [migration and recovery](status-labels.md).
+
+---
+
+## Local Trial Setup
+
+To run a single autonomous task locally with `orchestune trial` without GitHub setup:
+
+### Prerequisites
+1. **Local Git Repository**:
+   - Must be initialized (`git init`) and contain at least one initial commit.
+   - Local Git user name and email configured:
+     ```bash
+     git config user.name "Your Name"
+     git config user.email "you@example.com"
+     ```
+   - Remote repository (GitHub origin) is optional.
+2. **AI Assistant CLI**:
+   - Claude Code (`claude`) or Codex CLI (`codex`) installed in `PATH` and authenticated.
+   - Version check must succeed: `claude --version` or `codex --version`.
+3. **No GitHub Authentication Required**:
+   - `gh auth login`, repository push access, and GitHub issue labels are not needed.
+   - Note that model communication itself is live online (offline model communication is not supported).
+
+### Quality and Review Model
+- In local trial, implementation and semantic review run in isolated worktrees using separate sessions of the same CLI tool.
+- Single-vendor self-review has inherent limitations compared to multi-vendor independent review, but validates the complete lifecycle (plan -> approve -> implement -> CI -> review -> adopt).
+- For usage and command syntax, see [Usage Reference § 10](usage.md#10-local-autonomous-trial-orchestune-trial).
+

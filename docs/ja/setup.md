@@ -398,3 +398,31 @@ orchestune doctor --execution-mode local --online
 なお、本リポジトリ自身は現時点でOrchestuneのdispatchをGitHub Actionsのスケジュール実行では回しておらず（Cloud RoutineまたはローカルCLIへのディスパッチが前提）、上記は導入先リポジトリ向けの設定です。本リポジトリで実際にcron定期実行を有効化する際は、上記のconcurrency設定を含むworkflowファイルを別途`.github/workflows/`へ追加してください。
 
 not-needed の新規完了・旧 journal から補填した世代は `not-needed-review:pending` と固定 Outcome により台帳消失後も依存を保留します。所有権復元やレビュー再起動は行いません。移行前に区別を残さず台帳を失った旧履歴は棚卸しが必要です。[移行・復旧手順](status-labels.md)を参照してください。
+
+---
+
+## ローカル初回体験のセットアップ
+
+GitHub設定不要で、単一タスクの自律試行をローカル実行（`orchestune trial`）するためのセットアップ手順です。
+
+### 必須環境・前提条件
+1. **ローカルGitリポジトリ**:
+   - 初期化（`git init`）され、初期コミットが1件以上存在すること。
+   - ローカルのGit設定（`user.name` および `user.email`）が設定されていること:
+     ```bash
+     git config user.name "Your Name"
+     git config user.email "you@example.com"
+     ```
+   - リモートリポジトリ（GitHub origin）は任意（完全ローカルで動作）。
+2. **AIアシスタントCLI**:
+   - Claude Code (`claude`) または Codex CLI (`codex`) が `PATH` 上に存在し、認証済みであること。
+   - バージョン確認コマンドが成功すること: `claude --version` または `codex --version`。
+3. **GitHub設定は不要**:
+   - `gh auth login`、リポジトリ書き込み権限、GitHub Issueラベル等の設定は一切不要です。
+   - ただし、モデル通信自体は各CLIを通じてオンラインで実行されます（モデル通信のオフライン化には対応していません）。
+
+### 品質とレビュー方式
+- ローカル試行では、同一CLIの別セッション・別worktreeを用いて実装とレビューを実行します。
+- 同一製品によるセルフレビューは独立ベンダー間レビューに比べ品質チェックの限界がありますが、計画・承認・実装・CI・レビュー・採用までの一連のサイクルを体験できます。
+- 具体的な操作方法・構文は[利用手引き § 10](usage.md#10-ローカル自律試行-orchestune-trial)を参照してください。
+

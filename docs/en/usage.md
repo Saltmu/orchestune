@@ -1241,3 +1241,76 @@ from `codex cloud list` are stopped; `pending` is running); other external targe
 example Cloud Routine) remain held without operator confirmation, including after
 they finish. Check the cloud-side run and artifacts, stop it there if needed, and
 use the operator-confirmed external recovery procedure above.
+
+---
+
+## 10. Local autonomous trial (`orchestune trial`)
+
+The `trial` subcommands provide a self-contained local experience for running an autonomous coding cycle on a single task without GitHub configuration or remote repositories.
+
+### CLI Grammar
+
+```text
+orchestune trial start --request-file FILE [--repo PATH] [--agent claude|codex] [--ci-command TEXT]
+orchestune trial status [ID] [--repo PATH] [--json]
+orchestune trial resume ID [--repo PATH] [--approve-plan DIGEST] [--confirm-stopped ATTEMPT_ID] [--confirm-worktree DIGEST] [--request-file FILE] [--ci-command TEXT]
+orchestune trial result ID [--repo PATH] [--json]
+orchestune trial result ID --decision keep|adopted [--repo PATH] [--json]
+```
+
+- `--repo`: Target repository root path (defaults to current working directory `cwd`).
+- `--request-file`: Path to task description text file. Must be strict UTF-8, non-empty, and up to 1 MiB. Note: Keep the request file outside the repository worktree (e.g. `../trial-request.txt`) so that the working directory remains clean for `trial start`.
+- `ID`: 32-character hexadecimal string representing the unique trial ID (or attempt ID for `--confirm-stopped`).
+- `DIGEST`: 64-character hexadecimal SHA-256 string for plan digest or worktree digest.
+- `--ci-command`: CI verification command parsed without shell syntax evaluation. When specifying paths on Windows, use forward slashes and quotes (e.g. `"./scripts/local-ci.ps1"`).
+- `--confirm-stopped`: Confirm a stopped background attempt ID; cannot be combined with other modification flags.
+- `--approve-plan`: Cannot be combined with `--request-file` or `--ci-command`. May be combined with `--confirm-worktree` when digests match.
+
+### Exit Code Table
+
+| Operation / Outcome | Exit Code |
+| :--- | :--- |
+| `start` / `resume` reaching `ready`, or `planned` with `approval_required` | `0` |
+| `start` / `resume` with `ci_missing`, discipline incompatible/unverified, `needs_attention`, budget exhausted, execution failure | `1` |
+| Interrupted execution saved as `reason=interrupted`, or `Ctrl+C` while awaiting interactive prompt | `130` |
+| Argument/input error, unknown ID, corrupt schema, precondition/lock failure, agent selection failure (`TrialError`) | `2` |
+| `status` / `result` normal inspection display (even if trial is in `needs_attention`) | `0` |
+| `status` / `result` unknown ID, corrupt state, or argument error | `2` |
+| `result --decision` successful recording | `0` |
+| `result --decision` rejected due to unconfirmed execution or head not included in base | `2` |
+
+### Interactive vs Non-Interactive Flow
+- **Interactive TTY** (`stdin.isatty() and stdout.isatty()`):
+  When a plan is generated with `phase=planned` and `reason=approval_required`, the user is prompted:
+  `この計画で開始しますか? (yes/no) [no]: `
+  Entering `yes` immediately resumes execution with the plan digest. Entering `no` or sending EOF preserves the planned state and exits with code 0.
+- **Non-Interactive**:
+  Outputs the plan and guidance, saves the planned state, and exits with code 0 with the exact command to resume:
+  `orchestune trial resume <ID> --repo <PATH> --approve-plan <DIGEST>`
+
+### Resuming After Interruption or Dirty Worktree
+- **Stopped process**: If a previous run stopped unexpectedly, resume with `--confirm-stopped <ATTEMPT_ID>` to acknowledge the stop receipt.
+- **Dirty worktree**: If the worktree was modified, resume with `--confirm-worktree <WORKTREE_DIGEST>` to confirm the working state.
+
+### Budget Constraints
+A trial is bounded by finite budgets:
+- Maximum 3 implementation/fix cycles.
+- Maximum 3 review rounds.
+Exhausting the budget transitions the phase to `needs_attention` with `reason=budget_exhausted`.
+
+### Manual Adoption Flow
+When a trial reaches `ready` and `ready_is_current` is true, the user can manually adopt the changes into their base branch:
+```bash
+# 1. Verify working tree is clean and on the base branch
+git -C "<source_root>" status
+
+# 2. Fast-forward merge the trial branch
+git -C "<source_root>" merge --ff-only "<trial_branch>"
+
+# 3. Record adoption decision in trial state
+orchestune trial result <TRIAL_ID> --decision adopted --repo "<source_root>"
+
+# Alternatively, to keep artifacts without adopting:
+orchestune trial result <TRIAL_ID> --decision keep --repo "<source_root>"
+```
+
