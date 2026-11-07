@@ -555,6 +555,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 130
     except TrialError as exc:
         print(f"Error ({exc.code}): {exc.message}", file=sys.stderr)
+        if exc.code == "interrupted":
+            return 130
         return 2
     except Exception as exc:  # noqa: BLE001 - boundary: render unexpected trial failures safely
         print(f"Error: {exc}", file=sys.stderr)
