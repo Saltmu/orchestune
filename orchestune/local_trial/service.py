@@ -309,8 +309,9 @@ def _run_plan_stage(
     deps.store.save(state, expected_revision=state.revision - 1)
 
     try:
+        req_candidates = (preferred_ci,) if preferred_ci is not None and not candidates else candidates
         req = build_agent_request(
-            state, plan_inp, diff="", previous_results=(), ci_candidates=candidates
+            state, plan_inp, diff="", previous_results=(), ci_candidates=req_candidates
         )
         res = deps.agents.run(req, state.agent)
         deps.store.record_attempt(res)
