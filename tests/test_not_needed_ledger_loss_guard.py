@@ -98,12 +98,12 @@ def test_control_missing_hold_is_detected(tmp_path, monkeypatch, fault):
             "orchestune.complete.publication.ensure_review_pending", lambda *a: None
         )
     else:
-        from orchestune.dispatch.cycle.context_state import _CycleState
+        from orchestune.dispatch.cycle.task_view import CycleTaskView
 
-        real = _CycleState._labels
+        real = CycleTaskView.labels
         monkeypatch.setattr(
-            _CycleState,
-            "_labels",
+            CycleTaskView,
+            "labels",
             lambda self, issue: tuple(
                 label for label in real(self, issue) if label != PENDING
             ),

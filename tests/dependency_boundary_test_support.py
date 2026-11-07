@@ -71,6 +71,9 @@ PRODUCTION_EXCEPTIONS = frozenset(
             "orchestune.dispatch.cycle.context_state", "<module>", "Task", _IDENTITY
         ),
         _exception(
+            "orchestune.dispatch.cycle.task_view", "<module>", "Task", _IDENTITY
+        ),
+        _exception(
             "orchestune.dispatch.recovery.service", "<module>", "Task", _LOW_LEVEL
         ),
         _exception("orchestune.dispatch.rules", "<module>", "Task", _IDENTITY),
@@ -89,13 +92,13 @@ PRODUCTION_EXCEPTIONS = frozenset(
             "SubTask contains the derived semantic DAG edge.",
         ),
         _exception(
-            "orchestune.dispatch.cycle.context_state",
+            "orchestune.dispatch.cycle.task_view",
             "_owned_task",
             "depends_on",
             _IDENTITY,
         ),
         _exception(
-            "orchestune.dispatch.cycle.context_state",
+            "orchestune.dispatch.cycle.task_view",
             "_owned_task",
             "native_depends_on",
             _IDENTITY,

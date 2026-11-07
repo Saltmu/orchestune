@@ -208,6 +208,8 @@ CIだけが自動ゲートではありません。Orchestuneでは子PRレビュ
 同一cycleで確認済みの差分を所有しますが、GitHubと`RunState`の永続データそのものは
 所有しません。`CycleQueries`は不変な`CycleTask` metadataと意味付きの依存・状態
 queryを公開し、raw依存宣言はDAG consumerへ派生済み`SubTask`入力としてだけ渡します。
+L2の`CycleTaskView`がquery実装を所有し、queryとrecordの窓口である`_CycleState`と
+可変cycle ledgerを共有します。
 `CycleActions`はcycleの`RunState`を所有し、Contextへ一度だけbindされるため、全phaseは
 同じ境界で観測と記録を行います。
 
