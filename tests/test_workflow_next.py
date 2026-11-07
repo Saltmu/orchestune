@@ -311,15 +311,9 @@ def test_next_does_not_mutate_context_or_session_files(tmp_path):
     "setup",
     [
         ("mode_invalid", lambda c: c.state.update(mode="Interactive")),
-        (
-            "plan_missing",
-            lambda c: c.errors.update(context="implementation-plan.md missing"),
-        ),
     ],
 )
-def test_next_reports_prepare_exit_conditions_and_recovery_on_invalid_context(
-    tmp_path, setup
-):
+def test_next_reports_prepare_recovery_for_invalid_mode(tmp_path, setup):
     _, modifier = setup
     context = prepared_context(tmp_path)
     modifier(context)
@@ -349,3 +343,51 @@ def test_next_reports_prepare_exit_conditions_and_recovery_on_invalid_context(
         in action.get("description", "")
         for action in result.actions
     )
+
+
+def test_next_offers_creation_guidance_for_absent_plan_context(tmp_path):
+    context = prepared_context(tmp_path)
+    context.errors["context_missing"] = "implementation-plan.md"
+    before = {
+        path.relative_to(context.session_dir): path.read_bytes()
+        for path in context.session_dir.rglob("*")
+        if path.is_file()
+    }
+
+    result = next_step(context)
+
+    assert result.stage_id == "prepare"
+    assert result.status == "ready"
+    assert result.exit_code == 0
+    assert "context_unrecorded" in result.reason_codes
+    assert not (
+        {"context_invalid", "approval_invalid", "reviewer_missing"}
+        & set(result.reason_codes)
+    )
+    assert tuple(check.id for check in result.checks) == ("context_recorded",)
+    guidance = result.checks[0].missing[0]
+    action = next(action for action in result.actions if action["id"] == "prepare")
+    for item in (
+        "implementation-plan.md",
+        "workflow-state.json",
+        "orchestune-workflow",
+        "schema_version",
+        "repository",
+        "issue_number",
+        "claim_id",
+        "mode",
+        "change_kind",
+        "backend",
+        "reviewer",
+        "selection_basis",
+        "plan_approval",
+    ):
+        assert item in guidance
+        assert item in action["description"]
+    assert action["stage_id"] == "prepare"
+    after = {
+        path.relative_to(context.session_dir): path.read_bytes()
+        for path in context.session_dir.rglob("*")
+        if path.is_file()
+    }
+    assert after == before

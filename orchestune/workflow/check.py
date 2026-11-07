@@ -65,11 +65,24 @@ def _unknown(message: str, source: str) -> _Observation:
     return _Observation("unknown", "evidence_unavailable", message, source)
 
 
+_MISSING_CONTEXT_GUIDANCE = (
+    "Create the provided --session-dir if absent; add implementation-plan.md with one "
+    "orchestune-workflow marker (schema_version: 1, state: workflow-state.json), and "
+    "add workflow-state.json in the same session with schema_version, repository, "
+    "issue_number, claim_id, mode, change_kind, backend, reviewer, selection_basis, "
+    "and plan_approval. These commands do not create files."
+)
+
+
 def _context(c: WorkflowContext) -> _Observation:
     if "context" in c.errors:
         return _unmet("context_invalid", c.errors["context"], "implementation-plan.md")
     if "forge" in c.errors:
         return _unknown(c.errors["forge"], "Forge evidence")
+    if "context_missing" in c.errors:
+        return _unmet(
+            "context_unrecorded", _MISSING_CONTEXT_GUIDANCE, "context_recorded"
+        )
     state = c.state
     if (
         not isinstance(state.get("schema_version"), int)
@@ -757,11 +770,14 @@ def _check_gate(
             reason_codes=("gate_not_applicable",),
         )
     included = _included_stages(context, definitions, owner)
-    checks = [
-        (_observe(context, condition, cache), condition)
-        for stage in included
-        for condition in stage.exit_conditions
-    ]
+    if "context_missing" in context.errors:
+        checks = [(_observe(context, "context_recorded", cache), "context_recorded")]
+    else:
+        checks = [
+            (_observe(context, condition, cache), condition)
+            for stage in included
+            for condition in stage.exit_conditions
+        ]
     result = _result(
         context,
         gate,

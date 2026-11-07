@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -90,13 +91,36 @@ def read_object(path: Path) -> dict[str, Any]:
     return value
 
 
+class MissingWorkflowContextError(Exception):
+    """A workflow context artifact has not been created yet."""
+
+    def __init__(self, artifact: str) -> None:
+        super().__init__(f"Missing workflow context artifact: {artifact}")
+        self.artifact = artifact
+
+
 def read_session(session: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     """Locate state using exactly one safe plan marker; never search sessions."""
+    try:
+        session_stat = session.stat()
+    except FileNotFoundError:
+        raise MissingWorkflowContextError("session directory") from None
+    if not stat.S_ISDIR(session_stat.st_mode):
+        raise ValueError("session path must be a directory")
     plan_path = session_path(session, "implementation-plan.md")
+    try:
+        plan_path.stat()
+    except FileNotFoundError:
+        raise MissingWorkflowContextError("implementation-plan.md") from None
     plan = plan_path.read_text(encoding="utf-8")
+    openers = re.findall(r"^```orchestune-workflow[^\S\n]*(?:\n|$)", plan, re.M)
     blocks = re.findall(
         r"^```orchestune-workflow[^\S\n]*\n(.*?)^```[^\S\n]*$", plan, re.M | re.S
     )
+    if len(blocks) < len(openers):
+        raise ValueError("workflow marker fence is not closed")
+    if not blocks:
+        raise MissingWorkflowContextError("orchestune-workflow marker")
     if len(blocks) != 1:
         raise ValueError("plan must contain exactly one orchestune-workflow marker")
     try:
@@ -111,6 +135,10 @@ def read_session(session: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     ) or marker["schema_version"] != 1:
         raise ValueError("unsupported workflow marker schema_version")
     state_path = session_path(session, marker["state"])
+    try:
+        state_path.stat()
+    except FileNotFoundError:
+        raise MissingWorkflowContextError("workflow-state.json") from None
     state = read_object(state_path)
     artifacts = {
         "plan": {
@@ -331,10 +359,14 @@ def _observe_local(context: WorkflowContext) -> None:
 
 def _observe_forge(context: WorkflowContext, forge: WorkflowForge) -> None:
     context.repository = forge.get_repository_slug()
-    if isinstance(forge, SnapshotForge) and forge.claim_id != context.state.get(
-        "claim_id"
-    ):
-        raise ValueError("snapshot claim generation differs from workflow state")
+    if isinstance(forge, SnapshotForge):
+        expected_claim_id = context.state.get("claim_id")
+        if "context_missing" in context.errors:
+            expected_claim_id = (
+                context.active.claim.claim_id if context.active is not None else None
+            )
+        if forge.claim_id != expected_claim_id:
+            raise ValueError("snapshot claim generation differs from workflow state")
     context.issue = forge.get_issue(context.issue_number)
     if context.issue is not None:
         context.dependencies_ready = read_dependencies(context.issue, forge)
@@ -350,7 +382,9 @@ def _read_pr_context(
     now: datetime | None,
 ) -> None:
     try:
-        if context.state.get("backend") == "mcp":
+        if context.state.get("backend") == "mcp" or (
+            "context_missing" in context.errors and snapshot is not None
+        ):
             if snapshot is None:
                 raise ValueError("MCP backend requires --snapshot PATH")
             forge = SnapshotForge(
@@ -390,6 +424,8 @@ def _read_context(
     )
     try:
         context.state, context.artifacts = read_session(context.session_dir)
+    except MissingWorkflowContextError as error:
+        context.errors["context_missing"] = error.artifact
     except (OSError, UnicodeError, ValueError) as error:
         context.errors["context"] = str(error)
     try:

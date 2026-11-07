@@ -140,9 +140,59 @@ def test_session_reads_explicit_marker(tmp_path):
 
 
 @pytest.mark.parametrize(
+    ("setup", "artifact"),
+    [
+        ("session", "session directory"),
+        ("plan", "implementation-plan.md"),
+        ("marker", "orchestune-workflow marker"),
+        ("state", "workflow-state.json"),
+    ],
+)
+def test_absent_session_context_has_a_typed_missing_location(tmp_path, setup, artifact):
+    from orchestune.workflow.readers import MissingWorkflowContextError
+
+    session = tmp_path / "session"
+    if setup != "session":
+        session.mkdir()
+    if setup in {"marker", "state"}:
+        (session / "implementation-plan.md").write_text(
+            "Plan\n```orchestune-workflow\nschema_version: 1\n"
+            "state: workflow-state.json\n```\n"
+            if setup == "state"
+            else "Plan without workflow state\n"
+        )
+    if setup == "state":
+        (session / "workflow-state.json").unlink(missing_ok=True)
+
+    with pytest.raises(MissingWorkflowContextError) as error:
+        read_session(session)
+
+    assert error.value.artifact == artifact
+
+
+def test_context_reader_preserves_typed_absence(tmp_path):
+    from orchestune.workflow.readers import read_context
+
+    context = prepared_context(tmp_path)
+    (context.session_dir / "implementation-plan.md").unlink()
+
+    observed = read_context(
+        issue_number=1496,
+        session_dir=context.session_dir,
+        root=tmp_path,
+        forge=ReadForge(context),
+    )
+
+    assert observed.errors["context_missing"] == "implementation-plan.md"
+    assert "context" not in observed.errors
+    assert observed.state == {}
+
+
+@pytest.mark.parametrize(
     "marker",
     [
-        "",
+        "```orchestune-workflow\n```",
+        "```orchestune-workflow\nschema_version: 99\nstate: ../outside.json\n",
         "```orchestune-workflow\nschema_version: 1\nstate: ../other.json\n```",
         "```orchestune-workflow\nschema_version: 1\nstate: /other.json\n```",
         "```orchestune-workflow\nschema_version: 1\nstate: workflow-state.json\nextra: true\n```",

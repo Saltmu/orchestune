@@ -53,9 +53,17 @@ orchestune workflow next --issue 1497 --session-dir .orchestune/tmp/task-example
 orchestune workflow next --issue 1497 --session-dir .orchestune/tmp/task-example --pr 42 --json
 ```
 
+When using an explicit MCP snapshot, pass `--snapshot PATH`; it is also accepted
+while plan context is absent so the Issue and claim can still be validated.
+
 `next` returns `ready` when an action can be derived, `waiting_human` when a
 human decision is required, `unmet` for missing or invalid evidence that blocks
 a safe decision, and `terminal_blocked` only for a verified blocked Outcome.
+During `prepare`, an absent session directory, plan, plan marker, or referenced
+state file is ordinary missing work: `next` returns `ready` with creation guidance
+in the `prepare` action and `context_recorded.missing`. `check` remains `unmet` and
+reports the same guidance. Neither command creates files; malformed context stays
+`unmet`.
 A verified handoff returns `ready`, reason `handed_off`, and no actions. See the
 [workflow evidence contract](../plans/local-ci-workflow-enforcement.md) for the
 stage and JSON schema details. In the `complete` stage, `terminal_receipt` can

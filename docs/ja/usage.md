@@ -50,10 +50,16 @@ orchestune gc                     # 予約を解放する
 orchestune workflow next --issue 1497 --session-dir .orchestune/tmp/task-example --json
 orchestune workflow next --issue 1497 --session-dir .orchestune/tmp/task-example --pr 42 --json
 ```
+MCP snapshotを明示する場合は `--snapshot PATH` を渡します。plan contextが未作成の間も
+Issueとclaimを検証できるよう、この場合はstateにbackendが無くても指定できます。
 
 操作を導出できれば `ready`、人間の判断が必要なら `waiting_human`、安全な判断を妨げる
 証拠の不足・不正があれば `unmet` を返します。`terminal_blocked` は確定済みのblocked Outcomeを
 確認した場合だけです。handoff済みは `ready` と `handed_off` を返し、操作候補はありません。
+`prepare` でsessionディレクトリ、plan、plan marker、参照先stateのいずれかが未作成なら、
+`next` は `ready` として `prepare` 操作および `context_recorded.missing` に作成案内を返します。
+`check` は同じ案内を返しながら `unmet` のままです。どちらのコマンドもファイルを作成せず、
+不正なcontextは引き続き `unmet` です。
 段階とJSON schemaの詳細は[workflow証拠契約](../plans/local-ci-workflow-enforcement.md)を参照してください。
 `complete`段階では、全体statusが`ready`でも`terminal_receipt` checkは`unmet`になります。
 これは候補として表示された`complete`操作が作成するOutcome receiptを表します。

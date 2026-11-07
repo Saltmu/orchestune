@@ -382,6 +382,23 @@ def test_missing_or_invalid_plan_reports_context_invalid_without_gate_not_applic
     assert "implementation-plan.md not found" in check.missing[0]
 
 
+def test_absent_plan_context_only_reports_context_recorded_as_unmet(tmp_path):
+    c = prepared_context(tmp_path)
+    c.errors["context_missing"] = "implementation-plan.md"
+
+    result = check_gate(c, "pre-claim")
+
+    assert result.stage_id == "prepare"
+    assert result.status == "unmet"
+    assert "context_unrecorded" in result.reason_codes
+    assert "context_invalid" not in result.reason_codes
+    assert "approval_invalid" not in result.reason_codes
+    assert "reviewer_missing" not in result.reason_codes
+    assert tuple(check.id for check in result.checks) == ("context_recorded",)
+    assert "workflow-state.json" in result.checks[0].missing[0]
+    assert "implementation-plan.md" in result.checks[0].missing[0]
+
+
 def test_non_matching_branches_retains_gate_not_applicable_when_state_is_valid(
     tmp_path,
 ):

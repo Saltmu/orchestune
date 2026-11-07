@@ -60,6 +60,24 @@ def test_packaged_stages_follow_contract_and_are_deeply_immutable():
         "pre-pr",
         "pre-complete",
     }
+    prepare_action = stages[0].actions[0]
+    assert prepare_action.id == "prepare"
+    for item in (
+        "implementation-plan.md",
+        "workflow-state.json",
+        "orchestune-workflow",
+        "schema_version",
+        "repository",
+        "issue_number",
+        "claim_id",
+        "mode",
+        "change_kind",
+        "backend",
+        "reviewer",
+        "selection_basis",
+        "plan_approval",
+    ):
+        assert item in prepare_action.description
     for stage in stages:
         assert stage.entry_conditions and stage.actions and stage.exit_conditions
         assert stage.on_failure and stage.references and stage.artifacts

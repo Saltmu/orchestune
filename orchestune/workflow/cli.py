@@ -41,7 +41,10 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument(
             "--snapshot",
             type=Path,
-            help="Explicit MCP workflow snapshot v1 (state backend=mcp)",
+            help=(
+                "Explicit MCP workflow snapshot v1 (required for backend=mcp; "
+                "also accepted when plan context is absent)"
+            ),
         )
         command.add_argument(
             "--json",

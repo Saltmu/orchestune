@@ -42,6 +42,7 @@ _CONDITION_REASONS = {
         "context_conflict",
         "context_invalid",
         "context_missing",
+        "context_unrecorded",
         "evidence_unavailable",
     },
     "reviewer_selected": {"reviewer_invalid", "reviewer_missing", "waiting_human"},
