@@ -11,7 +11,7 @@ exit_conditions = ["context_recorded", "footprint_valid", "reviewer_selected", "
 references = ["skills/local-ci-developer/SKILL.md", "skills/local-ci-developer/references/worktree.md#initial-footprint-procedure"]
 artifacts = ["plan", "state", "footprint"]
 branches = { mode = ["interactive", "auto"], change_kind = ["code", "docs"], backend = ["gh", "mcp"] }
-actions = [{ id = "prepare", description = "Record mode, change kind, fixed backend, reviewer provenance, applicable plan approval, and initial footprint before claim.", references = ["skills/local-ci-developer/SKILL.md"] }]
+actions = [{ id = "prepare", description = "Create the provided --session-dir if absent. Add implementation-plan.md with one orchestune-workflow marker (schema_version: 1, state: workflow-state.json), then add workflow-state.json in the same session with schema_version, repository, issue_number, claim_id, mode, change_kind, backend, reviewer, selection_basis, and plan_approval. These commands do not create files.", references = ["skills/local-ci-developer/SKILL.md"] }]
 on_failure = [{ id = "reconcile", description = "Resolve missing or conflicting context; interactive approval/reviewer waits retain the claim and worktree when already claimed.", reason_codes = ["context_missing", "context_conflict", "waiting_human", "footprint_invalid"], references = ["skills/local-ci-developer/SKILL.md"] }]
 
 [[stage]]
