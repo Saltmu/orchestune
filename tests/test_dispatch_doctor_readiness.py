@@ -181,7 +181,15 @@ class TestCiCommandCheck:
     def test_ci_command_configured_absolute_file(self, tmp_path: Path) -> None:
         script = tmp_path / "ci.sh"
         script.write_text("#!/bin/sh", encoding="utf-8")
-        config = {"ci_command": str(script.resolve())}
+        config = {"ci_command": script.resolve().as_posix()}
+        diags = run_readiness_checks(tmp_path, config, True, which_fn=lambda _: None)
+        diag = next(d for d in diags if d.code == CODE_READINESS_CI_COMMAND)
+        assert diag.status == "ok"
+
+    def test_ci_command_configured_absolute_file_list(self, tmp_path: Path) -> None:
+        script = tmp_path / "ci.sh"
+        script.write_text("#!/bin/sh", encoding="utf-8")
+        config = {"ci_command": [str(script.resolve())]}
         diags = run_readiness_checks(tmp_path, config, True, which_fn=lambda _: None)
         diag = next(d for d in diags if d.code == CODE_READINESS_CI_COMMAND)
         assert diag.status == "ok"
