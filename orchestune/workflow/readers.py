@@ -113,9 +113,12 @@ def read_session(session: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     except FileNotFoundError:
         raise MissingWorkflowContextError("implementation-plan.md") from None
     plan = plan_path.read_text(encoding="utf-8")
+    openers = re.findall(r"^```orchestune-workflow[^\S\n]*(?:\n|$)", plan, re.M)
     blocks = re.findall(
         r"^```orchestune-workflow[^\S\n]*\n(.*?)^```[^\S\n]*$", plan, re.M | re.S
     )
+    if len(blocks) < len(openers):
+        raise ValueError("workflow marker fence is not closed")
     if not blocks:
         raise MissingWorkflowContextError("orchestune-workflow marker")
     if len(blocks) != 1:

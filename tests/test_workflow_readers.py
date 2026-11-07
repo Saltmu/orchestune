@@ -192,6 +192,7 @@ def test_context_reader_preserves_typed_absence(tmp_path):
     "marker",
     [
         "```orchestune-workflow\n```",
+        "```orchestune-workflow\nschema_version: 99\nstate: ../outside.json\n",
         "```orchestune-workflow\nschema_version: 1\nstate: ../other.json\n```",
         "```orchestune-workflow\nschema_version: 1\nstate: /other.json\n```",
         "```orchestune-workflow\nschema_version: 1\nstate: workflow-state.json\nextra: true\n```",
