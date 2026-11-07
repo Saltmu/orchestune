@@ -799,6 +799,7 @@ def test_worker_skills_plan_approval_and_reviewer_selection(skill_name: str):
     )
     assert "right after the start request" in plan and "before claim" in plan
     assert "resolve reviewer bot" in plan.lower()
+    assert "orchestune reviewer resolve --target" in plan
     assert "prompt explicit" in plan.lower() and "overrides config" in plan.lower()
     assert "reviewer-bot" in plan and "reviewer_by_target" in plan
     assert "orchestune.toml" in plan and "pyproject.toml" in plan
@@ -808,10 +809,11 @@ def test_worker_skills_plan_approval_and_reviewer_selection(skill_name: str):
         and "agy-cli" in plan
         and "grok-cli" in plan
     )
-    assert "cloud-routine" in plan and "codex-cloud" in plan
     assert "claude code" in plan.lower() and "antigravity" in plan.lower()
-    assert "`local` and unlisted targets have no default" in plan.lower()
+    assert "do not pass `auto`" in plan.lower()
+    assert "do not reimplement the mapping" in plan.lower()
     assert "unresolved uses `--bot-name skip` without asking user" in plan
+    assert "cloud-routine` → `codex`" not in plan
     assert "after PR creation" not in plan
     assert "bypass user approval" in plan and "existing Issue" in plan
     review = next(
@@ -819,13 +821,16 @@ def test_worker_skills_plan_approval_and_reviewer_selection(skill_name: str):
     )
     assert "without re-asking" in review
     assert "After Step 10 creates the PR" not in review
-    assert "resolved" in review.lower()
+    assert "recorded" in review.lower()
+    assert "do not switch because config changed" in review
+    assert "--switch-reviewer" in review
     assert "--bot-name skip" in review
     loop = (SKILLS_ROOT / skill_name / "references/review-loop.md").read_text(
         encoding="utf-8"
     )
     assert "right after the start request" in loop and "post-PR selection" not in loop
     assert "after PR creation require" not in loop
+    assert "orchestune reviewer resolve --target" in loop
     assert "resolve reviewer bot" in loop.lower()
     assert "prompt explicit" in loop.lower() and "overrides config" in loop.lower()
     assert "reviewer-bot" in loop and "reviewer_by_target" in loop
@@ -836,10 +841,11 @@ def test_worker_skills_plan_approval_and_reviewer_selection(skill_name: str):
         and "agy-cli" in loop
         and "grok-cli" in loop
     )
-    assert "cloud-routine" in loop and "codex-cloud" in loop
     assert "claude code" in loop.lower() and "antigravity" in loop.lower()
-    assert "`local` and unlisted targets have no default" in loop.lower()
+    assert "do not pass `auto`" in loop.lower()
+    assert "do not reimplement the mapping" in loop.lower()
     assert "unresolved uses `--bot-name skip` without asking user" in loop
+    assert "does not re-resolve from config" in loop
     assert "without re-asking" in loop
     assert (
         "Only per-finding procedure Step 5 with Step 6 satisfied permits Step 12"

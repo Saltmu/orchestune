@@ -14,6 +14,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "dispatch.doctor.cli",
             "dispatch.gc_cli",
             "dispatch.review_cli",
+            "dispatch.reviewer_cli",
             "monitor",
             "provisioning.cli",
             "replan.cli",
