@@ -35,6 +35,13 @@ CODE_ACTIONS_PARALLELISM = "dispatch.actions.parallelism"
 CODE_ACTIONS_ENTRYPOINT = "dispatch.actions.entrypoint"
 CODE_ACTIONS_TARGET = "dispatch.actions.target"
 CODE_ACTIONS_CREDENTIALS = "dispatch.actions.credentials"
+CODE_READINESS_DISCIPLINE = "dispatch.readiness.discipline"
+CODE_READINESS_CI_DEFINITION = "dispatch.readiness.ci_definition"
+CODE_READINESS_CI_COMMAND = "dispatch.readiness.ci_command"
+CODE_READINESS_EXECUTOR = "dispatch.readiness.executor"
+CODE_READINESS_REVIEWER = "dispatch.readiness.reviewer"
+CODE_READINESS_IGNORE = "dispatch.readiness.ignore"
+CODE_READINESS_AUTH = "dispatch.readiness.auth"
 CODE_LOCAL_SERIALIZATION = "dispatch.local.serialization"
 CODE_OTHER_ENTRYPOINTS = "dispatch.repository.other_entrypoints"
 CODE_OTHER_CONTROL_ENTRYPOINTS = "dispatch.repository.other_control_entrypoints"
@@ -50,6 +57,13 @@ ALL_CODES: tuple[str, ...] = (
     CODE_ACTIONS_ENTRYPOINT,
     CODE_ACTIONS_TARGET,
     CODE_ACTIONS_CREDENTIALS,
+    CODE_READINESS_DISCIPLINE,
+    CODE_READINESS_CI_DEFINITION,
+    CODE_READINESS_CI_COMMAND,
+    CODE_READINESS_EXECUTOR,
+    CODE_READINESS_REVIEWER,
+    CODE_READINESS_IGNORE,
+    CODE_READINESS_AUTH,
     CODE_LOCAL_SERIALIZATION,
     CODE_OTHER_ENTRYPOINTS,
     CODE_OTHER_CONTROL_ENTRYPOINTS,

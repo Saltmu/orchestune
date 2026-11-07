@@ -15,6 +15,8 @@ Orchestune is designed around the assumption that an agent implements according 
 3. **(c) `ci_command` must be set to your repository's own CI entrypoint**
    Set `ci-command = "make ci"` (or `"npm run ci"`, for example) at the top level of `orchestune.toml`, or under `[tool.orchestune]` in `pyproject.toml`. There is no `--ci-command` CLI option. When unset, the platform default is used only if `scripts/local-ci.sh` (POSIX) or `scripts/local-ci.ps1` (Windows) exists. Otherwise apply dispatch exits with code 2 before reserving reports or changing task state; `--no-apply` remains available. `orchestune complete` reads the primary checkout's setting, executes it in the task worktree, and records successful, unchanged, clean-worktree CI evidence. `config init` suggests commands from local scripts, Makefile, package.json and pytest configuration without running them.
 
+Pre-adoption readiness ((a)–(c), execution target, reviewer, gitignore, and auth) can be checked in one go with `orchestune doctor --execution-mode local` (add `--online` to include GitHub authentication). If any item is missing, remediation guidance and examples are shown as warnings.
+
 ### Creating and Editing the Configuration File
 
 You can create or update your project-specific `orchestune.toml` using either the interactive wizard or manual file copying. Keep the real file out of Git because it may contain local targets or credentials, and publish shared changes through the example instead (also add it to `.gitignore` when adopting Orchestune in another repository).
@@ -357,9 +359,10 @@ The legacy per-parent group (`orchestune-integrate-…-${{ inputs.parent_issue }
 orchestune doctor --execution-mode actions --workflow .github/workflows/orchestune-dispatch.yml
 orchestune doctor --execution-mode actions --workflow .github/workflows/orchestune-dispatch.yml --json
 orchestune doctor --execution-mode local
+orchestune doctor --execution-mode local --online
 ```
 
-`--workflow` may be given multiple times. The diagnostics are always offline: they make no GitHub API calls, perform no authentication checks, and change no state.
+`--workflow` may be given multiple times. Diagnostics are offline by default: they make no GitHub API calls and change no state. When `--online` is passed, GitHub authentication (`dispatch.readiness.auth`) is also verified.
 
 - Exit codes: `0` = no errors in the static configuration, `1` = configuration errors found, `2` = invalid arguments. Warnings/not_checked alone give `0`.
 - **A configuration diagnosis is not a guarantee of operational ownership.** Even with exit code 0, the absence of conflicts with other machines, other clones, or entrypoints outside Actions has not been verified.
@@ -375,6 +378,13 @@ orchestune doctor --execution-mode local
 | `dispatch.actions.entrypoint` | ok if a synchronous dispatch entrypoint can be identified; not_checked if it cannot be detected |
 | `dispatch.actions.target` | External targets (`cloud-routine`/`codex-cloud`) are ok, local-process targets are error, not_checked if it cannot be determined statically |
 | `dispatch.actions.credentials` | ok if the credentials required by the external target are passed via `env:` visible to the control step; missing is error |
+| `dispatch.readiness.discipline` | ok if `AGENTS.md`, `CLAUDE.md`, or `.agents/AGENTS.md` exists as a file; warning otherwise |
+| `dispatch.readiness.ci_definition` | ok if `.github/workflows/*.yml|yaml` exists, CI candidates detected, or explicit `ci-command` file exists; warning otherwise |
+| `dispatch.readiness.ci_command` | ok if configured `ci-command` (or fallback `platform_ci_script_relative()`) executable exists; warning otherwise |
+| `dispatch.readiness.executor` | ok if execution target (local, CLI, or cloud settings) is available and configured; warning otherwise |
+| `dispatch.readiness.reviewer` | ok if reviewer bot CLI is available; warning if unresolved or CLI missing |
+| `dispatch.readiness.ignore` | ok if `.gitignore` contains `orchestune.toml` and `.orchestune/` patterns; warning otherwise |
+| `dispatch.readiness.auth` | Evaluated only when `--online`; ok if GitHub authentication is verified; warning otherwise |
 | `dispatch.local.serialization` | Always not_checked in local mode (confirm single ownership and serial execution of the whole CLI operationally) |
 | `dispatch.repository.other_entrypoints` | Direct dispatch in unspecified workflows. warning for the standard group; error for a missing or non-standard group (including leftover old workflows). In local mode, warning if any workflow contains a direct dispatch |
 | `dispatch.repository.other_control_entrypoints` | Detects `orchestune gc`/`orchestune recover --apply` in apply mode. ok for the standard group, warning otherwise |

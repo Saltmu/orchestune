@@ -9,6 +9,23 @@ from orchestune.infra.git_cli import is_git_ignored
 
 _VALID_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_\-]+$")
 
+ORCHESTUNE_GITIGNORE_LINES: tuple[str, ...] = (
+    ".orchestune",
+    ".orchestune/",
+    ".orchestune/*",
+    ".orchestune/tmp",
+    ".orchestune/tmp/",
+    "/.orchestune",
+    "/.orchestune/",
+    "/.orchestune/*",
+    "/.orchestune/tmp",
+    "/.orchestune/tmp/",
+    "**/.orchestune",
+    "**/.orchestune/",
+    "**/.orchestune/tmp",
+    "**/.orchestune/tmp/",
+)
+
 
 class SessionDirError(Exception):
     """Raised when session directory creation fails."""
@@ -34,25 +51,9 @@ def _is_ignored_in_gitignore(project_dir: Path) -> bool:
         return False
 
     content = gitignore_path.read_text(encoding="utf-8")
-    accepted_patterns = (
-        ".orchestune",
-        ".orchestune/",
-        ".orchestune/*",
-        ".orchestune/tmp",
-        ".orchestune/tmp/",
-        "/.orchestune",
-        "/.orchestune/",
-        "/.orchestune/*",
-        "/.orchestune/tmp",
-        "/.orchestune/tmp/",
-        "**/.orchestune",
-        "**/.orchestune/",
-        "**/.orchestune/tmp",
-        "**/.orchestune/tmp/",
-    )
     for line in content.splitlines():
         stripped = line.strip()
-        if stripped in accepted_patterns:
+        if stripped in ORCHESTUNE_GITIGNORE_LINES:
             return True
     return False
 
