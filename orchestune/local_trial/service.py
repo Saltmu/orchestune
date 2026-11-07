@@ -91,7 +91,7 @@ class TrialDependencies:
 def make_dependencies(repo: str) -> TrialDependencies:
     """Construct production dependencies from repository path."""
     ws = LocalTrialWorkspace()
-    common_dir, primary_root = ws.storage_roots(repo)
+    primary_root, common_dir = ws.storage_roots(repo)
     store = LocalTrialStore(common_dir=common_dir, primary_root=primary_root)
     runner = get_default_runner()
     agents = LocalAgentRunner(runner=runner)
@@ -604,9 +604,13 @@ def _handle_ci_result(
             state.checkpoint,
         )
 
+    pending_att = (
+        state.pending_attempt if proc_rec.stop_confirmed is False else None
+    )
+
     return replace(
         state,
-        pending_attempt=None,
+        pending_attempt=pending_att,
         attempt_ids=(*state.attempt_ids, ci_id),
         phase=phase,
         reason=reason,
