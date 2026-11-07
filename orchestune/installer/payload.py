@@ -14,7 +14,12 @@ from orchestune.installer.contracts import (
 )
 from orchestune.version import get_version
 
-STANDARD_SKILLS = ("orchestune", "orchestune-provision", "orchestune-dispatch")
+STANDARD_SKILLS = (
+    "orchestune",
+    "orchestune-provision",
+    "orchestune-dispatch",
+    "orchestune-readiness",
+)
 WORKFLOW_SKILL = "workflow-template"
 EXCLUDED_SKILLS = ("local-ci-developer", "issue-design-review")
 

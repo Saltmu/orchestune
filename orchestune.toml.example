@@ -43,6 +43,10 @@ usage-limit-reset-grace-seconds = 30
 # usage-limit-timezone = "Asia/Tokyo"
 zombie-gc = true
 
+# Skip pre-flight readiness check (discipline docs and CI) in orchestune-readiness skill.
+# Standalone orchestune doctor and dispatch preflight checks remain active.
+# skip-readiness-check = false
+
 # Parent Issue cannot be set in configuration files.
 # Specify via CLI (-p / --parent-issue) or infer from a parent/issue-<N> branch.
 

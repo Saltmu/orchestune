@@ -17,6 +17,8 @@ Orchestune is designed around the assumption that an agent implements according 
 
 Pre-adoption readiness ((a)–(c), execution target, reviewer, gitignore, and auth) can be checked in one go with `orchestune doctor --execution-mode local` (add `--online` to include GitHub authentication). If any item is missing, remediation guidance and examples are shown as warnings.
 
+To skip the pre-flight readiness check in the `orchestune-readiness` skill before task decomposition, set `skip-readiness-check = true` (default: `false`) in the configuration file (also configurable via the advanced wizard menu). This setting only skips the pre-flight check in `orchestune-readiness`; standalone `orchestune doctor` and dispatch preflight checks remain active.
+
 ### Creating and Editing the Configuration File
 
 You can create or update your project-specific `orchestune.toml` using either the interactive wizard or manual file copying. Keep the real file out of Git because it may contain local targets or credentials, and publish shared changes through the example instead (also add it to `.gitignore` when adopting Orchestune in another repository).

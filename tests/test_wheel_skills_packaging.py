@@ -16,6 +16,7 @@ DISTRIBUTABLE_SKILLS = frozenset(
         "orchestune",
         "orchestune-provision",
         "orchestune-dispatch",
+        "orchestune-readiness",
         "workflow-template",
     }
 )
@@ -34,7 +35,11 @@ def _expected_distributable_skill_files() -> set[str]:
     for skill in DISTRIBUTABLE_SKILLS:
         skill_dir = skills_dir / skill
         for path in skill_dir.rglob("*"):
-            if path.is_file():
+            if (
+                path.is_file()
+                and "__pycache__" not in path.parts
+                and not path.name.endswith(".pyc")
+            ):
                 result.add(path.relative_to(REPO_ROOT).as_posix())
     return result
 
@@ -310,6 +315,10 @@ def test_isolated_installation_and_skills_portability(
     assert (installed_skills_dir / "orchestune" / "SKILL.md").is_file()
     assert (installed_skills_dir / "orchestune-provision" / "SKILL.md").is_file()
     assert (installed_skills_dir / "orchestune-dispatch" / "SKILL.md").is_file()
+    assert (installed_skills_dir / "orchestune-readiness" / "SKILL.md").is_file()
+    assert (
+        installed_skills_dir / "orchestune-readiness" / "scripts" / "check_readiness.py"
+    ).is_file()
     assert (
         installed_skills_dir
         / "orchestune-provision"

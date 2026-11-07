@@ -13,7 +13,7 @@ class QuestionSpec:
     key: str
     label: str
     help_text: str
-    input_kind: Literal["choice", "text", "integer", "number", "string_list"]
+    input_kind: Literal["choice", "text", "integer", "number", "string_list", "boolean"]
     category: str
     choices: list[str] | None = None
     allow_unset: bool = True
@@ -114,9 +114,19 @@ ADVANCED_CATEGORIES = [
     ("paths", "保存先パス"),
     ("dag", "DAG設定"),
     ("profiles", "実行プロファイル"),
+    ("readiness", "事前診断設定"),
 ]
 
 ADVANCED_QUESTIONS: dict[str, list[QuestionSpec]] = {
+    "readiness": [
+        QuestionSpec(
+            key="skip-readiness-check",
+            label="事前診断スキップ (skip-readiness-check)",
+            help_text="orchestune-readiness による規律文書・CI設定の事前診断を省略するかどうか（既定値: false）",
+            input_kind="boolean",
+            category="readiness",
+        ),
+    ],
     "timeouts": [
         QuestionSpec(
             key="task-timeout-seconds",

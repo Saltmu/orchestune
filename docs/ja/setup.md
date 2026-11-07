@@ -17,6 +17,8 @@ Orchestuneは「エージェントが標準開発ワークフローに従って�
 
 導入前の準備状況（(a)〜(c)、実行先、レビュー担当、gitignore、認証）は、`orchestune doctor --execution-mode local`（認証確認を含む場合は `--online`）で一括診断できます。不足項目がある場合は warning として直すコマンドや設定例が提示されます。
 
+タスク分解前の事前診断スキル `orchestune-readiness` を省略する場合は、設定ファイルで `skip-readiness-check = true`（既定値: `false`）を設定できます（ウィザード詳細設定でも変更可能）。この設定は `orchestune-readiness` による事前診断のみを省略し、単独の `orchestune doctor` やディスパッチ前の事前チェックは無効化されません。
+
 ### 設定ファイルの作成と編集
 
 プロジェクト固有の `orchestune.toml` は、対話式ウィザードまたは手動コピーで作成できます。実ファイルはローカル設定や認証先を含み得るためGit管理外とし、共有する変更は設定例へ反映してください（別リポジトリへ導入する場合も `.gitignore` に追加してください）。

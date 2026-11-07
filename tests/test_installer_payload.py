@@ -35,9 +35,7 @@ def test_resolve_payload_from_source_dir(tmp_path: Path):
     skills_dir.mkdir()
 
     for skill in [
-        "orchestune",
-        "orchestune-provision",
-        "orchestune-dispatch",
+        *STANDARD_SKILLS,
         "local-ci-developer",
         "issue-design-review",
         "workflow-template",
@@ -81,9 +79,7 @@ def test_resolve_payload_with_workflow_template(tmp_path: Path):
     skills_dir.mkdir()
 
     for skill in [
-        "orchestune",
-        "orchestune-provision",
-        "orchestune-dispatch",
+        *STANDARD_SKILLS,
         "workflow-template",
     ]:
         s_dir = skills_dir / skill
@@ -124,7 +120,7 @@ def test_resolve_payload_missing_skill_md(tmp_path: Path):
 
     # Create skills without SKILL.md in orchestune
     (skills_dir / "orchestune").mkdir()
-    for skill in ["orchestune-provision", "orchestune-dispatch"]:
+    for skill in [s for s in STANDARD_SKILLS if s != "orchestune"]:
         s_dir = skills_dir / skill
         s_dir.mkdir()
         (s_dir / "SKILL.md").write_text(
@@ -146,7 +142,7 @@ def test_resolve_payload_traversal_or_symlink_rejected(tmp_path: Path):
     skills_dir = source_root / "skills"
     skills_dir.mkdir()
 
-    for skill in ["orchestune", "orchestune-provision", "orchestune-dispatch"]:
+    for skill in STANDARD_SKILLS:
         s_dir = skills_dir / skill
         s_dir.mkdir()
         (s_dir / "SKILL.md").write_text(

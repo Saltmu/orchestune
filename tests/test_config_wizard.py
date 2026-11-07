@@ -246,3 +246,43 @@ def test_existing_ci_and_reviewer_defaults_are_preserved(
     assert defaults["ci"] == "python 'check with spaces.py'"
     assert defaults["reviewer"] == reviewer
     assert doc.get_value("ci-command") == ["python", "check with spaces.py"]
+
+
+def test_skip_readiness_check_in_advanced_questions():
+    from orchestune.config_wizard.questions import ADVANCED_QUESTIONS, BASIC_QUESTIONS
+
+    assert len(BASIC_QUESTIONS) == 6
+    assert "readiness" in ADVANCED_QUESTIONS
+    q = next(
+        q for q in ADVANCED_QUESTIONS["readiness"] if q.key == "skip-readiness-check"
+    )
+    assert q.input_kind == "boolean"
+    assert q.category == "readiness"
+
+
+def test_wizard_advanced_menu_edit_skip_readiness_check(tmp_path: Path):
+    from orchestune.config_wizard.wizard import run_config_wizard
+
+    prompt = MockPromptPort(
+        choice_responses=[
+            "auto",  # dispatch-target
+            "claude",  # reviewer-bot
+            "advanced",  # main menu -> advanced
+            "readiness",  # advanced category
+            "back",  # advanced menu -> back
+            "preview",  # main menu -> preview
+            "save",  # confirm action -> save
+        ],
+        text_responses=["pytest -v"],  # ci-command
+        integer_responses=[
+            2,
+            None,
+            3600,
+        ],  # max-concurrent, max-launches, window-seconds
+        confirm_responses=[True],  # prompt_confirm for skip-readiness-check
+    )
+
+    result = run_config_wizard(mode="init", project_dir=tmp_path, prompt=prompt)
+    assert result.status == "saved"
+    saved_text = (tmp_path / "orchestune.toml").read_text(encoding="utf-8")
+    assert "skip-readiness-check = true" in saved_text
