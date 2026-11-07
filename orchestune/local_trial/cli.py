@@ -359,7 +359,7 @@ def _interactive_ci_selection(
         print(f"  {idx}. {' '.join(cand)}")
     try:
         sel = input("CI候補番号を選択するか、CIコマンドを入力してください: ").strip()
-    except (EOFError, KeyboardInterrupt):
+    except EOFError:
         return view, False
     if not sel:
         return view, False

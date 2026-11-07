@@ -421,6 +421,27 @@ class TestInteractiveFlowAndExitCodes:
             code = main(["start", "--request-file", str(req)])
             assert code == 130
 
+    def test_start_ci_selection_keyboard_interrupt_returns_130(self, tmp_path):
+        req = tmp_path / "req.txt"
+        req.write_text("task description")
+        state = _dummy_state("1" * 32, TrialPhase.PLANNED)
+        ci_missing_view = _dummy_view(
+            state,
+            effective_phase=TrialPhase.PLANNED,
+            reason="ci_missing",
+        )
+
+        fake_deps = _make_fake_deps(state)
+        with (
+            patch.object(trial_cli, "make_dependencies", return_value=fake_deps),
+            patch.object(trial_cli, "start_trial", return_value=ci_missing_view),
+            patch("sys.stdin.isatty", return_value=True),
+            patch("sys.stdout.isatty", return_value=True),
+            patch("builtins.input", side_effect=KeyboardInterrupt),
+        ):
+            code = main(["start", "--request-file", str(req)])
+            assert code == 130
+
     @pytest.mark.parametrize(
         "phase,reason,expected_code",
         [
