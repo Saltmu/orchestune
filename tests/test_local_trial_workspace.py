@@ -749,3 +749,58 @@ def test_stage_commit_with_deleted_path(tmp_path: Path) -> None:
     # stage_commit should succeed without failing on missing pathspec
     intent = ws_impl.stage_commit(state)
     assert "to_delete.txt" in intent.allowed_paths
+
+
+def test_stage_commit_dangling_symlink(tmp_path: Path) -> None:
+    repo_path = tmp_path / "repo"
+    _init_git_repo(repo_path)
+    ws_impl = LocalTrialWorkspace()
+    repo_id = ws_impl.discover(str(repo_path))
+    ws_impl.ensure_storage_ignored(repo_id)
+
+    trial_id = "2" * 31 + "b"
+    paths = ws_impl.paths(repo_id, trial_id)
+    ws_impl.prepare(repo_id, paths)
+    impl_path = Path(paths.implementation_path)
+
+    # Create dangling symlink
+    link_path = impl_path / "dangling.txt"
+    link_path.symlink_to("missing_target.txt")
+
+    state = _make_state(
+        repo_id,
+        paths,
+        trial_id=trial_id,
+        head_sha=repo_id.base_sha,
+        write_paths=("dangling.txt",),
+    )
+    intent = ws_impl.stage_commit(state)
+    assert "dangling.txt" in intent.allowed_paths
+    # finish_commit should succeed and commit the symlink
+    new_head = ws_impl.finish_commit(state, intent)
+    assert new_head != repo_id.base_sha
+
+
+def test_compute_content_digest_executable_mode(tmp_path: Path) -> None:
+    repo_path = tmp_path / "repo"
+    _init_git_repo(repo_path)
+    ws_impl = LocalTrialWorkspace()
+    repo_id = ws_impl.discover(str(repo_path))
+    ws_impl.ensure_storage_ignored(repo_id)
+
+    trial_id = "3" * 31 + "c"
+    paths = ws_impl.paths(repo_id, trial_id)
+    ws_impl.prepare(repo_id, paths)
+    impl_path = Path(paths.implementation_path)
+
+    script_path = impl_path / "run.sh"
+    script_path.write_text("#!/bin/sh\necho hello\n", encoding="utf-8")
+    script_path.chmod(0o755)
+
+    snap1 = ws_impl.inspect(repo_id, paths)
+
+    # Change to non-executable
+    script_path.chmod(0o644)
+    snap2 = ws_impl.inspect(repo_id, paths)
+
+    assert snap1.content_digest != snap2.content_digest

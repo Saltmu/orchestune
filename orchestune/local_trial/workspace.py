@@ -371,7 +371,10 @@ class LocalTrialWorkspace(TrialWorkspace):
                 )
             elif target.is_file():
                 h = hashlib.sha256(target.read_bytes()).hexdigest()
-                untracked_records.append({"path": p, "kind": "file", "digest": h})
+                mode = "100755" if (target.stat().st_mode & 0o111) else "100644"
+                untracked_records.append(
+                    {"path": p, "kind": "file", "digest": h, "mode": mode}
+                )
         return canonical_digest(
             {"tracked_diff": tracked_diff_hash, "untracked": untracked_records}
         )
@@ -444,7 +447,7 @@ class LocalTrialWorkspace(TrialWorkspace):
         paths_to_add: list[str] = []
         for p in sorted(target_paths):
             target = Path(impl) / p
-            if target.exists():
+            if target.is_symlink() or target.exists():
                 paths_to_add.append(p)
             else:
                 unmatch = self._run(
