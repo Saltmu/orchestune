@@ -22,12 +22,14 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "installer.cli",
             "scratch.cli",
             "workflow.cli",
+            "local_trial.cli",
         }
     ),
     3: frozenset(
         {
             "claim.amend",
             "claim.service",
+            "local_trial.service",
             "recovery.service",
             "recovery.external_service",
             "recovery.blocked_restart",
@@ -70,6 +72,11 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "workflow.check",
             "workflow.next",
             "workflow.readers",
+            "local_trial.planning",
+            "local_trial.policy",
+            "local_trial.prompts",
+            "local_trial.state",
+            "local_trial.workspace",
             "config_wizard",
             "config_schema",
             "execution_profiles",
@@ -323,10 +330,14 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "infra.private_tokens",
             "infra.python_env",
             "infra.repository_config",
+            "infra.local_trial_agent",
         }
     ),
     0: frozenset(
         {
+            "local_trial",
+            "local_trial.contracts",
+            "local_trial.models",
             "workflow",
             "workflow.contracts",
             "bounded_limit",
