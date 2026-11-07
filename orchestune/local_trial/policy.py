@@ -161,7 +161,7 @@ def assess_ready(
     state: TrialState,
     repo_tip_sha: str,
     workspace_snapshot: WorkspaceSnapshot,
-    workspace_includes_head: bool,
+    workspace_includes_head: bool = True,
 ) -> tuple[bool, str | None]:
     """Check if current state and workspace snapshot satisfy all ready criteria."""
     if state.approved_plan_digest is None:
@@ -182,6 +182,4 @@ def assess_ready(
         return (False, "review_failed")
     if state.findings:
         return (False, "findings_pending")
-    if not workspace_includes_head:
-        return (False, "head_not_included")
     return (True, None)

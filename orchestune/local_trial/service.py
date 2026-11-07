@@ -291,7 +291,7 @@ def _run_plan_stage(
         plan_digest=None,
         plan_revision=state.budget.plan_revision,
         cwd=state.workspace.implementation_path,
-        artifact_dir=f"{state.workspace.implementation_path}/.orchestune/artifacts",
+        artifact_dir=f"{state.workspace.implementation_path}/.orchestune/artifacts/{attempt_id}",
         started_at=deps.clock(),
     )
     state = replace(
@@ -485,7 +485,7 @@ def _execute_implement(state: TrialState, deps: TrialDependencies) -> TrialState
         plan_digest=state.approved_plan_digest,
         plan_revision=state.budget.plan_revision,
         cwd=state.workspace.implementation_path,
-        artifact_dir=f"{state.workspace.implementation_path}/.orchestune/artifacts",
+        artifact_dir=f"{state.workspace.implementation_path}/.orchestune/artifacts/{att_id}",
         started_at=deps.clock(),
     )
     state = replace(
@@ -634,7 +634,7 @@ def _execute_ci(state: TrialState, deps: TrialDependencies) -> TrialState:
         plan_digest=approved_plan_digest,
         plan_revision=state.budget.plan_revision,
         cwd=state.workspace.implementation_path,
-        artifact_dir=f"{state.workspace.implementation_path}/.orchestune/artifacts",
+        artifact_dir=f"{state.workspace.implementation_path}/.orchestune/artifacts/{ci_id}",
         started_at=deps.clock(),
     )
     state = replace(state, pending_attempt=ci_inp, revision=state.revision + 1)
@@ -747,6 +747,12 @@ def _run_review_agent(
     return rev_res.agent_payload.payload
 
 
+def _verify_clean_review(state: TrialState, deps: TrialDependencies) -> None:
+    snap_rev = deps.workspace.inspect_review(state)
+    if snap_rev.head_sha != state.head_sha or snap_rev.changes:
+        raise TrialError("worktree_dirty", "Review worktree modified during review")
+
+
 def _execute_review(state: TrialState, deps: TrialDependencies) -> TrialState:
     if (
         state.plan is None
@@ -777,7 +783,7 @@ def _execute_review(state: TrialState, deps: TrialDependencies) -> TrialState:
         plan_digest=approved_plan_digest,
         plan_revision=state.budget.plan_revision,
         cwd=state.workspace.review_path,
-        artifact_dir=f"{state.workspace.review_path}/.orchestune/artifacts",
+        artifact_dir=f"{state.workspace.review_path}/.orchestune/artifacts/{rev_id}",
         started_at=deps.clock(),
     )
     budget = replace(state.budget, reviews_started=state.budget.reviews_started + 1)
@@ -787,11 +793,94 @@ def _execute_review(state: TrialState, deps: TrialDependencies) -> TrialState:
     deps.store.save(state, expected_revision=state.revision - 1)
 
     inner_rev = _run_review_agent(state, rev_inp, deps, approved_plan_digest)
+    _verify_clean_review(state, deps)
     state = _handle_review_verdict(
         state, rev_id, inner_rev, ci_argv, approved_plan_digest
     )
     deps.store.save(state, expected_revision=state.revision - 1)
     return state
+
+
+def _reconcile_pending_operations(
+    state: TrialState, deps: TrialDependencies
+) -> TrialState:
+    if state.pending_git is not None:
+        try:
+            reconciled_head = deps.workspace.reconcile_commit(state, state.pending_git)
+            if reconciled_head is None:
+                raise TrialError("execution_unknown", "Reconcile returned no head SHA")
+            state = replace(
+                state,
+                pending_git=None,
+                head_sha=reconciled_head,
+                checkpoint=Checkpoint.CI,
+                revision=state.revision + 1,
+            )
+            deps.store.save(state, expected_revision=state.revision - 1)
+        except (TrialError, OSError) as err:
+            raise TrialError(
+                "execution_unknown", "Unreconciled pending Git operation"
+            ) from err
+    if state.pending_attempt is not None:
+        raise TrialError(
+            "execution_unknown", "Cannot resume with unconfirmed pending attempt"
+        )
+    return state
+
+
+def _handle_additional_request(
+    request_text: str, state: TrialState, deps: TrialDependencies
+) -> tuple[TrialState, TrialView]:
+    req_snap = RequestSnapshot(
+        text=request_text,
+        digest=request_digest(request_text),
+        ci_argv_override=state.request.ci_argv_override,
+    )
+    budget = Budget(
+        plan_revision=state.budget.plan_revision + 1,
+        cycles_started=0,
+        reviews_started=0,
+    )
+    state = replace(
+        state,
+        request=req_snap,
+        budget=budget,
+        approved_plan_digest=None,
+        approved_worktree_digest=None,
+        approved_index_digest=None,
+        ci_evidence=None,
+        review_evidence=None,
+        phase=TrialPhase.PREPARING,
+        checkpoint=Checkpoint.PLAN,
+        revision=state.revision + 1,
+    )
+    deps.store.save(state, expected_revision=state.revision - 1)
+    snap_before = deps.workspace.inspect(state.repository, state.workspace)
+    view = _run_plan_stage(state, deps, state.request.ci_argv_override, (), snap_before)
+    return state, view
+
+
+def _handle_ci_override_update(
+    override: tuple[str, ...], state: TrialState, deps: TrialDependencies
+) -> tuple[TrialState, TrialView | None]:
+    req_snap = replace(state.request, ci_argv_override=override)
+    state = replace(state, request=req_snap, revision=state.revision + 1)
+    deps.store.save(state, expected_revision=state.revision - 1)
+    if state.plan is not None and state.plan.ci_argv is None:
+        snap_before = deps.workspace.inspect(state.repository, state.workspace)
+        view = _run_plan_stage(state, deps, override, (), snap_before)
+        return state, view
+    return state, None
+
+
+def _handle_request_updates(
+    request: ResumeRequest, state: TrialState, deps: TrialDependencies
+) -> tuple[TrialState, TrialView | None]:
+    if request.request_text is not None and request.request_text.strip():
+        return _handle_additional_request(request.request_text, state, deps)
+    if request.ci_argv_override is not None:
+        return _handle_ci_override_update(request.ci_argv_override, state, deps)
+    return state, None
 
 
 def resume_trial(request: ResumeRequest, deps: TrialDependencies) -> TrialView:
@@ -804,6 +893,11 @@ def resume_trial(request: ResumeRequest, deps: TrialDependencies) -> TrialView:
                 stopped_state.repository, stopped_state.workspace
             )
             return _make_view(stopped_state, deps, snap, ())
+
+        state = _reconcile_pending_operations(state, deps)
+        state, plan_view = _handle_request_updates(request, state, deps)
+        if plan_view is not None:
+            return plan_view
 
         if request.approve_plan is not None:
             state = _apply_approval(request, state, deps)
@@ -898,17 +992,22 @@ def record_decision(
                 raise TrialError(
                     "state_invalid", f"Trial not ready for adoption: {reason}"
                 )
+            if not deps.workspace.includes_head(state):
+                raise TrialError(
+                    "state_invalid", "Trial head is not included in base branch"
+                )
         now = deps.clock()
         dec = Decision(value=value, recorded_at=now)
         state = replace(
             state,
             decision=dec,
             phase=TrialPhase.CLOSED,
-            checkpoint=Checkpoint.DECISION,
+            checkpoint=Checkpoint.CLOSED,
             revision=state.revision + 1,
             observation=replace(state.observation, updated_at=now),
         )
         deps.store.save(state, expected_revision=state.revision - 1)
         deps.store.close(state)
+        deps.workspace.ensure_storage_ignored(state.repository)
         snap = deps.workspace.inspect(state.repository, state.workspace)
         return _make_view(state, deps, snap, ())

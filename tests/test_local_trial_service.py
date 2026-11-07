@@ -686,3 +686,156 @@ def test_resume_trial_review_rejection_then_pass(tmp_path: Path) -> None:
         "fix",
         "review",
     ]
+
+
+def test_resume_trial_unconfirmed_pending_attempt_rejected(tmp_path: Path) -> None:
+    deps, store, ws, agents, proc_runner = _make_fake_deps(tmp_path)
+    req = StartRequest(
+        repo=str(tmp_path), request_text="implement something", agent_name="codex"
+    )
+    view = start_trial(req, deps)
+    assert view.state is not None
+    # inject an unconfirmed pending attempt into state
+    state = replace(
+        view.state,
+        pending_attempt=AttemptInput(
+            trial_id=view.state.trial_id,
+            attempt_id="att1",
+            kind=AttemptKind.IMPLEMENT,
+            input_head_sha="head",
+            base_sha="base",
+            plan_digest="plan",
+            plan_revision=0,
+            cwd="/cwd",
+            artifact_dir="/art",
+            started_at="2026-01-01T00:00:00Z",
+        ),
+    )
+    store.save(state, expected_revision=None)
+
+    with pytest.raises(
+        TrialError, match="Cannot resume with unconfirmed pending attempt"
+    ):
+        resume_trial(ResumeRequest(trial_id=view.state.trial_id), deps)
+
+
+def test_resume_trial_reconciles_pending_git(tmp_path: Path) -> None:
+    from orchestune.local_trial.models import GitIntent
+
+    deps, store, ws, agents, proc_runner = _make_fake_deps(tmp_path)
+    req = StartRequest(
+        repo=str(tmp_path), request_text="implement something", agent_name="codex"
+    )
+    view = start_trial(req, deps)
+    assert view.state is not None and view.state.plan is not None
+    plan_dig = validate_plan(
+        view.state.plan, tmp_path, "implement something", ws.base_sha
+    )
+    state = replace(
+        view.state,
+        approved_plan_digest=plan_dig,
+        checkpoint=Checkpoint.IMPLEMENT,
+        phase=TrialPhase.IMPLEMENTING,
+    )
+    intent = GitIntent(
+        operation="commit",
+        pre_head_sha=ws.head_sha,
+        expected_tree_sha=None,
+        target_sha="c" * 40,
+        allowed_paths=("foo.py",),
+    )
+    state = replace(state, pending_git=intent)
+    store.save(state, expected_revision=None)
+
+    # Resume should reconcile git intent and proceed to ready
+    view_res = resume_trial(ResumeRequest(trial_id=view.state.trial_id), deps)
+    assert view_res.state is not None
+    assert view_res.state.pending_git is None
+    assert view_res.effective_phase == TrialPhase.READY
+
+
+def test_resume_trial_new_request_text_resets_budget(tmp_path: Path) -> None:
+    deps, store, ws, agents, proc_runner = _make_fake_deps(tmp_path)
+    req = StartRequest(
+        repo=str(tmp_path), request_text="initial request", agent_name="codex"
+    )
+    view1 = start_trial(req, deps)
+    assert view1.state is not None
+
+    view2 = resume_trial(
+        ResumeRequest(
+            trial_id=view1.state.trial_id, request_text="new request with reset"
+        ),
+        deps,
+    )
+    assert view2.state is not None
+    assert view2.state.request.text == "new request with reset"
+    assert view2.state.budget.plan_revision == 1
+    assert view2.state.budget.cycles_started == 0
+    assert view2.effective_phase == TrialPhase.PLANNED
+
+
+def test_resume_trial_ci_override_repairs_missing_ci(tmp_path: Path) -> None:
+    deps, store, ws, agents, proc_runner = _make_fake_deps(tmp_path)
+    agents.plan_ci_argv = None
+    req = StartRequest(
+        repo=str(tmp_path), request_text="implement something", agent_name="codex"
+    )
+    view1 = start_trial(req, deps)
+    assert view1.reason == "ci_missing"
+    assert view1.state is not None
+
+    # Supply override on resume
+    agents.plan_ci_argv = ("pytest", "-v")
+    view2 = resume_trial(
+        ResumeRequest(trial_id=view1.state.trial_id, ci_argv_override=("pytest", "-v")),
+        deps,
+    )
+    assert view2.state is not None
+    assert view2.state.plan is not None
+    assert view2.state.plan.ci_argv == ("pytest", "-v")
+    assert view2.reason == "approval_required"
+
+
+def test_execute_review_rejects_dirty_review_worktree(tmp_path: Path) -> None:
+    from orchestune.local_trial.models import Change
+
+    deps, store, ws, agents, proc_runner = _make_fake_deps(tmp_path)
+    req = StartRequest(
+        repo=str(tmp_path), request_text="implement something", agent_name="codex"
+    )
+    view1 = start_trial(req, deps)
+    assert view1.state is not None and view1.state.plan is not None
+    trial_id = view1.state.trial_id
+    plan_dig = validate_plan(
+        view1.state.plan, tmp_path, "implement something", ws.base_sha
+    )
+
+    # Simulate dirty review worktree during review
+    def on_run(req_arg: Any) -> None:
+        if req_arg.input.kind == AttemptKind.REVIEW:
+            ws.changes = (Change(status="M", path="review_leak.py"),)
+
+    agents.on_run = on_run
+
+    with pytest.raises(TrialError, match="Review worktree modified during review"):
+        resume_trial(ResumeRequest(trial_id=trial_id, approve_plan=plan_dig), deps)
+
+
+def test_record_decision_adopted_requires_includes_head(tmp_path: Path) -> None:
+    deps, store, ws, agents, proc_runner = _make_fake_deps(tmp_path)
+    req = StartRequest(
+        repo=str(tmp_path), request_text="implement something", agent_name="codex"
+    )
+    view1 = start_trial(req, deps)
+    assert view1.state is not None and view1.state.plan is not None
+    trial_id = view1.state.trial_id
+    plan_dig = validate_plan(
+        view1.state.plan, tmp_path, "implement something", ws.base_sha
+    )
+    resume_trial(ResumeRequest(trial_id=trial_id, approve_plan=plan_dig), deps)
+
+    # When head is not included in base branch:
+    ws.is_included = False
+    with pytest.raises(TrialError, match="Trial head is not included in base branch"):
+        record_decision(trial_id, "adopted", deps)
