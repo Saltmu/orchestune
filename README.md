@@ -41,11 +41,11 @@ orchestune dag --plan "<saved-plan-path>"
 Want to try Orchestune without GitHub authentication, remote repositories, or label configuration? You can run a single end-to-end task locally using `orchestune trial`:
 
 ```bash
-# 1. Create a request description
-echo "Add an endpoint or fix a test" > request.txt
+# 1. Create a request description outside the repository
+echo "Add an endpoint or fix a test" > ../trial-request.txt
 
 # 2. Start the local trial (plans the change in an isolated worktree and awaits approval)
-orchestune trial start --request-file request.txt
+orchestune trial start --request-file ../trial-request.txt
 
 # 3. Resume execution with the approved plan digest
 orchestune trial resume <TRIAL_ID> --approve-plan <PLAN_DIGEST>

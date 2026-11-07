@@ -57,7 +57,8 @@ kind = context.get("kind", "plan")
 input_head_sha = context.get("input_head_sha", "a" * 40)
 p_dig = context.get("plan_digest")
 
-ci_cmd = json.loads(os.environ.get("FAKE_CODEX_CI_CMD", '["python3", "test.py"]'))
+ci_cmd_raw = os.environ.get("FAKE_CODEX_CI_CMD")
+ci_cmd = json.loads(ci_cmd_raw) if ci_cmd_raw else [sys.executable, "test.py"]
 behavior = os.environ.get("FAKE_CODEX_BEHAVIOR", "normal")
 
 if kind == "plan":
@@ -159,6 +160,9 @@ def e2e_setup(tmp_path: Path):
     fake_codex.chmod(
         fake_codex.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH
     )
+    if sys.platform == "win32":
+        fake_codex_cmd = bin_dir / "codex.cmd"
+        fake_codex_cmd.write_text(f'@"{sys.executable}" "{fake_codex}" %*\n')
 
     repo_dir = tmp_path / "repo"
     repo_dir.mkdir()
@@ -167,11 +171,13 @@ def e2e_setup(tmp_path: Path):
     env = os.environ.copy()
     git_bin_dir = str(Path(shutil.which("git") or "/usr/bin/git").parent)
     python_bin_dir = str(Path(sys.executable).parent)
-    env["PATH"] = f"{bin_dir}:{git_bin_dir}:{python_bin_dir}:/bin:/usr/bin"
-    # Ensure gh is not in PATH
-    for path_dir in env["PATH"].split(":"):
-        if (Path(path_dir) / "gh").exists():
-            pass  # fake PATH avoids gh
+    path_dirs = [str(bin_dir), git_bin_dir, python_bin_dir]
+    if sys.platform == "win32":
+        system_root = os.environ.get("SystemRoot", r"C:\Windows")
+        path_dirs.extend([system_root, str(Path(system_root) / "System32")])
+    else:
+        path_dirs.extend(["/bin", "/usr/bin"])
+    env["PATH"] = os.pathsep.join(path_dirs)
 
     marker_dir = tmp_path / "markers"
     marker_dir.mkdir()

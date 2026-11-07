@@ -1259,7 +1259,7 @@ orchestune trial result ID --decision keep|adopted [--repo PATH] [--json]
 ```
 
 - `--repo`: Target repository root path (defaults to current working directory `cwd`).
-- `--request-file`: Path to task description text file. Must be strict UTF-8, non-empty, and up to 1 MiB.
+- `--request-file`: Path to task description text file. Must be strict UTF-8, non-empty, and up to 1 MiB. Note: Keep the request file outside the repository worktree (e.g. `../trial-request.txt`) so that the working directory remains clean for `trial start`.
 - `ID`: 32-character hexadecimal string representing the unique trial ID (or attempt ID for `--confirm-stopped`).
 - `DIGEST`: 64-character hexadecimal SHA-256 string for plan digest or worktree digest.
 - `--ci-command`: CI verification command parsed without shell syntax evaluation. When specifying paths on Windows, use forward slashes and quotes (e.g. `"./scripts/local-ci.ps1"`).

@@ -41,11 +41,11 @@ orchestune dag --plan "<saved-plan-path>"
 GitHub認証、リモートリポジトリ、ラベル設定を行わずにOrchestuneのサイクルを試したい場合、`orchestune trial` で単一タスクをローカル完走できます。
 
 ```bash
-# 1. 依頼内容をテキストファイルに記述
-echo "テストの修正や機能追加の依頼" > request.txt
+# 1. 依頼内容をリポジトリ外のファイルに記述
+echo "テストの修正や機能追加の依頼" > ../trial-request.txt
 
 # 2. ローカル試行を開始（分離worktreeで計画を生成し承認待ち）
-orchestune trial start --request-file request.txt
+orchestune trial start --request-file ../trial-request.txt
 
 # 3. 承認ダイジェストを指定して実装・検証を再開
 orchestune trial resume <TRIAL_ID> --approve-plan <PLAN_DIGEST>

@@ -1205,7 +1205,7 @@ orchestune trial result ID --decision keep|adopted [--repo PATH] [--json]
 ```
 
 - `--repo`: 対象リポジトリのパス（既定はカレントディレクトリ `cwd`）。
-- `--request-file`: タスク依頼文のファイルパス。UTF-8 strict、最大1MiB、空・読取不能・ディレクトリは終了コード2。
+- `--request-file`: タスク依頼文のファイルパス。UTF-8 strict、最大1MiB、空・読取不能・ディレクトリは終了コード2。※作業ツリーをクリーンに保つため、リポジトリ外（例: `../trial-request.txt`）または無視設定されたパスに配置してください。
 - `ID`: 試行を一意に識別する32桁のhex文字列（`--confirm-stopped` の ATTEMPT_ID も32桁hex）。
 - `DIGEST`: 計画または作業ツリーの承認・確認用64桁hexダイジェスト（SHA-256）。
 - `--ci-command`: shell構文を解釈せず直接引数リストへ展開するCI検証コマンド。Windows環境ではフォワードスラッシュとクォート（例: `"./scripts/local-ci.ps1"`）を案内します。
