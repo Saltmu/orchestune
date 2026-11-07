@@ -587,3 +587,27 @@ class TestCandidateViews:
             prior_parent_merge_completed_issue_numbers=frozenset({1}),
         )
         assert ctx.queued_tasks() == ()
+
+    def test_blocked_completion_is_not_candidate_or_completed_dependency(
+        self, monkeypatch
+    ):
+        from orchestune.dispatch.rules import CycleContext
+
+        monkeypatch.setattr(
+            CycleContext, "is_completion_blocked", lambda self, issue: issue == 2
+        )
+        ctx = _ctx(
+            tasks_by_issue={
+                2: _task(2, subtask_id="upstream"),
+                3: _task(3, subtask_id="downstream", depends_on=("upstream",)),
+            },
+            dependency_resolution={3: TaskDependencies(resolved=(2,))},
+            prior_parent_merge_completed_issue_numbers=frozenset({2}),
+        )
+
+        assert not ctx.is_completion_confirmed(2)
+        assert not ctx.is_effectively_done(2)
+        assert [task.issue_number for task in ctx.queued_tasks()] == [3]
+        assessment = ctx.assess_dependencies(3)
+        assert assessment is not None
+        assert assessment.resolved[0].state is DependencyState.WAITING

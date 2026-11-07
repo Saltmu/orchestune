@@ -149,6 +149,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "dispatch.critical_path",
             "dispatch.cycle.action_contracts",
             "dispatch.cycle.context_state",
+            "dispatch.cycle.task_view",
             "dispatch.cycle.records",
             "dispatch.doctor.check",
             "dispatch.doctor.actions",

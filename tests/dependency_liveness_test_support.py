@@ -35,6 +35,7 @@ from orchestune.dispatch.cycle.events import (
     PromotionEvent,
 )
 from orchestune.dispatch.cycle.execution_contracts import CycleExecutionDependencies
+from orchestune.dispatch.cycle.task_view import CycleTaskView
 from orchestune.dispatch.phase.scheduling import SchedulingPhaseResult
 from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.status_repair import status_intent_journal_path
@@ -715,7 +716,7 @@ def _wiring_faults(faults: FaultPlan) -> Iterator[None]:
         if faults.empty_completion_set:
             stack.enter_context(
                 patch.object(
-                    CycleContext, "is_completion_confirmed", _no_confirmed_completion
+                    CycleTaskView, "is_completion_confirmed", _no_confirmed_completion
                 )
             )
         if faults.throwaway_repair_context:
@@ -725,7 +726,7 @@ def _wiring_faults(faults: FaultPlan) -> Iterator[None]:
         yield
 
 
-def _no_confirmed_completion(self: CycleContext, issue_number: int) -> bool:
+def _no_confirmed_completion(self: CycleTaskView, issue_number: int) -> bool:
     del self, issue_number
     return False
 

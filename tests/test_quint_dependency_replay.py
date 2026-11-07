@@ -588,8 +588,10 @@ def test_control_replay_detects_stale_evidence(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     replay_stored("stale_revoke", tmp_path / "normal")
-    monkeypatch.setattr(CycleContext, "is_effectively_done", lambda s, n: True)
-    monkeypatch.setattr(CycleContext, "is_completion_confirmed", lambda s, n: True)
+    from orchestune.dispatch.cycle.task_view import CycleTaskView
+
+    monkeypatch.setattr(CycleTaskView, "is_effectively_done", lambda s, n: True)
+    monkeypatch.setattr(CycleTaskView, "is_completion_confirmed", lambda s, n: True)
     with expect_violation("P3C-SAFETY"):
         replay_stored("stale_revoke", tmp_path / "fault")
 

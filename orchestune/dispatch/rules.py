@@ -79,7 +79,7 @@ class CycleContext(_CycleState):
             "CycleContext.__init__",
             default_active_worktrees=run_state.active_worktrees,
         )
-        super().__init__(resolved)
+        super().__init__(resolved, completion_blocked=self.is_completion_blocked)
         self.config: DispatcherConfig = cast(DispatcherConfig, config)
         self._completion_reservation_state = run_state
         self.not_needed_review_dispatcher = not_needed_review_dispatcher
@@ -99,16 +99,6 @@ class CycleContext(_CycleState):
             self.config.run_state_path,
             observed,
         )
-
-    def is_effectively_done(self, issue_number: int) -> bool:
-        return not self.is_completion_blocked(
-            issue_number
-        ) and super().is_effectively_done(issue_number)
-
-    def is_completion_confirmed(self, issue_number: int) -> bool:
-        return not self.is_completion_blocked(
-            issue_number
-        ) and super().is_completion_confirmed(issue_number)
 
     def _action_port(self) -> CycleActions:
         if self._actions is None:

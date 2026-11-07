@@ -209,6 +209,8 @@ owns initial observations and confirmed in-cycle deltas, while durable GitHub an
 `RunState` data remain outside the context. `CycleQueries` exposes immutable
 `CycleTask` metadata and semantic dependency/state queries; raw dependency
 declarations are supplied to DAG consumers only as derived `SubTask` inputs.
+The L2 `CycleTaskView` owns the query implementations and shares its mutable
+cycle ledger with `_CycleState`, which remains the query and record port.
 `CycleActions` owns the cycle's `RunState` and is bound to the context once, so
 every phase observes and records through the same boundary.
 

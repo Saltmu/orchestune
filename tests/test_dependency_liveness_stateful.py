@@ -17,6 +17,7 @@ from hypothesis import settings
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, initialize, rule
 
+from orchestune.dispatch.cycle.task_view import CycleTaskView
 from orchestune.dispatch.rules import CycleContext
 from tests.dependency_liveness_test_support import (
     ACTIVE_PATHS,
@@ -823,8 +824,8 @@ def test_control_reservation_guard_bypass_is_detected(monkeypatch, side):
 @pytest.mark.parametrize("apply", [True, False], ids=["apply", "dry-run"])
 def test_control_stale_evidence_is_detected(monkeypatch, apply):
     scenario_revoked_evidence_is_not_adopted(apply)
-    monkeypatch.setattr(CycleContext, "is_effectively_done", lambda s, n: True)
-    monkeypatch.setattr(CycleContext, "is_completion_confirmed", lambda s, n: True)
+    monkeypatch.setattr(CycleTaskView, "is_effectively_done", lambda s, n: True)
+    monkeypatch.setattr(CycleTaskView, "is_completion_confirmed", lambda s, n: True)
     with expect_violation("P3C-SAFETY"):
         scenario_revoked_evidence_is_not_adopted(apply)
 
