@@ -136,7 +136,13 @@ POSITIVE_INT_KEYS = frozenset(
 )
 
 BOOLEAN_CONFIG_KEYS = frozenset(
-    {"apply", "zombie_gc", "force_integration_review", "semantic_review_auto_retry"}
+    {
+        "apply",
+        "zombie_gc",
+        "force_integration_review",
+        "semantic_review_auto_retry",
+        "skip_readiness_check",
+    }
 )
 
 STRING_KEYS = frozenset(

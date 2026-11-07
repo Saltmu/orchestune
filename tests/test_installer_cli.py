@@ -100,3 +100,19 @@ def test_cli_doctor_text_output_labels_each_check(tmp_path: Path, capsys):
         line.split("] ", 1)[0] in {"[OK", "[WARN", "[FAIL", "[SKIPPED", "[UNVERIFIED"}
         for line in check_lines
     )
+
+
+def test_cli_install_includes_readiness_skill(tmp_path: Path):
+    test_args = [
+        "install",
+        "--target",
+        "codex",
+        "--scope",
+        "project",
+        "--project-dir",
+        str(tmp_path),
+    ]
+    assert skills_main(test_args) == 0
+    installed_skill = tmp_path / ".agents" / "skills" / "orchestune-readiness"
+    assert (installed_skill / "SKILL.md").is_file()
+    assert (installed_skill / "scripts" / "check_readiness.py").is_file()

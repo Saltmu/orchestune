@@ -526,6 +526,7 @@ dry-run dispatchを使って各ターゲットの解決結果を確認します�
 | `usage-limit-reset-grace-seconds` | `30` | 確定したリセット時刻に加える猶予秒数。この後にタスクを再投入します。 |
 | `usage-limit-timezone` | `None` | `resets 1pm` のような壁時計表記を解釈するIANAタイムゾーン（例: `Asia/Tokyo`）。未指定の場合、この表記はUTCとは解釈せず「リセット不明」としてバックオフを適用します。オフセット付き時刻があれば常にそれを優先します。上限が有効な間は、同じ台帳の `claude-cli` タスクを新規に起動せず、他のtargetには影響しません。 |
 | `zombie-gc` | `true` | ゾンビプロセスの検出・回収を有効にするフラグ。 |
+| `skip-readiness-check` | `false` | `orchestune-readiness` による規律文書・CI設定の事前診断を省略するかどうか。単独の `orchestune doctor` やディスパッチ事前チェックには影響しません。 |
 | `max-tokens-per-window` | `None` | 指定した時間窓内で消費できるトークン数の総上限。累計消費量が上限に達した場合、新規タスクの起動を一時停止します。 |
 | `max-tokens-per-task` | `None` | 単一サブタスクが消費できるトークン数の上限。完了時にこの上限を超過していた場合、自動完了を見送りエスカレーションします。 |
 | `local-cmd` | `None` | ローカルターゲットへディスパッチするコマンドテンプレート。使用可能な変数: `{issue_number}`, `{subtask_id}`, `{branch_name}`, `{worktree_path}`, `{model}`, `{reasoning_effort}`, `{profile}`, `{reviewer_bot}`。 |

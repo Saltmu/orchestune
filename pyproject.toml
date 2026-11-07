@@ -40,6 +40,7 @@ packages = ["orchestune"]
 "skills/orchestune" = "skills/orchestune"
 "skills/orchestune-provision" = "skills/orchestune-provision"
 "skills/orchestune-dispatch" = "skills/orchestune-dispatch"
+"skills/orchestune-readiness" = "skills/orchestune-readiness"
 "skills/workflow-template" = "skills/workflow-template"
 
 [tool.hatch.build.targets.sdist]
@@ -49,6 +50,7 @@ only-include = ["orchestune"]
 "skills/orchestune" = "skills/orchestune"
 "skills/orchestune-provision" = "skills/orchestune-provision"
 "skills/orchestune-dispatch" = "skills/orchestune-dispatch"
+"skills/orchestune-readiness" = "skills/orchestune-readiness"
 "skills/workflow-template" = "skills/workflow-template"
 
 [tool.ruff]

@@ -544,6 +544,7 @@ Check each target's resolved values with a dry-run dispatch, for example `orches
 | `usage-limit-reset-grace-seconds` | `30` | Extra seconds added to a determined reset time before the task is relaunched. |
 | `usage-limit-timezone` | `None` | IANA timezone (e.g. `Asia/Tokyo`) used to read wall-clock resets such as `resets 1pm`. Unset means such resets are treated as *unknown* (never as UTC) and the backoff applies. A timestamp with an offset is always preferred. While a limit is active, no `claude-cli` task from the same ledger is launched; other targets are unaffected. |
 | `zombie-gc` | `true` | Enable zombie process detection and reclamation. |
+| `skip-readiness-check` | `false` | Skip the pre-flight readiness check (discipline docs and CI) in the `orchestune-readiness` skill. Does not affect standalone `orchestune doctor` or dispatch preflight checks. |
 | `max-tokens-per-window` | `None` | Quota limit: maximum total tokens consumed across completed tasks within `window-seconds`. Pauses new launches when reached. |
 | `max-tokens-per-task` | `None` | Per-task limit: maximum token consumption allowed for a single subtask before escalating to `status:blocked-human-review`. |
 | `local-cmd` | `None` | Command template for dispatching to a local target. Available placeholders: `{issue_number}`, `{subtask_id}`, `{branch_name}`, `{worktree_path}`, `{model}`, `{reasoning_effort}`, `{profile}`, and `{reviewer_bot}`. |

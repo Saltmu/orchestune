@@ -119,6 +119,14 @@ def _ask_single_question(q: QuestionSpec, current_val: Any, prompt: PromptPort) 
         dflt_str = str(current_val) if current_val is not None else None
         return prompt.prompt_text(msg, default=dflt_str, allow_empty=q.allow_unset)
 
+    if q.input_kind == "boolean":
+        dflt_bool = (
+            bool(current_val)
+            if current_val is not None
+            else (bool(default_code) if default_code is not None else False)
+        )
+        return prompt.prompt_confirm(msg, default=dflt_bool)
+
     return current_val
 
 
