@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import sys
 from pathlib import Path
 
 import pytest
@@ -781,6 +782,10 @@ def test_stage_commit_dangling_symlink(tmp_path: Path) -> None:
     assert new_head != repo_id.base_sha
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX file permission bits are not supported on Windows",
+)
 def test_compute_content_digest_executable_mode(tmp_path: Path) -> None:
     repo_path = tmp_path / "repo"
     _init_git_repo(repo_path)

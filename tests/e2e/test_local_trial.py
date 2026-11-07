@@ -225,8 +225,18 @@ def e2e_setup(tmp_path: Path):
 def _run_cli(
     args: list[str], env: dict[str, str], cwd: Path
 ) -> subprocess.CompletedProcess[str]:
+    cli_env = dict(env)
+    cli_env["PYTHONIOENCODING"] = "utf-8"
     cmd = [sys.executable, "-m", "orchestune.cli", "trial", *args]
-    return subprocess.run(cmd, env=env, cwd=cwd, capture_output=True, text=True)
+    return subprocess.run(
+        cmd,
+        env=cli_env,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
 
 
 def test_e2e_normal_flow_keep(e2e_setup):

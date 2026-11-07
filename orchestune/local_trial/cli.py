@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import io
 import json
 import os
 import re
@@ -532,6 +533,12 @@ def _cmd_result(args: argparse.Namespace) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(errors="replace")
+            except (AttributeError, io.UnsupportedOperation):
+                pass
     parser = _build_parser()
     if argv is None:
         argv = sys.argv[1:]
