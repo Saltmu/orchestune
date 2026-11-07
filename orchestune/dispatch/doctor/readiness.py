@@ -6,6 +6,7 @@ import importlib
 import os
 import re
 import shutil
+import subprocess
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, Literal
@@ -567,7 +568,13 @@ def _check_auth(
         )
     except (KeyboardInterrupt, SystemExit):
         raise
-    except (ForgeError, OSError, RuntimeError, ValueError) as exc:
+    except (
+        ForgeError,
+        OSError,
+        RuntimeError,
+        ValueError,
+        subprocess.SubprocessError,
+    ) as exc:
         return Diagnostic(
             CODE_READINESS_AUTH,
             "warning",

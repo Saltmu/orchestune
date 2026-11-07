@@ -458,6 +458,30 @@ class TestAuthCheck:
         diag = next(d for d in diags if d.code == CODE_READINESS_AUTH)
         assert diag.status == "warning"
 
+    def test_auth_warning_when_user_subprocess_error(self, tmp_path: Path) -> None:
+        import subprocess
+
+        class SubprocessErrorForge:
+            def check_auth(self) -> None:
+                pass
+
+            def get_authenticated_user(self) -> str:
+                raise subprocess.CalledProcessError(
+                    1, ["gh", "api", "user"], output="", stderr="api error"
+                )
+
+        diags = run_readiness_checks(
+            tmp_path,
+            {},
+            True,
+            online=True,
+            which_fn=lambda cmd: "/bin/gh" if cmd == "gh" else None,
+            forge_factory=SubprocessErrorForge,
+        )
+        diag = next(d for d in diags if d.code == CODE_READINESS_AUTH)
+        assert diag.status == "warning"
+        assert "gh auth login" in (diag.remediation or "")
+
     def test_auth_ok_when_success(self, tmp_path: Path) -> None:
         class GoodForge:
             def check_auth(self) -> None:
