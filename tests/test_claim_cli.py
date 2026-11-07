@@ -102,6 +102,33 @@ def test_failure_uses_reason_exit_code_and_recovery_diagnostic(capsys):
     assert "Next action: Resume the existing claim" in stderr
 
 
+def test_git_fetch_failure_renders_detail_and_recovery_actions(capsys):
+    from orchestune.claim import cli as claim_cli
+    from orchestune.claim.cli import main
+
+    failure = ClaimFailure(
+        reason=ClaimFailureReason.GIT_FETCH_FAILED,
+        message="git fetch --no-write-fetch-head origin failed: Read-only file system",
+        next_actions=(
+            "Check the Git error above and resolve any connection, authentication, or origin configuration problem.",
+            "For permission or read-only errors, check checkout and shared Git directory mount permissions; fetch, refs, objects, and later worktree creation require Git metadata write access.",
+            "Retry the original `orchestune claim 1719` command in an environment authorized to write the Git directory.",
+        ),
+    )
+    with patch.object(
+        claim_cli,
+        "claim_task",
+        return_value=ClaimOutcome(success=False, issue_number=1719, failure=failure),
+    ):
+        assert main(["1719"]) == 30
+
+    stderr = capsys.readouterr().err
+    assert "reason=git_fetch_failed" in stderr
+    assert "Read-only file system" in stderr
+    assert "Git metadata write access" in stderr
+    assert "Retry the original `orchestune claim 1719`" in stderr
+
+
 def test_unexpected_service_error_is_redacted_without_a_traceback(capsys):
     from orchestune.claim.cli import main
 
