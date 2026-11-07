@@ -36,6 +36,32 @@ Ask your coding assistant: “Use orchestune to decompose this feature and tell 
 orchestune dag --plan "<saved-plan-path>"
 ```
 
+### Local Trial (No GitHub Setup Required)
+
+Want to try Orchestune without GitHub authentication, remote repositories, or label configuration? You can run a single end-to-end task locally using `orchestune trial`:
+
+```bash
+# 1. Create a request description
+echo "Add an endpoint or fix a test" > request.txt
+
+# 2. Start the local trial (plans the change in an isolated worktree and awaits approval)
+orchestune trial start --request-file request.txt
+
+# 3. Resume execution with the approved plan digest
+orchestune trial resume <TRIAL_ID> --approve-plan <PLAN_DIGEST>
+
+# 4. Check status and review findings
+orchestune trial status <TRIAL_ID>
+
+# 5. Review committed diff and manually adopt into your working branch
+git merge --ff-only trial/<TRIAL_ID>
+orchestune trial result <TRIAL_ID> --decision adopted
+```
+
+> [!NOTE]
+> Local trial uses your local Claude Code (`claude`) or Codex CLI (`codex`). While model communication remains live online, no GitHub remote, Issues, or labels are touched. Review is performed in an isolated review worktree by another session of the same agent product; while single-vendor self-review has inherent limits compared to multi-vendor independent review, it provides a complete hands-on trial.
+> For details, see the [Setup Guide](docs/en/setup.md#local-trial-setup) and [Usage Reference](docs/en/usage.md#10-local-autonomous-trial-orchestune-trial).
+
 Check the repository prerequisites in the [Setup Guide](docs/en/setup.md) before proceeding. See [Installation](#installation) below for other installation options and agent configuration.
 
 ⚠️ **Beta**: The core workflow is operational, but APIs, CLI commands, and workflows may change before the stable release.

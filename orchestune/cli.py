@@ -171,11 +171,17 @@ _COMMAND_SPECS: tuple[_Command, ...] = (
         "orchestune.workflow.cli",
         exit_with_return=True,
     ),
+    _Command(
+        "trial",
+        "Local autonomous trial without GitHub setup",
+        "orchestune.local_trial.cli",
+        exit_with_return=True,
+    ),
 )
 
 _COMMAND_SPEC_BY_NAME = {spec.name: spec for spec in _COMMAND_SPECS}
 COMMANDS: tuple[tuple[str, str], ...] = tuple(
-    (spec.name, spec.description) for spec in _COMMAND_SPECS
+    (spec.name, spec.description) for spec in _COMMAND_SPECS if spec.name != "trial"
 )
 
 
@@ -211,3 +217,7 @@ def main() -> None:
 
     sys.argv = [sys.argv[0]] + sys.argv[2:]
     _dispatch_command(cmd)
+
+
+if __name__ == "__main__":
+    main()

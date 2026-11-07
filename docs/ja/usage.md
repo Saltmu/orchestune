@@ -1187,3 +1187,76 @@ PR/Outcomeの完了判定（MERGED/closed PR、handoff-ready）は成果物の�
 現在、停止状態を返せるのはCodex Cloudのみです（`codex cloud list`の`ready`・`applied`・`error`を停止、
 `pending`を実行中と扱います）。それ以外の外部ターゲット（Cloud Routine等）は、操作者の停止確認がなければ終了後も保持されます。
 クラウド側の実行状態と成果物を確認し、必要なら停止して、上記の停止確認付き `recover` を使ってください。
+
+---
+
+## 10. ローカル自律試行 (`orchestune trial`)
+
+`trial` サブコマンド群は、GitHub設定やリモートリポジトリなしで、単一タスクの計画・承認・実装・CI・別セッションレビュー・採用判断をローカル完走できる機能です。
+
+### CLI 構文 (Grammar)
+
+```text
+orchestune trial start --request-file FILE [--repo PATH] [--agent claude|codex] [--ci-command TEXT]
+orchestune trial status [ID] [--repo PATH] [--json]
+orchestune trial resume ID [--repo PATH] [--approve-plan DIGEST] [--confirm-stopped ATTEMPT_ID] [--confirm-worktree DIGEST] [--request-file FILE] [--ci-command TEXT]
+orchestune trial result ID [--repo PATH] [--json]
+orchestune trial result ID --decision keep|adopted [--repo PATH] [--json]
+```
+
+- `--repo`: 対象リポジトリのパス（既定はカレントディレクトリ `cwd`）。
+- `--request-file`: タスク依頼文のファイルパス。UTF-8 strict、最大1MiB、空・読取不能・ディレクトリは終了コード2。
+- `ID`: 試行を一意に識別する32桁のhex文字列（`--confirm-stopped` の ATTEMPT_ID も32桁hex）。
+- `DIGEST`: 計画または作業ツリーの承認・確認用64桁hexダイジェスト（SHA-256）。
+- `--ci-command`: shell構文を解釈せず直接引数リストへ展開するCI検証コマンド。Windows環境ではフォワードスラッシュとクォート（例: `"./scripts/local-ci.ps1"`）を案内します。
+- `--confirm-stopped`: 中断したプロセスの停止確認ID。他の変更フラグとは同時指定不可。
+- `--approve-plan`: `--request-file` や `--ci-command` との同時指定不可。`--confirm-worktree` とは対象ダイジェストが現在と一致する場合のみ併用可能。
+
+### 終了コード表 (Exit Codes)
+
+| 操作 / 結果 | 終了コード |
+| :--- | :--- |
+| `start` / `resume` で `ready` に到達、または `approval_required` の `planned` | `0` |
+| `start` / `resume` で `ci_missing`、規律不整合/未検証、`needs_attention`（予算枯渇、CI失敗等） | `1` |
+| 実行中断として保存された `reason=interrupted`、または対話プロンプト待ちでの `Ctrl+C` | `130` |
+| 引数エラー、未知・不正なID（32桁hex以外）やダイジェスト（64桁hex以外）、不正な依頼ファイル、前提未充足/ロック競合 (`TrialError`) | `2` |
+| `status` / `result` の正常表示（試行が `needs_attention` の場合も表示成功として0） | `0` |
+| `status` / `result` で未知ID、状態破損、引数エラー | `2` |
+| `result --decision` の記録成功 | `0` |
+| `result --decision` で未解決実行やHEAD包含不一致による拒否 | `2` |
+
+### 対話・非対話フロー
+- **対話モード** (`sys.stdin.isatty() and sys.stdout.isatty()`):
+  計画生成後、`phase=planned` かつ `reason=approval_required` の場合に確認プロンプトが表示されます:
+  `この計画で開始しますか? (yes/no) [no]: `
+  明示的に `yes` と入力すると直ちに計画ダイジェスト付きで実装・CI・レビューを開始します。`no` またはEOFの場合はplanned状態を保持して終了コード0で復帰します。
+- **非対話モード**:
+  入力を求めず計画を保存して終了コード0で復帰し、再開コマンドを表示します:
+  `orchestune trial resume <ID> --repo <PATH> --approve-plan <DIGEST>`
+
+### 中断復旧と作業ツリー変更確認
+- **プロセス中断**: コントローラが異常終了した場合、`--confirm-stopped <ATTEMPT_ID>` で停止確認を記録して再開します。
+- **dirty作業ツリー**: 分離worktree内に未コミット変更がある場合、`--confirm-worktree <WORKTREE_DIGEST>` で変更を確認して再開します。
+
+### 予算制御 (Budget Constraints)
+無限ループや過剰なAPI消費を防ぐため、試行ごとに有限の予算が設定されています:
+- 実装・修正サイクル: 最大3回まで。
+- レビューサイクル: 最大3回まで。
+上限に達した場合は `phase=needs_attention`、`reason=budget_exhausted` となり停止します。
+
+### 手動採用手順 (Manual Adoption Flow)
+試行が `ready` かつ `ready_is_current=true`（ベース最新かつ未コミット変更なし）に達した場合、利用者は手動で変更を作業ブランチへ取り込みます:
+```bash
+# 1. 元のリポジトリがcleanかつbaseであることを確認
+git -C "<source_root>" status
+
+# 2. 試行ブランチを手動でff-onlyマージ
+git -C "<source_root>" merge --ff-only "<trial_branch>"
+
+# 3. 採用判断を記録して試行を安全にクローズ
+orchestune trial result <TRIAL_ID> --decision adopted --repo "<source_root>"
+
+# （取り込まずに成果物だけ保持してクローズする場合）:
+orchestune trial result <TRIAL_ID> --decision keep --repo "<source_root>"
+```
+
