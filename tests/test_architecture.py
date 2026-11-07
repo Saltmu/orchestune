@@ -899,7 +899,14 @@ def test_execution_profiles_boundary_documented_in_architecture_docs() -> None:
         ), f"{lang}: ExecutionSelection reference missing"
 
 
-KNOWN_PACKAGE_CYCLE_EDGES: dict[tuple[str, str], str] = {}
+KNOWN_PACKAGE_CYCLE_EDGES: dict[tuple[str, str], str] = {
+    ("infra", "local_trial"): (
+        "#1743: infra.local_trial_agent adapter imports L0 local_trial.contracts/models DTOs"
+    ),
+    ("local_trial", "infra"): (
+        "#1743: local_trial.state and workspace import infra utilities (process_utils, json_state, git_cli)"
+    ),
+}
 
 
 def test_package_dependency_cycles_match_allowlist() -> None:
