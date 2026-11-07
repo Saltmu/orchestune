@@ -21,7 +21,9 @@ from orchestune.models import IssueRecord, PrRecord
 # Provenance sources
 # ---------------------------------------------------------------------------
 
-SOURCE_COLLECTOR = "collector"
+# Provenance recorded on every observation, so a finding can name where the
+# fact came from without re-deriving it.
+SOURCE_COLLECTOR = "observation-collector"
 SOURCE_EXTERNAL = "external-execution"
 SOURCE_FORGE = "forge"
 SOURCE_GIT = "git"
