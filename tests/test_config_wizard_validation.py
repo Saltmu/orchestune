@@ -77,6 +77,14 @@ class TestParseCiCommand:
         assert parse_ci_command('pytest "foo bar"') == ["pytest", "foo bar"]
         assert parse_ci_command(r"echo hello\ world") == ["echo", "hello world"]
 
+    def test_parse_quoted_inline_code_preserves_backslashes(self):
+        cmd = "python -c 'import pytest; print(\"CI\\n\"); raise SystemExit(pytest.main())'"
+        assert parse_ci_command(cmd) == [
+            "python",
+            "-c",
+            'import pytest; print("CI\\n"); raise SystemExit(pytest.main())',
+        ]
+
 
 class TestValidateTomlConfigSharedEnhancements:
     def test_retired_model_tier_message_points_to_execution_profile(self):

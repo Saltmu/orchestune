@@ -262,7 +262,8 @@ def parse_ci_command(value: Any) -> list[str]:
     if isinstance(value, str):
         if not value.strip():
             raise config_contracts.ConfigError("ci-command must not be empty")
-        if _WIN_PATH_SEPARATOR_RE.search(value):
+        unquoted = re.sub(r"'[^']*'", "", value)
+        if _WIN_PATH_SEPARATOR_RE.search(unquoted):
             raise config_contracts.ConfigError(
                 "ci-command string contains Windows path separators ('\\'); "
                 "use forward slashes ('/') or an array format (e.g. ['path\\\\to\\\\executable']) instead"
