@@ -558,6 +558,7 @@ class TestStatusAndResult:
             assert main(["status", trial_id, "--json"]) == 0
             out = capsys.readouterr().out
             data = json.loads(out)
+            assert "案内" not in out
             assert data["schema_version"] == 1
             assert data["trial_id"] == trial_id
             assert data["effective_phase"] == "ready"

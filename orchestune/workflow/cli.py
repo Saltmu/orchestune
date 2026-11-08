@@ -8,8 +8,10 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+from orchestune.infra.cli_guidance import render_guidance
 from orchestune.workflow.check import check_gate
 from orchestune.workflow.contracts import GATES
+from orchestune.workflow.guidance import guidance_from_workflow
 from orchestune.workflow.next import next_step
 from orchestune.workflow.readers import read_context
 from orchestune.workflow.stages import load_stage_definitions
@@ -85,6 +87,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"  {check.id}: {check.status}")
             for missing in check.missing:
                 print(f"    {missing}")
+        if args.command == "next":
+            print(render_guidance(guidance_from_workflow(result)))
         for reference in result.references:
             print(f"  See: {reference}")
     return int(result.exit_code)

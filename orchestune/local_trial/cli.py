@@ -14,12 +14,14 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from orchestune.infra.cli_guidance import render_guidance
 from orchestune.local_trial.contracts import (
     TrialError,
     encode_attempt,
     encode_state,
     plan_digest,
 )
+from orchestune.local_trial.guidance import guidance_from_trial
 from orchestune.local_trial.models import (
     DisciplineStatus,
     TrialPhase,
@@ -181,11 +183,6 @@ def _render_json(view: TrialView, trial_id: str) -> None:
     print(json.dumps(data, ensure_ascii=False, indent=2))
 
 
-def _format_path_quote(path: str) -> str:
-    norm = path.replace("\\", "/")
-    return shlex.quote(norm)
-
-
 def _render_text_plan(state: TrialState, lines: list[str]) -> str | None:
     if state.plan is None:
         return None
@@ -232,46 +229,8 @@ def _render_text_evidence(state: TrialState, lines: list[str]) -> None:
             lines.append(f"  - [{r.action}] {r.finding_id}: {r.explanation}")
 
 
-def _render_text_guidance(
-    view: TrialView,
-    state: TrialState,
-    plan_dig: str | None,
-    repo_arg: str,
-    lines: list[str],
-) -> None:
-    quoted_repo = _format_path_quote(repo_arg)
-    if view.effective_phase == TrialPhase.PLANNED and plan_dig is not None:
-        lines.append("\n計画承認コマンド (Next Action):")
-        lines.append(
-            f"  orchestune trial resume {state.trial_id} --repo {quoted_repo} "
-            f"--approve-plan {plan_dig}"
-        )
-    elif view.effective_phase == TrialPhase.READY and view.ready_is_current:
-        src = _format_path_quote(state.repository.source_root)
-        br = shlex.quote(state.workspace.branch)
-        lines.append("\nローカルの採用候補 - 手動採用手順 (Manual adoption flow):")
-        lines.append(
-            f"  1. git -C {src} status  (リポジトリがcleanかつbaseであることを確認)"
-        )
-        lines.append(f"  2. git -C {src} merge --ff-only {br}")
-        lines.append(
-            f"  3. orchestune trial result {state.trial_id} --decision adopted --repo {src}"
-        )
-        lines.append(
-            f"  (採用せず保持する場合: orchestune trial result {state.trial_id} --decision keep --repo {src})"
-        )
-    elif view.worktree_digest and view.reason == "worktree_dirty":
-        lines.append("\n作業ツリー変更確認 (Next Action):")
-        lines.append(
-            f"  orchestune trial resume {state.trial_id} --repo {quoted_repo} "
-            f"--confirm-worktree {view.worktree_digest}"
-        )
-    elif state.pending_attempt and view.reason == "execution_unknown":
-        lines.append("\nプロセス停止確認 (Next Action):")
-        lines.append(
-            f"  orchestune trial resume {state.trial_id} --repo {quoted_repo} "
-            f"--confirm-stopped {state.pending_attempt.attempt_id}"
-        )
+def _render_text_guidance(view: TrialView, repo_arg: str, lines: list[str]) -> None:
+    lines.append(render_guidance(guidance_from_trial(view, repo_arg)))
 
 
 def _render_text(view: TrialView, *, is_result: bool, repo_arg: str) -> None:
@@ -290,6 +249,7 @@ def _render_text(view: TrialView, *, is_result: bool, repo_arg: str) -> None:
     if view.reason:
         lines.append(f"reason: {view.reason}")
     if view.state is None:
+        _render_text_guidance(view, repo_arg, lines)
         print("\n".join(lines))
         return
 
@@ -298,7 +258,7 @@ def _render_text(view: TrialView, *, is_result: bool, repo_arg: str) -> None:
     lines.append(f"head_sha: {st.head_sha}")
     lines.append(f"implementation_path: {st.workspace.implementation_path}")
     lines.append(f"review_path: {st.workspace.review_path}")
-    p_dig = _render_text_plan(st, lines)
+    _render_text_plan(st, lines)
     if st.approved_plan_digest:
         lines.append(f"approved_plan_digest: {st.approved_plan_digest}")
     _render_text_evidence(st, lines)
@@ -308,7 +268,7 @@ def _render_text(view: TrialView, *, is_result: bool, repo_arg: str) -> None:
         lines.append(
             f"decision: {st.decision.value} (recorded_at={st.decision.recorded_at})"
         )
-    _render_text_guidance(view, st, p_dig, repo_arg, lines)
+    _render_text_guidance(view, repo_arg, lines)
     print("\n".join(lines))
 
 
