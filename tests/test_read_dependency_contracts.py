@@ -64,7 +64,6 @@ _SCAFFOLDS = (
     "orchestune/read_dependencies/__init__.py",
     "orchestune/read_dependencies/validation.py",
     "orchestune/read_dependencies/report_codec.py",
-    "orchestune/claim/read_checkpoint.py",
     "orchestune/complete/read_evidence.py",
     "orchestune/integrator/read_context.py",
     "orchestune/integrator/read_gate.py",

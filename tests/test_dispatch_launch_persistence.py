@@ -10,11 +10,25 @@ from orchestune.dispatch.rules import CycleContext
 from orchestune.dispatch.scoring import Task
 from orchestune.ledger.run_state import CompletedWorktree, RunState
 from orchestune.models import PrRecord, Usage
+from orchestune.worktree_ops import preparation
 from tests.conftest import make_issue, real_claim_fn, register_task_issue
 from tests.dispatch_test_support import make_test_active_worktree
 from tests.dispatch_test_support import save_locked_run_state as save_run_state
 
 tmp_path = Path(tempfile.mkdtemp(prefix="orchestune-test-state-"))
+
+
+def _configure_checkpoint_api(forge):
+    comments = []
+    forge.get_repository_slug.return_value = "owner/repo"
+    forge.list_all_issue_comments.side_effect = lambda _n: list(comments)
+
+    def create_comment(_n, body):
+        comment = {"id": len(comments) + 1, "body": body}
+        comments.append(comment)
+        return comment
+
+    forge.create_issue_comment.side_effect = create_comment
 
 
 def test_progress_never_claims_success_when_launch_persistence_fails(
@@ -541,6 +555,7 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
 
         from orchestune.dispatch.launch.service import _apply_task_launches
 
+        _configure_checkpoint_api(forge)
         plans, dispatch_target = self._launch_plan(tmp_path)
         config = DispatcherConfig(
             events_log_path=tmp_path / "events.jsonl",
@@ -558,6 +573,11 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
             ),
             patch("orchestune.infra.git_cli.subprocess.run") as mock_run,
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
+            patch.object(
+                preparation,
+                "resolve_worktree_head_sha",
+                return_value="a" * 40,
+            ),
         ):
             mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
             mock_popen.return_value.pid = 4_201_234
@@ -579,6 +599,7 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
 
         calls: list[str] = []
         forge = MagicMock()
+        _configure_checkpoint_api(forge)
         forge.get_issue.side_effect = lambda n: (
             make_issue(number=1, subtask_id="task-1")
             if int(n) == 1
@@ -611,6 +632,11 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
             ),
             patch("orchestune.infra.git_cli.subprocess.run") as mock_run,
             patch("orchestune.dispatch.targets.subprocess.Popen") as mock_popen,
+            patch.object(
+                preparation,
+                "resolve_worktree_head_sha",
+                return_value="a" * 40,
+            ),
             patch(
                 "orchestune.dispatch.launch.service._launch_on_prepared_worktree",
                 autospec=True,
@@ -634,6 +660,7 @@ class TestApplyTaskLaunchesLaunchHistoryCrashSafety:
         assert calls[0] == "persist"
         assert "launch" in calls
         assert calls.index("persist") < calls.index("launch")
+        forge.create_issue_comment.assert_called_once()
 
     def test_fails_closed_and_does_not_launch_when_the_reservation_fails(
         self, tmp_path
