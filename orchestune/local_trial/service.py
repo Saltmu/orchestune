@@ -57,10 +57,10 @@ from orchestune.local_trial.policy import (
     determine_plan_reason,
     is_workspace_dirty_unapproved,
     make_evidence,
+    resolve_plan_approval,
     resolve_resume_needs_attention,
     validate_attempt,
     validate_persisted_attempt,
-    validate_plan_approval,
     verify_clean_plan,
     verify_clean_review,
 )
@@ -430,11 +430,18 @@ def _handle_confirmations(
         snap = deps.workspace.inspect(state.repository, state.workspace)
         if workspace_digest(snap) != request.confirm_worktree:
             raise TrialError("state_invalid", "confirm_worktree digest mismatch")
+        plan_dig, chk, phase, reason = resolve_plan_approval(
+            state, request.approve_plan
+        )
         return _save_state(
             state,
             deps,
+            approved_plan_digest=plan_dig,
             approved_worktree_digest=request.confirm_worktree,
             approved_index_digest=snap.index_digest,
+            checkpoint=chk,
+            phase=phase,
+            reason=reason,
             observation=replace(state.observation, updated_at=deps.clock()),
         )
     return None
@@ -466,23 +473,17 @@ def _verify_workspace_state(
 def _apply_approval(
     request: ResumeRequest, state: TrialState, deps: TrialDependencies
 ) -> TrialState:
-    validate_plan_approval(state, request.approve_plan)
+    plan_dig, chk, phase, reason = resolve_plan_approval(state, request.approve_plan)
     _, snap = _verify_workspace_state(state, deps)
-    chk = (
-        Checkpoint.CI
-        if state.budget.cycles_started > 0
-        and state.head_sha.lower() != state.repository.base_sha.lower()
-        else Checkpoint.IMPLEMENT
-    )
     return _save_state(
         state,
         deps,
-        approved_plan_digest=request.approve_plan,
+        approved_plan_digest=plan_dig,
         approved_worktree_digest=workspace_digest(snap),
         approved_index_digest=snap.index_digest,
         checkpoint=chk,
-        phase=TrialPhase.IMPLEMENTING,
-        reason=None,
+        phase=phase,
+        reason=reason,
         observation=replace(state.observation, updated_at=deps.clock()),
     )
 

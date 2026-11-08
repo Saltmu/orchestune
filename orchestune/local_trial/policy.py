@@ -213,6 +213,23 @@ def validate_plan_approval(state: TrialState, approved_digest: str | None) -> st
     return curr_dig
 
 
+def resolve_plan_approval(
+    state: TrialState,
+    approve_plan: str | None,
+) -> tuple[str | None, Checkpoint, TrialPhase, str | None]:
+    """Validate and resolve plan approval state updates."""
+    if approve_plan is None:
+        return state.approved_plan_digest, state.checkpoint, state.phase, state.reason
+    plan_dig = validate_plan_approval(state, approve_plan)
+    chk = (
+        Checkpoint.CI
+        if state.budget.cycles_started > 0
+        and state.head_sha.lower() != state.repository.base_sha.lower()
+        else Checkpoint.IMPLEMENT
+    )
+    return plan_dig, chk, TrialPhase.IMPLEMENTING, None
+
+
 def determine_plan_reason(plan: TrialPlan) -> str:
     """Determine why a plan is not yet ready for immediate approval."""
     st = str(plan.discipline_status)

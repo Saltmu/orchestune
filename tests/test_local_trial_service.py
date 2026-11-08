@@ -588,6 +588,33 @@ def test_resume_trial_confirm_worktree_persistence(tmp_path: Path) -> None:
     assert exc_info.value.code == "base_changed"
 
 
+def test_resume_trial_confirm_worktree_with_approve_plan(tmp_path: Path) -> None:
+    deps, store, ws, agents, proc_runner = _make_fake_deps(tmp_path)
+    req = StartRequest(
+        repo=str(tmp_path), request_text="implement something", agent_name="codex"
+    )
+    view = start_trial(req, deps)
+    assert view.state is not None and view.state.plan is not None
+    tid = view.state.trial_id
+    pdig = plan_digest(
+        view.state.plan, view.state.request.digest, view.state.repository.base_sha
+    )
+    ws.changes = (Change(status="M", path="foo.py"),)
+    snap = ws.inspect(view.state.repository, view.state.workspace)
+    wdig = workspace_digest(snap)
+
+    v_conf = resume_trial(
+        ResumeRequest(trial_id=tid, confirm_worktree=wdig, approve_plan=pdig), deps
+    )
+    assert v_conf.state is not None
+    assert v_conf.state.approved_worktree_digest == wdig
+    assert v_conf.state.approved_plan_digest == pdig
+    assert v_conf.state.phase == TrialPhase.IMPLEMENTING
+
+    v_res = resume_trial(ResumeRequest(trial_id=tid), deps)
+    assert v_res.effective_phase == TrialPhase.READY
+
+
 def test_resume_trial_ci_recovery_cycle_three(tmp_path: Path) -> None:
     deps, store, ws, agents, proc_runner = _make_fake_deps(tmp_path)
     req = StartRequest(
