@@ -603,3 +603,96 @@ def test_e2e_stopped_confirmation(e2e_setup):
     )
     assert res_conf.returncode == 0
     assert "trial_id:" in res_conf.stdout
+
+
+def test_e2e_ci_command_change_reapproval(e2e_setup):
+    repo = e2e_setup["repo_dir"]
+    req = e2e_setup["req_file"]
+    env = e2e_setup["env"]
+
+    new_ci_script = repo / "new_test.py"
+    marker_path = repo / "new_ci_marker.txt"
+    new_ci_script.write_text(
+        f"""import sys
+from pathlib import Path
+Path({repr(str(marker_path))}).write_text("ran new ci")
+sys.exit(0)
+"""
+    )
+    subprocess.run(["git", "add", "new_test.py"], cwd=repo, env=env, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "add new_test.py"], cwd=repo, env=env, check=True
+    )
+
+    # 1. Start trial non-interactively
+    res = _run_cli(
+        ["start", "--request-file", str(req), "--repo", str(repo)], env, repo
+    )
+    assert res.returncode == 0, res.stderr
+    assert "effective_phase: planned" in res.stdout
+
+    # Get trial id and initial plan digest
+    res = _run_cli(["status", "--repo", str(repo), "--json"], env, repo)
+    data = json.loads(res.stdout)
+    trial_id = data["trial_id"]
+    st = data["state"]
+    plan_dict = st["plan"]
+    p_obj = TrialPlan(
+        goal=plan_dict["goal"],
+        acceptance_criteria=tuple(plan_dict["acceptance_criteria"]),
+        write_paths=tuple(plan_dict["write_paths"]),
+        discipline_paths=tuple(plan_dict["discipline_paths"]),
+        discipline_notes=tuple(plan_dict["discipline_notes"]),
+        ci_argv=tuple(plan_dict["ci_argv"]),
+        discipline_status=plan_dict["discipline_status"],
+    )
+    old_dig = plan_digest(p_obj, st["request"]["digest"], st["repository"]["base_sha"])
+
+    # 2. Change CI command to new_test.py
+    new_cmd = f"{sys.executable} new_test.py"
+    res = _run_cli(
+        ["resume", trial_id, "--ci-command", new_cmd, "--repo", str(repo)],
+        env,
+        repo,
+    )
+    assert res.returncode == 0, res.stderr
+    assert "effective_phase: planned" in res.stdout
+    assert not marker_path.exists(), "New CI command must not run before approval"
+
+    # Verify old digest is rejected
+    res_stale = _run_cli(
+        ["resume", trial_id, "--approve-plan", old_dig, "--repo", str(repo)],
+        env,
+        repo,
+    )
+    assert res_stale.returncode != 0
+    assert "approval_stale" in res_stale.stderr
+
+    # Get new digest from status
+    res = _run_cli(["status", trial_id, "--repo", str(repo), "--json"], env, repo)
+    data = json.loads(res.stdout)
+    st = data["state"]
+    plan_dict = st["plan"]
+    p_obj_new = TrialPlan(
+        goal=plan_dict["goal"],
+        acceptance_criteria=tuple(plan_dict["acceptance_criteria"]),
+        write_paths=tuple(plan_dict["write_paths"]),
+        discipline_paths=tuple(plan_dict["discipline_paths"]),
+        discipline_notes=tuple(plan_dict["discipline_notes"]),
+        ci_argv=tuple(plan_dict["ci_argv"]),
+        discipline_status=plan_dict["discipline_status"],
+    )
+    new_dig = plan_digest(
+        p_obj_new, st["request"]["digest"], st["repository"]["base_sha"]
+    )
+    assert new_dig != old_dig
+
+    # 3. Approve new plan -> executes new CI
+    res = _run_cli(
+        ["resume", trial_id, "--approve-plan", new_dig, "--repo", str(repo)],
+        env,
+        repo,
+    )
+    assert res.returncode == 0, res.stderr
+    assert "effective_phase: ready" in res.stdout
+    assert marker_path.exists(), "New CI command was executed"

@@ -43,6 +43,7 @@ from orchestune.local_trial.models import (
     PlanPayload,
     ProcessRecord,
     ProcessStatus,
+    RepositoryIdentity,
     RequestSnapshot,
     ReviewPayload,
     ReviewVerdict,
@@ -400,6 +401,28 @@ def _handle_confirmations(
     return None
 
 
+def _verify_workspace_state(
+    state: TrialState, deps: TrialDependencies
+) -> tuple[RepositoryIdentity, WorkspaceSnapshot]:
+    repo_curr = deps.workspace.discover(state.repository.source_root)
+    if repo_curr.base_sha != state.repository.base_sha:
+        raise TrialError("base_changed", "Repository base SHA changed")
+    snap = deps.workspace.inspect(state.repository, state.workspace)
+    exp_b = state.workspace.branch.removeprefix("refs/heads/")
+    if (
+        repo_curr.source_root != state.repository.source_root
+        or repo_curr.primary_root != state.repository.primary_root
+        or (snap.branch is not None and snap.branch != exp_b)
+        or snap.head_sha.lower() != state.head_sha.lower()
+    ):
+        raise TrialError(
+            "identity_mismatch", "Repository or workspace identity mismatch"
+        )
+    if snap.changes:
+        raise TrialError("worktree_dirty", "Implementation worktree is dirty")
+    return repo_curr, snap
+
+
 def _apply_approval(
     request: ResumeRequest, state: TrialState, deps: TrialDependencies
 ) -> TrialState:
@@ -417,19 +440,20 @@ def _apply_approval(
     if state.plan.ci_argv is None:
         raise TrialError("ci_missing", "Plan has no CI command")
 
-    repo_curr = deps.workspace.discover(state.repository.source_root)
-    if repo_curr.base_sha != state.repository.base_sha:
-        raise TrialError("base_changed", "Repository base SHA changed")
-    snap = deps.workspace.inspect(state.repository, state.workspace)
-    if snap.changes:
-        raise TrialError("worktree_dirty", "Implementation worktree is dirty")
+    repo_curr, snap = _verify_workspace_state(state, deps)
+    has_saved_head = (
+        state.budget.cycles_started > 0
+        and state.head_sha.lower() != state.repository.base_sha.lower()
+        and deps.workspace.includes_head(state)
+    )
+    checkpoint = Checkpoint.CI if has_saved_head else Checkpoint.IMPLEMENT
 
     state = replace(
         state,
         approved_plan_digest=request.approve_plan,
         approved_worktree_digest=workspace_digest(snap),
         approved_index_digest=snap.index_digest,
-        checkpoint=Checkpoint.IMPLEMENT,
+        checkpoint=checkpoint,
         phase=TrialPhase.IMPLEMENTING,
         reason=None,
         revision=state.revision + 1,
@@ -470,6 +494,11 @@ def _create_attempt_input(
     state: TrialState, deps: TrialDependencies, kind: AttemptKind
 ) -> AttemptInput:
     att_id = deps.new_id()
+    cwd = (
+        state.workspace.review_path
+        if kind == AttemptKind.REVIEW
+        else state.workspace.implementation_path
+    )
     return AttemptInput(
         trial_id=state.trial_id,
         attempt_id=att_id,
@@ -478,8 +507,8 @@ def _create_attempt_input(
         base_sha=state.repository.base_sha,
         plan_digest=state.approved_plan_digest,
         plan_revision=state.budget.plan_revision,
-        cwd=state.workspace.implementation_path,
-        artifact_dir=f"{state.workspace.implementation_path}/.orchestune/artifacts/{att_id}",
+        cwd=cwd,
+        artifact_dir=f"{cwd}/.orchestune/artifacts/{att_id}",
         started_at=deps.clock(),
     )
 
@@ -646,19 +675,17 @@ def _execute_ci(state: TrialState, deps: TrialDependencies) -> TrialState:
         raise TrialError("ci_missing", "Plan has no CI command")
     ci_argv = state.plan.ci_argv
     approved_plan_digest = state.approved_plan_digest
-    ci_id = deps.new_id()
-    ci_inp = AttemptInput(
-        trial_id=state.trial_id,
-        attempt_id=ci_id,
-        kind=AttemptKind.CI,
-        input_head_sha=state.head_sha,
-        base_sha=state.repository.base_sha,
-        plan_digest=approved_plan_digest,
-        plan_revision=state.budget.plan_revision,
-        cwd=state.workspace.implementation_path,
-        artifact_dir=f"{state.workspace.implementation_path}/.orchestune/artifacts/{ci_id}",
-        started_at=deps.clock(),
-    )
+    if state.budget.reviews_started >= 3:
+        state = replace(
+            state,
+            phase=TrialPhase.NEEDS_ATTENTION,
+            reason="budget_exhausted",
+            revision=state.revision + 1,
+        )
+        deps.store.save(state, expected_revision=state.revision - 1)
+        return state
+    ci_inp = _create_attempt_input(state, deps, AttemptKind.CI)
+    ci_id = ci_inp.attempt_id
     state = replace(state, pending_attempt=ci_inp, revision=state.revision + 1)
     deps.store.save(state, expected_revision=state.revision - 1)
 
@@ -795,19 +822,8 @@ def _execute_review(state: TrialState, deps: TrialDependencies) -> TrialState:
         return state
 
     state = _prepare_review_workspace(state, deps)
-    rev_id = deps.new_id()
-    rev_inp = AttemptInput(
-        trial_id=state.trial_id,
-        attempt_id=rev_id,
-        kind=AttemptKind.REVIEW,
-        input_head_sha=state.head_sha,
-        base_sha=state.repository.base_sha,
-        plan_digest=approved_plan_digest,
-        plan_revision=state.budget.plan_revision,
-        cwd=state.workspace.review_path,
-        artifact_dir=f"{state.workspace.review_path}/.orchestune/artifacts/{rev_id}",
-        started_at=deps.clock(),
-    )
+    rev_inp = _create_attempt_input(state, deps, AttemptKind.REVIEW)
+    rev_id = rev_inp.attempt_id
     budget = replace(state.budget, reviews_started=state.budget.reviews_started + 1)
     state = replace(
         state, budget=budget, pending_attempt=rev_inp, revision=state.revision + 1
@@ -850,6 +866,35 @@ def _reconcile_pending_operations(
     return state
 
 
+def _invalidate_approval_state(
+    state: TrialState,
+    req_snap: RequestSnapshot,
+    budget: Budget,
+    now: str,
+    *,
+    plan: TrialPlan | None = None,
+    phase: TrialPhase = TrialPhase.PLANNED,
+    checkpoint: Checkpoint = Checkpoint.AWAIT_APPROVAL,
+    reason: str | None = None,
+) -> TrialState:
+    return replace(
+        state,
+        request=req_snap,
+        plan=plan if plan is not None else state.plan,
+        budget=budget,
+        approved_plan_digest=None,
+        approved_worktree_digest=None,
+        approved_index_digest=None,
+        ci_evidence=None,
+        review_evidence=None,
+        phase=phase,
+        checkpoint=checkpoint,
+        reason=reason,
+        revision=state.revision + 1,
+        observation=replace(state.observation, updated_at=now),
+    )
+
+
 def _handle_additional_request(
     request_text: str, state: TrialState, deps: TrialDependencies
 ) -> tuple[TrialState, TrialView]:
@@ -858,41 +903,66 @@ def _handle_additional_request(
         digest=request_digest(request_text),
         ci_argv_override=state.request.ci_argv_override,
     )
-    budget = Budget(
+    b = Budget(
         plan_revision=state.budget.plan_revision + 1,
         cycles_started=0,
         reviews_started=0,
     )
-    state = replace(
+    state = _invalidate_approval_state(
         state,
-        request=req_snap,
-        budget=budget,
-        approved_plan_digest=None,
-        approved_worktree_digest=None,
-        approved_index_digest=None,
-        ci_evidence=None,
-        review_evidence=None,
+        req_snap,
+        b,
+        deps.clock(),
         phase=TrialPhase.PREPARING,
         checkpoint=Checkpoint.PLAN,
-        revision=state.revision + 1,
     )
     deps.store.save(state, expected_revision=state.revision - 1)
     snap_before = deps.workspace.inspect(state.repository, state.workspace)
-    view = _run_plan_stage(state, deps, state.request.ci_argv_override, (), snap_before)
-    return state, view
+    return state, _run_plan_stage(
+        state, deps, state.request.ci_argv_override, (), snap_before
+    )
 
 
 def _handle_ci_override_update(
     override: tuple[str, ...], state: TrialState, deps: TrialDependencies
 ) -> tuple[TrialState, TrialView | None]:
+    if state.pending_attempt is not None or state.pending_git is not None:
+        raise TrialError(
+            "execution_unknown", "Cannot change CI command with pending operations"
+        )
+    if state.phase == TrialPhase.CLOSED:
+        raise TrialError("state_invalid", "Cannot change CI command for closed trial")
+
+    _, snap = _verify_workspace_state(state, deps)
+    if state.plan is not None and state.plan.ci_argv == override:
+        return state, _make_view(state, deps, snap, ())
+
+    budget = replace(state.budget, plan_revision=state.budget.plan_revision + 1)
     req_snap = replace(state.request, ci_argv_override=override)
-    state = replace(state, request=req_snap, revision=state.revision + 1)
+
+    if state.plan is None or state.plan.ci_argv is None:
+        state = _invalidate_approval_state(state, req_snap, budget, deps.clock())
+        deps.store.save(state, expected_revision=state.revision - 1)
+        return state, _run_plan_stage(state, deps, override, (), snap)
+
+    new_plan = replace(state.plan, ci_argv=override)
+    validate_plan(
+        new_plan,
+        state.repository.primary_root,
+        state.request.text,
+        state.repository.base_sha,
+        preferred_ci=override,
+    )
+    state = _invalidate_approval_state(
+        state,
+        req_snap,
+        budget,
+        deps.clock(),
+        plan=new_plan,
+        reason=_determine_plan_reason(new_plan),
+    )
     deps.store.save(state, expected_revision=state.revision - 1)
-    if state.plan is not None and state.plan.ci_argv is None:
-        snap_before = deps.workspace.inspect(state.repository, state.workspace)
-        view = _run_plan_stage(state, deps, override, (), snap_before)
-        return state, view
-    return state, None
+    return state, _make_view(state, deps, snap, ())
 
 
 def _handle_request_updates(

@@ -856,3 +856,144 @@ def test_record_decision_adopted_requires_includes_head(tmp_path: Path) -> None:
     ws.is_included = False
     with pytest.raises(TrialError, match="Trial head is not included in base branch"):
         record_decision(trial_id, "adopted", deps)
+
+
+def test_resume_trial_ci_override_planned_and_ready(tmp_path: Path) -> None:
+    deps, store, ws, agents, proc_runner = _make_fake_deps(tmp_path)
+    req = StartRequest(
+        repo=str(tmp_path), request_text="implement something", agent_name="codex"
+    )
+    view = start_trial(req, deps)
+    assert view.state is not None and view.state.plan is not None
+    tid = view.state.trial_id
+    old_dig = validate_plan(
+        view.state.plan, tmp_path, "implement something", ws.base_sha
+    )
+
+    # 1. Override CI argv while in PLANNED
+    res1 = resume_trial(
+        ResumeRequest(trial_id=tid, ci_argv_override=("pytest", "-k", "unit")), deps
+    )
+    assert res1.state is not None and res1.state.plan is not None
+    assert res1.state.plan.ci_argv == ("pytest", "-k", "unit")
+    assert res1.state.budget.plan_revision == 1
+    assert res1.state.budget.cycles_started == 0
+    assert len(proc_runner.call_history) == 0
+    new_dig = validate_plan(
+        res1.state.plan, tmp_path, "implement something", ws.base_sha
+    )
+    assert new_dig != old_dig
+
+    # Old digest rejected
+    with pytest.raises(
+        TrialError, match="Approved plan digest does not match current plan"
+    ):
+        resume_trial(ResumeRequest(trial_id=tid, approve_plan=old_dig), deps)
+
+    # Approve new digest -> runs implement, CI with new argv, review -> reaches READY
+    res2 = resume_trial(ResumeRequest(trial_id=tid, approve_plan=new_dig), deps)
+    assert res2.effective_phase == TrialPhase.READY
+    assert res2.state is not None
+    assert proc_runner.call_history == [["pytest", "-k", "unit"]]
+    head_after_first = res2.state.head_sha
+    agent_calls_before = len(agents.call_history)
+
+    # 2. Override CI argv while in READY
+    res3 = resume_trial(
+        ResumeRequest(trial_id=tid, ci_argv_override=("pytest", "-v")), deps
+    )
+    assert res3.effective_phase == TrialPhase.PLANNED
+    assert res3.state is not None and res3.state.plan is not None
+    assert res3.state.budget.plan_revision == 2
+    assert res3.state.budget.cycles_started == 1
+    assert res3.state.approved_plan_digest is None
+    assert res3.state.ci_evidence is None
+    assert res3.state.review_evidence is None
+    ready_dig = validate_plan(
+        res3.state.plan, tmp_path, "implement something", ws.base_sha
+    )
+
+    # Approve ready CI update -> directly runs CI and review on existing clean head
+    res4 = resume_trial(ResumeRequest(trial_id=tid, approve_plan=ready_dig), deps)
+    assert res4.effective_phase == TrialPhase.READY
+    assert res4.state is not None
+    assert res4.state.head_sha == head_after_first
+    assert proc_runner.call_history == [["pytest", "-k", "unit"], ["pytest", "-v"]]
+    impl_calls = [
+        c for c in agents.call_history[agent_calls_before:] if c in ("implement", "fix")
+    ]
+    assert impl_calls == []
+
+
+def test_resume_trial_ci_override_idempotent_and_dirty_and_closed(
+    tmp_path: Path,
+) -> None:
+    from orchestune.local_trial.models import Change
+
+    deps, store, ws, agents, proc_runner = _make_fake_deps(tmp_path)
+    req = StartRequest(
+        repo=str(tmp_path), request_text="implement something", agent_name="codex"
+    )
+    view = start_trial(req, deps)
+    assert view.state is not None
+    tid = view.state.trial_id
+
+    # Idempotent: same argv does not bump revision or change plan
+    res_same = resume_trial(
+        ResumeRequest(trial_id=tid, ci_argv_override=("pytest",)), deps
+    )
+    assert res_same.state is not None
+    assert res_same.state.budget.plan_revision == 0
+    assert res_same.state.revision == view.state.revision
+
+    # Dirty worktree rejected
+    ws.changes = (Change(status="M", path="dirty.py"),)
+    with pytest.raises(TrialError, match="Implementation worktree is dirty"):
+        resume_trial(
+            ResumeRequest(trial_id=tid, ci_argv_override=("pytest", "-q")), deps
+        )
+    ws.changes = ()
+
+    # Closed trial rejected
+    store.close(replace(view.state, phase=TrialPhase.CLOSED))
+    with pytest.raises(TrialError, match="Cannot change CI command for closed trial"):
+        resume_trial(
+            ResumeRequest(trial_id=tid, ci_argv_override=("pytest", "-q")), deps
+        )
+
+
+def test_resume_trial_ci_override_preserves_budget(tmp_path: Path) -> None:
+    deps, store, ws, agents, proc_runner = _make_fake_deps(tmp_path)
+    req = StartRequest(
+        repo=str(tmp_path), request_text="implement something", agent_name="codex"
+    )
+    view = start_trial(req, deps)
+    assert view.state is not None and view.state.plan is not None
+    tid = view.state.trial_id
+    plan_dig = validate_plan(
+        view.state.plan, tmp_path, "implement something", ws.base_sha
+    )
+    res_ready = resume_trial(ResumeRequest(trial_id=tid, approve_plan=plan_dig), deps)
+    assert res_ready.state is not None
+    assert res_ready.effective_phase == TrialPhase.READY
+
+    # Simulate exhausted reviews budget
+    store.state = replace(
+        res_ready.state,
+        budget=replace(res_ready.state.budget, reviews_started=3),
+    )
+
+    # Change CI command
+    res_override = resume_trial(
+        ResumeRequest(trial_id=tid, ci_argv_override=("pytest", "-v")), deps
+    )
+    assert res_override.state is not None and res_override.state.plan is not None
+    assert res_override.state.budget.reviews_started == 3
+    dig = validate_plan(
+        res_override.state.plan, tmp_path, "implement something", ws.base_sha
+    )
+
+    # Approving halts with budget_exhausted instead of bypassing limits
+    res_blocked = resume_trial(ResumeRequest(trial_id=tid, approve_plan=dig), deps)
+    assert res_blocked.effective_phase == TrialPhase.NEEDS_ATTENTION
+    assert res_blocked.reason == "budget_exhausted"
