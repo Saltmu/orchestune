@@ -322,7 +322,9 @@ def resolve_resume_needs_attention(
     chk = state.checkpoint
     if chk == Checkpoint.PLAN:
         return TrialPhase.PLANNING, chk
-    if chk in (Checkpoint.IMPLEMENT, Checkpoint.CI) and state.budget.cycles_started < 3:
+    if chk == Checkpoint.IMPLEMENT and state.budget.cycles_started < 3:
+        return TrialPhase.IMPLEMENTING, chk
+    if chk == Checkpoint.CI and state.budget.reviews_started < 3:
         return TrialPhase.IMPLEMENTING, chk
     if chk == Checkpoint.REVIEW and state.budget.reviews_started < 3:
         chk_ci = not _check_evidence_match(state.ci_evidence, state)

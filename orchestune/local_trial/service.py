@@ -432,7 +432,7 @@ def _handle_confirmations(
 
 
 def _verify_workspace_state(
-    state: TrialState, deps: TrialDependencies
+    state: TrialState, deps: TrialDependencies, *, check_dirty: bool = True
 ) -> tuple[RepositoryIdentity, WorkspaceSnapshot]:
     repo_curr = deps.workspace.discover(state.repository.source_root)
     if repo_curr.base_sha != state.repository.base_sha:
@@ -449,7 +449,7 @@ def _verify_workspace_state(
         raise TrialError(
             "identity_mismatch", "Repository or workspace identity mismatch"
         )
-    if is_workspace_dirty_unapproved(state, snap):
+    if check_dirty and is_workspace_dirty_unapproved(state, snap):
         raise TrialError("worktree_dirty", "Implementation worktree is dirty")
     return repo_curr, snap
 
@@ -1026,8 +1026,17 @@ def resume_trial(request: ResumeRequest, deps: TrialDependencies) -> TrialView:
         if request.approve_plan is not None:
             state = _apply_approval(request, state, deps)
 
+        repo_curr, snap = _verify_workspace_state(state, deps, check_dirty=False)
+
         if dirty_view := _check_unapproved_dirty(state, deps):
             return dirty_view
+
+        if (
+            snap.changes
+            and state.approved_worktree_digest == workspace_digest(snap)
+            and state.approved_index_digest == snap.index_digest
+        ):
+            state = _commit_implementation(state, deps)
 
         state = _resume_from_needs_attention(state, deps)
 

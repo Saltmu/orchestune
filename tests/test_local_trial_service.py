@@ -14,7 +14,7 @@ from orchestune.infra.managed_process import (
     ManagedProcessSpec,
     ProcessOutcome,
 )
-from orchestune.local_trial.contracts import TrialError
+from orchestune.local_trial.contracts import TrialError, plan_digest
 from orchestune.local_trial.models import (
     AgentInfo,
     AgentPayload,
@@ -491,6 +491,7 @@ def test_resume_trial_confirm_stopped(tmp_path: Path) -> None:
     )
     view1 = start_trial(req, deps)
     assert view1.state is not None
+    assert view1.state.plan is not None
     trial_id = view1.state.trial_id
     rev_before = view1.state.revision
 
@@ -561,6 +562,7 @@ def test_resume_trial_confirm_worktree_persistence(tmp_path: Path) -> None:
     )
     view1 = start_trial(req, deps)
     assert view1.state is not None
+    assert view1.state.plan is not None
     trial_id = view1.state.trial_id
 
     # Dirty worktree without confirmation -> returns working diff & digest in NEEDS_ATTENTION
@@ -578,6 +580,89 @@ def test_resume_trial_confirm_worktree_persistence(tmp_path: Path) -> None:
     assert v_conf.state is not None
     assert v_conf.state.approved_worktree_digest == dig
     assert v_conf.state.approved_index_digest == snap.index_digest
+
+    # If base changed, resuming rejects before executing
+    ws.base_sha = "ffffffffffffffffffffffffffffffffffffffff"
+    with pytest.raises(TrialError) as exc_info:
+        resume_trial(ResumeRequest(trial_id=trial_id), deps)
+    assert exc_info.value.code == "base_changed"
+
+
+def test_resume_trial_ci_recovery_cycle_three(tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    from orchestune.local_trial.models import StopConfirmation
+
+    deps, store, ws, agents, proc_runner = _make_fake_deps(tmp_path)
+    req = StartRequest(
+        repo=str(tmp_path), request_text="implement something", agent_name="codex"
+    )
+    view1 = start_trial(req, deps)
+    assert view1.state is not None
+    assert view1.state.plan is not None
+    trial_id = view1.state.trial_id
+
+    pdig = plan_digest(
+        view1.state.plan, view1.state.request.digest, view1.state.repository.base_sha
+    )
+    resume_trial(ResumeRequest(trial_id=trial_id, approve_plan=pdig), deps)
+
+    state = store.load(trial_id)
+    sc = StopConfirmation(attempt_id="c1", recorded_at=deps.clock())
+    state = replace(
+        state,
+        budget=replace(state.budget, cycles_started=3),
+        checkpoint=Checkpoint.CI,
+        phase=TrialPhase.NEEDS_ATTENTION,
+        reason="stopped_confirmed",
+        stop_confirmations=(sc,),
+    )
+    store.save(state, expected_revision=None)
+
+    v_after = resume_trial(ResumeRequest(trial_id=trial_id), deps)
+    assert v_after.effective_phase == TrialPhase.READY
+
+
+def test_resume_trial_approved_dirty_committed_before_ci(tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    from orchestune.local_trial.models import Change, StopConfirmation
+    from orchestune.local_trial.workspace import workspace_digest
+
+    deps, store, ws, agents, proc_runner = _make_fake_deps(tmp_path)
+    req = StartRequest(
+        repo=str(tmp_path), request_text="implement something", agent_name="codex"
+    )
+    view1 = start_trial(req, deps)
+    assert view1.state is not None
+    assert view1.state.plan is not None
+    trial_id = view1.state.trial_id
+    pdig = plan_digest(
+        view1.state.plan, view1.state.request.digest, view1.state.repository.base_sha
+    )
+    resume_trial(ResumeRequest(trial_id=trial_id, approve_plan=pdig), deps)
+
+    ws.changes = (Change(status="M", path="bar.py"),)
+    snap = ws.inspect(view1.state.repository, view1.state.workspace)
+    dig = workspace_digest(snap)
+
+    state = store.load(trial_id)
+    sc = StopConfirmation(attempt_id="c2", recorded_at=deps.clock())
+    state = replace(
+        state,
+        checkpoint=Checkpoint.CI,
+        phase=TrialPhase.NEEDS_ATTENTION,
+        reason="stopped_confirmed",
+        stop_confirmations=(sc,),
+    )
+    store.save(state, expected_revision=None)
+
+    v_conf = resume_trial(ResumeRequest(trial_id=trial_id, confirm_worktree=dig), deps)
+    assert v_conf.state is not None
+    assert v_conf.state.approved_worktree_digest == dig
+
+    v_res = resume_trial(ResumeRequest(trial_id=trial_id), deps)
+    assert v_res.effective_phase == TrialPhase.READY
 
 
 def test_resume_trial_budget_exhaustion(tmp_path: Path) -> None:
