@@ -105,7 +105,9 @@ class FileLock:
             )
 
         self.lock_path.parent.mkdir(parents=True, exist_ok=True)
-        lock_fd = open(self.lock_path, "w" if fcntl is not None else "a+")
+        lock_fd = open(
+            self.lock_path, "w" if fcntl is not None else "a+", encoding="utf-8"
+        )
         if fcntl is None:
             lock_fd.write(" ")
             lock_fd.flush()
