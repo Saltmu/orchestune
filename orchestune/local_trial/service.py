@@ -166,15 +166,24 @@ _EMPTY_VIEW = TrialView(
     ci_candidates=(),
     ready_is_current=False,
 )
-_RESETS = dict(
-    approved_plan_digest=None,
-    approved_worktree_digest=None,
-    approved_index_digest=None,
-    ci_evidence=None,
-    review_evidence=None,
-    findings=(),
-    responses=(),
-)
+_RESETS: dict[str, Any] = {
+    "approved_plan_digest": None,
+    "approved_worktree_digest": None,
+    "approved_index_digest": None,
+    "ci_evidence": None,
+    "review_evidence": None,
+    "findings": (),
+    "responses": (),
+}
+_COMMIT_RESETS: dict[str, Any] = {
+    "pending_git": None,
+    "checkpoint": Checkpoint.CI,
+    "phase": TrialPhase.IMPLEMENTING,
+    "ci_evidence": None,
+    "review_evidence": None,
+    "approved_worktree_digest": None,
+    "approved_index_digest": None,
+}
 
 
 _EMPTY_STATE_FIELDS: dict[str, Any] = {
@@ -493,15 +502,7 @@ def _commit_implementation(
     intent = deps.workspace.stage_commit(state)
     state = _save_state(state, deps, pending_git=intent, **state_updates)
     head = deps.workspace.finish_commit(state, intent)
-    return _save_state(
-        state,
-        deps,
-        pending_git=None,
-        head_sha=head,
-        checkpoint=Checkpoint.CI,
-        approved_worktree_digest=None,
-        approved_index_digest=None,
-    )
+    return _save_state(state, deps, head_sha=head, **_COMMIT_RESETS)
 
 
 def _create_attempt_input(
@@ -625,8 +626,7 @@ def _handle_ci_result(
     )
     if ok:
         ci_argv = state.plan.ci_argv if state.plan and state.plan.ci_argv else ()
-        plan_dig = state.approved_plan_digest or ""
-        ev = make_evidence(ci_id, state, ci_argv, plan_dig)
+        ev = make_evidence(ci_id, state, ci_argv, state.approved_plan_digest or "")
         return _save_state(
             state,
             deps,
@@ -638,7 +638,6 @@ def _handle_ci_result(
 
     phase, reason, checkpoint = classify_ci_failure(state, proc_rec)
     pending_att = state.pending_attempt if proc_rec.stop_confirmed is False else None
-
     return _save_state(
         state,
         deps,
@@ -1033,6 +1032,8 @@ def resume_trial(request: ResumeRequest, deps: TrialDependencies) -> TrialView:
 
         if (
             snap.changes
+            and state.approved_plan_digest is not None
+            and state.checkpoint != Checkpoint.PLAN
             and state.approved_worktree_digest == workspace_digest(snap)
             and state.approved_index_digest == snap.index_digest
         ):
