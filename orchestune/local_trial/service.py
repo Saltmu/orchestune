@@ -530,19 +530,22 @@ def _finish_implement_attempt(
     deps: TrialDependencies,
     attempt_id: str,
 ) -> TrialState:
-    validate_attempt(
-        res, state, res.input.kind, state.head_sha, state.approved_plan_digest
-    )
     aids = tuple(dict.fromkeys((*state.attempt_ids, attempt_id)))
-    if res.process.returncode != 0:
-        return _save_state(
-            state,
-            deps,
-            pending_attempt=None,
-            attempt_ids=aids,
-            phase=TrialPhase.NEEDS_ATTENTION,
-            reason="agent_failed",
+    try:
+        validate_attempt(
+            res, state, res.input.kind, state.head_sha, state.approved_plan_digest
         )
+    except TrialError as err:
+        if err.code == "agent_failed":
+            return _save_state(
+                state,
+                deps,
+                pending_attempt=None,
+                attempt_ids=aids,
+                phase=TrialPhase.NEEDS_ATTENTION,
+                reason="agent_failed",
+            )
+        raise
     responses = state.responses
     payload = res.agent_payload.payload if res.agent_payload else None
     if isinstance(payload, ImplementationPayload):
@@ -739,18 +742,22 @@ def _finish_review_attempt(
     attempt_id: str,
 ) -> TrialState:
     _verify_clean_review(state, deps)
-    validate_attempt(
-        res, state, AttemptKind.REVIEW, state.head_sha, state.approved_plan_digest
-    )
-    if res.process.returncode != 0:
-        return _save_state(
-            state,
-            deps,
-            pending_attempt=None,
-            attempt_ids=tuple(dict.fromkeys((*state.attempt_ids, attempt_id))),
-            phase=TrialPhase.NEEDS_ATTENTION,
-            reason="agent_failed",
+    aids = tuple(dict.fromkeys((*state.attempt_ids, attempt_id)))
+    try:
+        validate_attempt(
+            res, state, AttemptKind.REVIEW, state.head_sha, state.approved_plan_digest
         )
+    except TrialError as err:
+        if err.code == "agent_failed":
+            return _save_state(
+                state,
+                deps,
+                pending_attempt=None,
+                attempt_ids=aids,
+                phase=TrialPhase.NEEDS_ATTENTION,
+                reason="agent_failed",
+            )
+        raise
     payload = res.agent_payload.payload if res.agent_payload else None
     if not isinstance(payload, ReviewPayload):
         raise TrialError("artifact_invalid", "Expected ReviewPayload")
@@ -871,9 +878,8 @@ def _reconcile_attempt_by_kind(
                 res, state, AttemptKind.CI, state.head_sha, state.approved_plan_digest
             )
         except TrialError as err:
-            if err.code == "ci_failed":
-                return _handle_ci_result(state, aid, res.process, deps)
-            raise
+            if err.code != "ci_failed":
+                raise
         return _handle_ci_result(state, aid, res.process, deps)
     if kind == AttemptKind.REVIEW:
         return _finish_review_attempt(state, res, deps, aid)

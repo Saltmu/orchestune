@@ -511,3 +511,93 @@ def test_reconcile_with_real_store(tmp_path: Path) -> None:
     # Repeated resume does not fail with stale_revision
     res_repeat = resume_trial(ResumeRequest(trial_id=state.trial_id), deps)
     assert res_repeat.effective_phase == TrialPhase.READY
+
+
+def test_reconcile_persisted_implement_and_review_failure(tmp_path: Path) -> None:
+    deps, store, ws, agents, proc_runner = _make_fake_deps(tmp_path)
+    req = StartRequest(repo=str(tmp_path), request_text="req", agent_name="codex")
+    view = start_trial(req, deps)
+    state = view.state
+    assert state is not None and state.plan is not None
+    plan_dig = validate_plan(state.plan, tmp_path, "req", ws.base_sha)
+    state = replace(
+        state,
+        approved_plan_digest=plan_dig,
+        phase=TrialPhase.IMPLEMENTING,
+        checkpoint=Checkpoint.IMPLEMENT,
+        budget=replace(state.budget, cycles_started=1),
+    )
+    store.save(state, expected_revision=None)
+
+    # Persisted failed IMPLEMENT attempt with stop_confirmed=True
+    imp_id = "imp_fail_1"
+    imp_inp = AttemptInput(
+        trial_id=state.trial_id,
+        attempt_id=imp_id,
+        kind=AttemptKind.IMPLEMENT,
+        input_head_sha=state.head_sha,
+        base_sha=state.repository.base_sha,
+        plan_digest=state.approved_plan_digest,
+        plan_revision=1,
+        cwd=state.workspace.implementation_path,
+        artifact_dir="/art",
+        started_at="2026-01-01T00:00:00Z",
+    )
+    imp_res = AttemptResult(
+        schema_version=1,
+        input=imp_inp,
+        process=_proc_rec(
+            outcome=ProcessStatus.NONZERO_EXIT, returncode=1, stop_confirmed=True
+        ),
+        agent_payload=None,
+        ended_at="2026-01-01T00:00:00Z",
+    )
+    store.record_attempt(imp_res)
+    s_imp = replace(state, pending_attempt=imp_inp, checkpoint=Checkpoint.IMPLEMENT)
+    store.save(s_imp, expected_revision=None)
+
+    v1 = resume_trial(ResumeRequest(trial_id=state.trial_id), deps)
+    assert v1.effective_phase == TrialPhase.NEEDS_ATTENTION
+    assert v1.state is not None
+    assert v1.state.pending_attempt is None
+    assert imp_id in v1.state.attempt_ids
+    assert v1.state.reason == "agent_failed"
+
+    # Persisted failed REVIEW attempt with stop_confirmed=True
+    rev_id = "rev_fail_1"
+    rev_inp = AttemptInput(
+        trial_id=state.trial_id,
+        attempt_id=rev_id,
+        kind=AttemptKind.REVIEW,
+        input_head_sha=state.head_sha,
+        base_sha=state.repository.base_sha,
+        plan_digest=state.approved_plan_digest,
+        plan_revision=1,
+        cwd=state.workspace.implementation_path,
+        artifact_dir="/art",
+        started_at="2026-01-01T00:00:00Z",
+    )
+    rev_res = AttemptResult(
+        schema_version=1,
+        input=rev_inp,
+        process=_proc_rec(
+            outcome=ProcessStatus.NONZERO_EXIT, returncode=1, stop_confirmed=True
+        ),
+        agent_payload=None,
+        ended_at="2026-01-01T00:00:00Z",
+    )
+    store.record_attempt(rev_res)
+    s_rev = replace(
+        v1.state,
+        pending_attempt=rev_inp,
+        checkpoint=Checkpoint.REVIEW,
+        phase=TrialPhase.REVIEWING,
+    )
+    store.save(s_rev, expected_revision=None)
+
+    v2 = resume_trial(ResumeRequest(trial_id=state.trial_id), deps)
+    assert v2.effective_phase == TrialPhase.NEEDS_ATTENTION
+    assert v2.state is not None
+    assert v2.state.pending_attempt is None
+    assert rev_id in v2.state.attempt_ids
+    assert v2.state.reason == "agent_failed"
