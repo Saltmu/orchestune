@@ -44,7 +44,7 @@ from tests.test_local_trial_service import (
 def _proc_rec(
     *,
     outcome: ProcessStatus = ProcessStatus.SUCCESS,
-    returncode: int = 0,
+    returncode: int | None = 0,
     stop_confirmed: bool = True,
     elapsed_seconds: float = 1.0,
     timeout_seconds: float = 60.0,
@@ -84,6 +84,13 @@ def test_reconcile_pending_git_prepare_and_review(tmp_path: Path) -> None:
     reconciled = _reconcile_pending_git(s_prep, deps)
     assert reconciled.pending_git is None
     assert reconciled.checkpoint == Checkpoint.PLAN
+
+    # Resuming after prepare recovery runs planning stage to AWAIT_APPROVAL
+    res_prep = resume_trial(ResumeRequest(trial_id=state.trial_id), deps)
+    assert res_prep.state is not None
+    assert res_prep.state.pending_git is None
+    assert res_prep.state.checkpoint == Checkpoint.AWAIT_APPROVAL
+    assert res_prep.effective_phase == TrialPhase.PLANNED
 
     # Test "prepare_review"
     intent_rev = GitIntent(
@@ -360,6 +367,32 @@ def test_reconcile_pending_attempt_ci_and_review(tmp_path: Path) -> None:
     assert res_view.reason == "budget_exhausted"
     assert res_view.state is not None
     assert ci_id in res_view.state.attempt_ids
+
+    # Persisted CI timed out attempt recovers to NEEDS_ATTENTION with ci_failed
+    ci_to_id = "ci_att_to"
+    ci_to_inp = replace(ci_inp, attempt_id=ci_to_id)
+    ci_to_res = AttemptResult(
+        schema_version=1,
+        input=ci_to_inp,
+        process=_proc_rec(
+            outcome=ProcessStatus.TIMED_OUT,
+            returncode=None,
+            stop_confirmed=True,
+            stdout_tail="CI timed out\n",
+        ),
+        agent_payload=None,
+        ended_at="2026-01-01T00:00:00Z",
+    )
+    store.record_attempt(ci_to_res)
+    s_ci_to_pending = replace(s_ci, pending_attempt=ci_to_inp)
+    store.save(s_ci_to_pending, expected_revision=None)
+
+    res_to_view = resume_trial(ResumeRequest(trial_id=state.trial_id), deps)
+    assert res_to_view.effective_phase == TrialPhase.NEEDS_ATTENTION
+    assert res_to_view.reason == "ci_failed"
+    assert res_to_view.state is not None
+    assert res_to_view.state.pending_attempt is None
+    assert ci_to_id in res_to_view.state.attempt_ids
 
 
 def test_reconcile_with_real_store(tmp_path: Path) -> None:
