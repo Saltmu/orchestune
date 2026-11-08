@@ -1235,8 +1235,26 @@ orchestune trial result ID --decision keep|adopted [--repo PATH] [--json]
   `orchestune trial resume <ID> --repo <PATH> --approve-plan <DIGEST>`
 
 ### 中断復旧と作業ツリー変更確認
-- **プロセス中断**: コントローラが異常終了した場合、`--confirm-stopped <ATTEMPT_ID>` で停止確認を記録して再開します。
-- **dirty作業ツリー**: 分離worktree内に未コミット変更がある場合、`--confirm-worktree <WORKTREE_DIGEST>` で変更を確認して再開します。
+意図しない副作用を防ぎ安全に状態遷移を行うため、確認の記録と実行の再開は2つの独立したステップに分かれています:
+
+1. **停止確認またはDirty Worktreeの確認**:
+   - **プロセス中断**: 前回の実行が異常終了した場合やコントローラが停止した場合、まず停止確認を記録します:
+     ```bash
+     orchestune trial resume <TRIAL_ID> --confirm-stopped <ATTEMPT_ID> [--repo <PATH>]
+     ```
+     これにより停止確認レシートが保存され、pending attemptが解除されて安全に `needs_attention` で待機します（エージェントやCIは起動しません）。
+   - **dirty作業ツリー**: 分離worktree内に未コミット変更がある場合、変更状態を確認・承認します:
+     ```bash
+     orchestune trial resume <TRIAL_ID> --confirm-worktree <WORKTREE_DIGEST> [--repo <PATH>]
+     ```
+     これにより `approved_worktree_digest` と `approved_index_digest` が保存され、処理を実行せずに待機します。
+
+2. **別呼出しによる実行の再開**:
+   確認完了後、通常の `resume`（計画承認待ちの場合は `resume --approve-plan <DIGEST>`）を別呼出しで実行して安全なcheckpointから処理を再開します:
+   ```bash
+   orchestune trial resume <TRIAL_ID> [--repo <PATH>]
+   ```
+   安全なcheckpointから実装・CI検証・レビューが順次進み、`ready` まで完走します。
 
 ### 予算制御 (Budget Constraints)
 無限ループや過剰なAPI消費を防ぐため、試行ごとに有限の予算が設定されています:

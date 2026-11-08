@@ -492,12 +492,92 @@ def test_resume_trial_confirm_stopped(tmp_path: Path) -> None:
     view1 = start_trial(req, deps)
     assert view1.state is not None
     trial_id = view1.state.trial_id
+    rev_before = view1.state.revision
 
-    res_req = ResumeRequest(trial_id=trial_id, confirm_stopped="some_attempt")
-    view = resume_trial(res_req, deps)
-    assert view.state is not None
-    assert len(view.state.stop_confirmations) == 1
-    assert view.state.stop_confirmations[0].attempt_id == "some_attempt"
+    # 1. No pending attempt -> rejected with state_invalid, state unchanged
+    with pytest.raises(TrialError) as exc_no_pending:
+        resume_trial(
+            ResumeRequest(trial_id=trial_id, confirm_stopped="any_attempt"), deps
+        )
+    assert exc_no_pending.value.code == "state_invalid"
+    st_unchanged = store.load(trial_id)
+    assert st_unchanged.revision == rev_before
+
+    # 2. Inject pending attempt
+    att_id = "target_att_id"
+    att_inp = AttemptInput(
+        trial_id=trial_id,
+        attempt_id=att_id,
+        kind=AttemptKind.PLAN,
+        input_head_sha=view1.state.head_sha,
+        base_sha=view1.state.repository.base_sha,
+        plan_digest=None,
+        plan_revision=0,
+        cwd=view1.state.workspace.implementation_path,
+        artifact_dir="/art",
+        started_at="2026-01-01T00:00:00Z",
+    )
+    st_pending = replace(
+        view1.state,
+        pending_attempt=att_inp,
+        phase=TrialPhase.NEEDS_ATTENTION,
+        checkpoint=Checkpoint.PLAN,
+    )
+    store.save(st_pending, expected_revision=None)
+
+    # Mismatched ID -> rejected with state_invalid
+    with pytest.raises(TrialError) as exc_mismatch:
+        resume_trial(ResumeRequest(trial_id=trial_id, confirm_stopped="wrong_id"), deps)
+    assert exc_mismatch.value.code == "state_invalid"
+
+    # Matching ID -> succeeds, records StopConfirmation, records interrupted AttemptResult
+    view_conf = resume_trial(
+        ResumeRequest(trial_id=trial_id, confirm_stopped=att_id), deps
+    )
+    assert view_conf.state is not None
+    assert view_conf.effective_phase == TrialPhase.NEEDS_ATTENTION
+    assert view_conf.state.pending_attempt is None
+    assert len(view_conf.state.stop_confirmations) == 1
+    assert view_conf.state.stop_confirmations[0].attempt_id == att_id
+    recorded_att = store.load_attempt(trial_id, att_id)
+    assert recorded_att is not None
+    assert recorded_att.process.outcome == ProcessStatus.INTERRUPTED
+    assert recorded_att.process.stop_confirmed is False
+
+    # 3. Next normal resume call safely resumes from safe checkpoint (PLAN)
+    view_resumed = resume_trial(ResumeRequest(trial_id=trial_id), deps)
+    assert view_resumed.state is not None
+    assert view_resumed.effective_phase == TrialPhase.PLANNED
+    assert view_resumed.state.checkpoint == Checkpoint.AWAIT_APPROVAL
+
+
+def test_resume_trial_confirm_worktree_persistence(tmp_path: Path) -> None:
+    from orchestune.local_trial.models import Change
+    from orchestune.local_trial.workspace import workspace_digest
+
+    deps, store, ws, agents, proc_runner = _make_fake_deps(tmp_path)
+    req = StartRequest(
+        repo=str(tmp_path), request_text="implement something", agent_name="codex"
+    )
+    view1 = start_trial(req, deps)
+    assert view1.state is not None
+    trial_id = view1.state.trial_id
+
+    # Dirty worktree without confirmation -> returns working diff & digest in NEEDS_ATTENTION
+    ws.changes = (Change(status="M", path="foo.py"),)
+    snap = ws.inspect(view1.state.repository, view1.state.workspace)
+    dig = workspace_digest(snap)
+
+    v_dirty = resume_trial(ResumeRequest(trial_id=trial_id), deps)
+    assert v_dirty.effective_phase == TrialPhase.NEEDS_ATTENTION
+    assert v_dirty.reason == "worktree_dirty"
+    assert v_dirty.worktree_digest == dig
+
+    # Confirm worktree saves approved_worktree_digest and index_digest
+    v_conf = resume_trial(ResumeRequest(trial_id=trial_id, confirm_worktree=dig), deps)
+    assert v_conf.state is not None
+    assert v_conf.state.approved_worktree_digest == dig
+    assert v_conf.state.approved_index_digest == snap.index_digest
 
 
 def test_resume_trial_budget_exhaustion(tmp_path: Path) -> None:

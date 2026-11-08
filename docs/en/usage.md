@@ -1289,8 +1289,26 @@ orchestune trial result ID --decision keep|adopted [--repo PATH] [--json]
   `orchestune trial resume <ID> --repo <PATH> --approve-plan <DIGEST>`
 
 ### Resuming After Interruption or Dirty Worktree
-- **Stopped process**: If a previous run stopped unexpectedly, resume with `--confirm-stopped <ATTEMPT_ID>` to acknowledge the stop receipt.
-- **Dirty worktree**: If the worktree was modified, resume with `--confirm-worktree <WORKTREE_DIGEST>` to confirm the working state.
+Acknowledgment and execution resumption are separated into two distinct steps to ensure safe state transitions without unintended side-effects:
+
+1. **Acknowledge Stop / Dirty Worktree**:
+   - **Stopped process**: If a previous run stopped unexpectedly or the controller terminated, first acknowledge the stop receipt:
+     ```bash
+     orchestune trial resume <TRIAL_ID> --confirm-stopped <ATTEMPT_ID> [--repo <PATH>]
+     ```
+     This records the stop confirmation, clears the pending attempt, and leaves the trial safely in `needs_attention` without executing any agent or CI processes.
+   - **Dirty worktree**: If uncommitted changes exist in the worktree, acknowledge and approve the working state:
+     ```bash
+     orchestune trial resume <TRIAL_ID> --confirm-worktree <WORKTREE_DIGEST> [--repo <PATH>]
+     ```
+     This persists `approved_worktree_digest` and `approved_index_digest` without launching any processes.
+
+2. **Resume Execution in a Separate Call**:
+   After confirmation, invoke normal `resume` (or `resume --approve-plan <DIGEST>` if awaiting approval) to resume execution from the safe checkpoint:
+   ```bash
+   orchestune trial resume <TRIAL_ID> [--repo <PATH>]
+   ```
+   The trial safely advances through implementation, CI, and review to reach `ready`.
 
 ### Budget Constraints
 A trial is bounded by finite budgets:

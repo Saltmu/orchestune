@@ -565,6 +565,7 @@ def test_e2e_stopped_confirmation(e2e_setup):
     repo = e2e_setup["repo_dir"]
     req = e2e_setup["req_file"]
     env = e2e_setup["env"]
+    marker_dir = e2e_setup["marker_dir"]
 
     res = _run_cli(
         ["start", "--request-file", str(req), "--repo", str(repo)], env, repo
@@ -573,18 +574,37 @@ def test_e2e_stopped_confirmation(e2e_setup):
     res = _run_cli(["status", "--repo", str(repo), "--json"], env, repo)
     data = json.loads(res.stdout)
     trial_id = data["trial_id"]
+    initial_runs = len(list(marker_dir.glob("run_*.json")))
 
-    # Inject pending_attempt into state.json to simulate an interrupted/unconfirmed process
+    # Inject real interrupted needs_attention state with pending_attempt
     state_file = repo / ".orchestune" / "trials" / trial_id / "state.json"
     state_data = json.loads(state_file.read_text(encoding="utf-8"))
+    plan_dict = state_data["plan"]
+    p_obj = TrialPlan(
+        goal=plan_dict["goal"],
+        acceptance_criteria=tuple(plan_dict["acceptance_criteria"]),
+        write_paths=tuple(plan_dict["write_paths"]),
+        discipline_paths=tuple(plan_dict["discipline_paths"]),
+        discipline_notes=tuple(plan_dict["discipline_notes"]),
+        ci_argv=tuple(plan_dict["ci_argv"]),
+        discipline_status=plan_dict["discipline_status"],
+    )
+    plan_dig = plan_digest(
+        p_obj, state_data["request"]["digest"], state_data["repository"]["base_sha"]
+    )
     attempt_id = "e" * 32
+    state_data["phase"] = "needs_attention"
+    state_data["checkpoint"] = "implement"
+    state_data["reason"] = "execution_unknown"
+    state_data["approved_plan_digest"] = plan_dig
+    state_data["budget"]["cycles_started"] = 0
     state_data["pending_attempt"] = {
         "trial_id": trial_id,
         "attempt_id": attempt_id,
         "kind": "implement",
         "input_head_sha": state_data["head_sha"],
         "base_sha": state_data["repository"]["base_sha"],
-        "plan_digest": None,
+        "plan_digest": plan_dig,
         "plan_revision": 0,
         "cwd": state_data["workspace"]["implementation_path"],
         "artifact_dir": f"{state_data['workspace']['implementation_path']}/.orchestune/artifacts/{attempt_id}",
@@ -592,19 +612,35 @@ def test_e2e_stopped_confirmation(e2e_setup):
     }
     state_file.write_text(json.dumps(state_data))
 
-    # Resume without confirmation fails
+    # 1. Resume without confirmation fails with execution_unknown
     res_fail = _run_cli(["resume", trial_id, "--repo", str(repo)], env, repo)
     assert res_fail.returncode == 2
     assert "execution_unknown" in res_fail.stderr
+    assert len(list(marker_dir.glob("run_*.json"))) == initial_runs
 
-    # Resume with confirm-stopped succeeds
+    # 2. Confirmation call records receipt, clears pending, launches 0 processes
     res_conf = _run_cli(
         ["resume", trial_id, "--confirm-stopped", attempt_id, "--repo", str(repo)],
         env,
         repo,
     )
-    assert res_conf.returncode == 0
+    assert res_conf.returncode == 1
     assert "trial_id:" in res_conf.stdout
+    assert "phase: needs_attention" in res_conf.stdout
+    assert "stopped_confirmed" in res_conf.stdout
+    assert len(list(marker_dir.glob("run_*.json"))) == initial_runs
+
+    # 3. Subsequent separate resume call resumes from safe checkpoint (implement) to ready
+    res_resumed = _run_cli(["resume", trial_id, "--repo", str(repo)], env, repo)
+    assert res_resumed.returncode == 0
+    assert "phase: ready" in res_resumed.stdout
+    assert len(list(marker_dir.glob("run_*.json"))) > initial_runs
+
+    # Status verifies ready and receipt persisted
+    res_st = _run_cli(["status", "--repo", str(repo), "--json"], env, repo)
+    st_data = json.loads(res_st.stdout)
+    assert st_data["effective_phase"] == "ready"
+    assert len(st_data["state"]["stop_confirmations"]) == 1
 
 
 def _ci_command(executable: PurePath, *args: str) -> str:
