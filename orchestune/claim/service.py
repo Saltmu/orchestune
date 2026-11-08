@@ -37,15 +37,13 @@ from orchestune.claim.contracts import (
     OwnerKind,
     ReservationKind,
 )
-from orchestune.claim.issue_metadata import publish_claim_ownership_to_issue
 from orchestune.claim.ownership import (
     OwnerToken,
     new_owner_token,
     with_claim,
 )
-from orchestune.claim.preflight import (
-    PreflightDecision,
-)
+from orchestune.claim.preflight import PreflightDecision
+from orchestune.claim.read_checkpoint import publish_claim_issue_metadata
 from orchestune.claim.reservation import (
     _build_dry_run_outcome,
     _build_success_outcome,
@@ -58,10 +56,7 @@ from orchestune.claim.resume_validation import (
     _fetch_and_validate_resume_issue,
     _validate_issue_for_resume,
 )
-from orchestune.claim.workspace import (
-    ClaimWorkspace,
-    resolve_claim_workspace,
-)
+from orchestune.claim.workspace import ClaimWorkspace, resolve_claim_workspace
 from orchestune.claim.worktree_reclaim import (
     begin_worktree_reclaim,
     record_takeover_stage,
@@ -380,6 +375,7 @@ def _validate_and_publish_issue_finalization(
     raw_token: str,
     view: Any = None,
     default_base: str = "origin/main",
+    input_base_sha: str | None = None,
 ) -> tuple[IssueRecord | None, ClaimOutcome | None]:
     """Fetch fresh issue, revalidate status, and publish recovery metadata."""
     fresh_issue = forge.get_issue(reservation.core.issue_number)
@@ -414,12 +410,13 @@ def _validate_and_publish_issue_finalization(
                 raw_token,
             )
 
-    publish_error = publish_claim_ownership_to_issue(
+    publish_error = publish_claim_issue_metadata(
         forge,
         fresh_issue,
+        reservation,
         owner_kind,
-        reservation.claim.claim_id or "",
         reservation_kind,
+        input_base_sha=input_base_sha,
     )
     if publish_error is not None:
         return None, _make_active_saved_failure(reservation, publish_error, raw_token)
@@ -432,6 +429,7 @@ def _transition_labels_and_finalize(
     reservation: ActiveWorktree,
     owner_kind: OwnerKind,
     reservation_kind: ReservationKind,
+    input_base_sha: str | None = None,
 ) -> ClaimOutcome:
     """Transition status:in-progress label and mark claim stage as COMPLETED."""
     if reservation.claim.adopted_pr_number is not None:
@@ -456,6 +454,7 @@ def _transition_labels_and_finalize(
         effects.raw_token,
         view=effects.view,
         default_base=effects.default_base,
+        input_base_sha=input_base_sha,
     )
     if prep_outcome is not None or fresh_issue is None:
         assert prep_outcome is not None
@@ -674,6 +673,7 @@ def _apply_claim_side_effects(
         reservation,
         request.owner_kind,
         preflight.reservation_kind,
+        input_base_sha=reservation.claim.base_sha,
     )
 
 
