@@ -267,6 +267,21 @@ class GitIntent:
     target_sha: str
     allowed_paths: tuple[str, ...]
 
+    @classmethod
+    def simple(
+        cls,
+        op: GitOperation | Literal["prepare", "prepare_review", "commit"],
+        sha: str,
+    ) -> GitIntent:
+        """Create a basic GitIntent with default empty paths and target sha."""
+        return cls(
+            operation=op,
+            pre_head_sha=sha,
+            expected_tree_sha=None,
+            target_sha=sha,
+            allowed_paths=(),
+        )
+
 
 @dataclass(frozen=True, kw_only=True)
 class Observation:
