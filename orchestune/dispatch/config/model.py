@@ -7,6 +7,7 @@ dispatch_cycle.py経由の循環importを避けるため独立モジュールと
 
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -14,6 +15,10 @@ from pathlib import Path
 
 from orchestune.config_schema import (
     VALID_FINAL_ACCEPTANCE_REVIEW_MODES as VALID_FINAL_ACCEPTANCE_REVIEW_MODES,
+)
+from orchestune.config_schema import (
+    VALID_STALE_READ_GATE_MODES,
+    stale_read_gate_conflict,
 )
 from orchestune.consistency.invariants.status import (
     BLOCKED_WITH_RESOLVED_DEPENDENCIES,
@@ -170,6 +175,9 @@ class DispatcherConfig:
     # #1361: Layer-1 child review and not-needed review are independent from this
     # Layer-2 integration-PR semantic review policy.
     semantic_review_mode: str = "required"
+    # #1767: advisory by default. required needs required semantic review that
+    # is actually enabled; child_review_gate does not decide this.
+    stale_read_gate: str = "advisory"
     final_acceptance_review: str = "advisory"
     force_integration_review: bool = False
     semantic_review_provider: str = "auto"
@@ -229,6 +237,7 @@ class DispatcherConfig:
                 f"child_review_gate must be 'required' or 'off', got {self.child_review_gate!r}"
             )
         self._validate_semantic_review_settings()
+        self._validate_stale_read_gate()
         _ = self.integration_execution_policy  # validates the seven #820 settings
         if not isinstance(self.consistency_mode, ConsistencyMode):
             self.consistency_mode = ConsistencyMode(self.consistency_mode)
@@ -310,6 +319,20 @@ class DispatcherConfig:
         if self.max_semantic_fix_retries < 0:
             raise ValueError("max_semantic_fix_retries must be non-negative")
         _ = self.semantic_review_limits
+
+    def _validate_stale_read_gate(self) -> None:
+        if self.stale_read_gate not in VALID_STALE_READ_GATE_MODES:
+            raise ValueError(
+                "stale_read_gate must be 'advisory', 'required', or 'off', "
+                f"got {self.stale_read_gate!r}"
+            )
+        message = stale_read_gate_conflict(
+            self.stale_read_gate,
+            self.semantic_review_mode,
+            review_enabled=os.environ.get("ORCHESTUNE_SEMANTIC_REVIEW", "1") != "0",
+        )
+        if message is not None:
+            raise ValueError(message)
 
     @property
     def resolved_forge(self) -> Forge:

@@ -14,6 +14,7 @@ from typing import Any, Protocol, TypedDict, cast
 import orchestune.claim.workspace as claim_workspace
 import orchestune.config_contracts as config_contracts
 from orchestune.claim.workspace import resolve_claim_workspace
+from orchestune.config_schema import stale_read_gate_conflict
 from orchestune.consistency.supervisor import ConsistencyMode
 from orchestune.dag.models import (
     compile_extra_ignore_patterns,
@@ -90,6 +91,7 @@ class ResolvedPaths(TypedDict):
 
 class SemanticConfigInputs(TypedDict, total=False):
     semantic_review_mode: str
+    stale_read_gate: str
     force_integration_review: bool
     semantic_review_provider: str
     semantic_fix_provider: str
@@ -126,6 +128,7 @@ class DispatcherConfigInputs(TypedDict):
     consistency_mode: ConsistencyMode
     consistency_repair_allowlist: frozenset[str]
     semantic_review_mode: str
+    stale_read_gate: str
     force_integration_review: bool
 
 
@@ -502,8 +505,10 @@ def _extract_semantic_config_kwargs(
         "semantic_attempt_timeout_seconds",
     )
     force_rev = getattr(args, "force_integration_review", None)
+    mode = _resolve_semantic_review_mode(args, toml_data)
     selected: SemanticConfigInputs = {
-        "semantic_review_mode": _resolve_semantic_review_mode(args, toml_data),
+        "semantic_review_mode": mode,
+        "stale_read_gate": _resolved_stale_read_gate(toml_data, mode),
         "force_integration_review": cast(
             bool,
             force_rev
@@ -513,6 +518,19 @@ def _extract_semantic_config_kwargs(
     }
     extras = {key: toml_data[key] for key in semantic_keys if key in toml_data}
     return cast(SemanticConfigInputs, {**selected, **extras})
+
+
+def _resolved_stale_read_gate(toml_data: TomlTable, mode: str) -> str:
+    """TOML value or the advisory default. No dedicated env var or CLI flag."""
+    gate = str(toml_data.get("stale_read_gate", "advisory"))
+    message = stale_read_gate_conflict(
+        gate,
+        mode,
+        review_enabled=os.environ.get("ORCHESTUNE_SEMANTIC_REVIEW", "1") != "0",
+    )
+    if message is not None:
+        raise config_contracts.ConfigError(message)
+    return gate
 
 
 def _assemble_dispatcher_config(
