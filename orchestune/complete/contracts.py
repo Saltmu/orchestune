@@ -35,6 +35,8 @@ from orchestune.ownership_contracts import (
 from orchestune.ownership_contracts import (
     can_transition as can_transition,
 )
+from orchestune.read_dependencies.codec import read_evidence_to_dict
+from orchestune.read_dependencies.contracts import ReadEvidenceV1
 
 CompleteExitCode = TaskExitCode
 
@@ -216,6 +218,13 @@ class CompletionEvidence:
     baseline_regressions: tuple[str, ...] = ()
     base_sha: str | None = None
     attempt: int | None = None
+    read_evidence: ReadEvidenceV1 | None = None
+
+    def __post_init__(self) -> None:
+        if self.read_evidence is not None and not isinstance(
+            self.read_evidence, ReadEvidenceV1
+        ):
+            raise TypeError("read_evidence must be ReadEvidenceV1 or None")
 
 
 @dataclass(frozen=True)
@@ -228,6 +237,7 @@ class DonePayload:
     baseline_regressions: tuple[str, ...] = ()
     reviewer: str | None = None
     review_reply: Path | None = None
+    read_evidence: ReadEvidenceV1 | None = None
 
     def __post_init__(self) -> None:
         if not is_valid_pr_number(self.pr):
@@ -239,6 +249,10 @@ class DonePayload:
                 "review must be a ReviewSummary with rounds as None or a valid positive non-boolean integer, "
                 f"got: {self.review!r}"
             )
+        if self.read_evidence is not None and not isinstance(
+            self.read_evidence, ReadEvidenceV1
+        ):
+            raise TypeError("read_evidence must be ReadEvidenceV1 or None")
 
 
 @dataclass(frozen=True)
@@ -316,6 +330,7 @@ def _resolve_done_payload(
     review = kwargs.pop("review", None)
     ci = kwargs.pop("ci", None)
     baseline_regressions = kwargs.pop("baseline_regressions", ())
+    read_evidence = kwargs.pop("read_evidence", None)
     if evidence is not None:
         resolved_review = evidence.review if review is None else review
         resolved_reviewer = evidence.reviewer if reviewer is None else reviewer
@@ -328,12 +343,16 @@ def _resolve_done_payload(
             if not baseline_regressions
             else tuple(baseline_regressions)
         )
+        resolved_read_evidence = (
+            evidence.read_evidence if read_evidence is None else read_evidence
+        )
     else:
         resolved_review = review or ReviewSummary()
         resolved_reviewer = reviewer
         resolved_review_reply = review_reply
         resolved_ci = ci
         resolved_regressions = tuple(baseline_regressions)
+        resolved_read_evidence = read_evidence
 
     return DonePayload(
         pr=pr,
@@ -342,6 +361,7 @@ def _resolve_done_payload(
         review_reply=resolved_review_reply,
         ci=resolved_ci,
         baseline_regressions=resolved_regressions,
+        read_evidence=resolved_read_evidence,
     )
 
 
@@ -354,6 +374,11 @@ def _resolve_blocked_payload(
     attempt = kwargs.pop("attempt", None)
     review = kwargs.pop("review", None)
     ci = kwargs.pop("ci", None)
+    read_evidence = kwargs.pop("read_evidence", None)
+    if read_evidence is not None or (
+        evidence is not None and evidence.read_evidence is not None
+    ):
+        raise ValueError("read_evidence is only valid for done")
     if evidence is not None:
         resolved_base_sha = evidence.base_sha if base_sha is None else base_sha
         resolved_attempt = evidence.attempt if attempt is None else attempt
@@ -515,6 +540,10 @@ class CompleteRequest:
                 raise ValueError(
                     "Done request requires a DonePayload with a valid positive integer pr and valid review"
                 )
+            if self.payload.read_evidence is not None and not isinstance(
+                self.payload.read_evidence, ReadEvidenceV1
+            ):
+                raise ValueError("Done request read_evidence must be ReadEvidenceV1")
         elif self.result == RESULT_NOT_NEEDED:
             if self.payload is not None and not isinstance(
                 self.payload, NotNeededPayload
@@ -545,6 +574,7 @@ class CompleteRequest:
                 review=self.payload.review,
                 ci=self.payload.ci,
                 baseline_regressions=self.payload.baseline_regressions,
+                read_evidence=self.payload.read_evidence,
             )
         elif self.result == RESULT_NOT_NEEDED:
             return OutcomeRecord(
@@ -588,6 +618,10 @@ def completion_request_fingerprint(request: CompleteRequest) -> str:
         )
         if request.payload.reviewer is not None:
             payload["reviewer"] = request.payload.reviewer
+        if request.payload.read_evidence is not None:
+            payload["read_evidence"] = read_evidence_to_dict(
+                request.payload.read_evidence
+            )
     elif isinstance(request.payload, BlockedPayload):
         payload.update(
             {
