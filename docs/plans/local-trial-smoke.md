@@ -171,7 +171,7 @@ index aae98c0..f0e67e0 100644
   - 実装時は計画された `write_paths` 内のみが更新され、Git コミットと CI は Orchestune 側で厳格に管理された。
   - レビューは別セッション・別 worktree で行われ、コンテキスト汚染が防止された。
 - **課題と注意点**:
-  - 対話型 TTY ではユーザープロンプト（`yes/no`）で標準入力を待機するため、バックグラウンド自動実行時は `--approve-plan <DIGEST>` を用いた非対話 resume を利用するか、stdin へのパイプが必要である。
+  - 対話型 TTY ではユーザープロンプト（`yes/no`）で標準入力を待機する一方、非対話環境（パイプやバックグラウンド実行）ではプロンプトは表示されず `planned` で終了する仕様（`stdin.isatty() and stdout.isatty()`）であるため、非対話自動実行時は明示的な `orchestune trial resume <ID> --approve-plan <DIGEST>` を呼び出す必要がある。
   - 開発環境のグローバルプラグイン（serena 等）が生成する未追跡ファイルを無視するため、対象リポジトリの `.gitignore` 設定が重要となる。
 
 ### 7.2 継続判断
