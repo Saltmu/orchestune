@@ -92,7 +92,7 @@ _AGY_CLI_LOCAL_CMD_BASE = (
     "標準開発ワークフローに従って実装してください。"
     "PR作成時は必ずベースブランチに `{base_branch}` を指定してください（`gh pr create --base {base_branch}`）。"
     f'{NONINTERACTIVE_DISPATCH_INSTRUCTION}" '
-    "--add-dir . --print-timeout 60m --dangerously-skip-permissions"
+    "--add-dir . --dangerously-skip-permissions"
 )
 
 _CODEX_CLI_LOCAL_CMD_BASE = (

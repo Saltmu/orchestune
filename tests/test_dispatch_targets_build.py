@@ -227,7 +227,7 @@ class TestBuildDispatchTarget:
         assert "--sandbox" not in target._local_cmd
         assert "--dangerously-skip-permissions" in target._local_cmd
         assert "--add-dir ." in target._local_cmd
-        assert "--print-timeout 60m" in target._local_cmd
+        assert "--print-timeout" not in target._local_cmd
 
     def test_claude_cli_preset_instructs_noninteractive_execution(self, tmp_path):
         # #157: 非対話型のバックグラウンド起動ではplanning_modeの承認待ちで

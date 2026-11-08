@@ -68,8 +68,6 @@ def build_local_semantic_fix_cmd(
             prompt,
             "--add-dir",
             ".",
-            "--print-timeout",
-            "60m",
             "--dangerously-skip-permissions",
         ]
     if normalized == "grok":
