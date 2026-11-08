@@ -192,7 +192,7 @@ class FakeWorkspace:
         self.base_sha = "a" * 40
         self.head_sha = "a" * 40
         self.changes: tuple[Any, ...] = ()
-        self.is_included = True
+        self.is_included = False
 
     def storage_roots(self, repo: str) -> tuple[str, str]:
         return (str(self.root / ".orchestune"), str(self.root))
@@ -541,6 +541,7 @@ def test_record_decision_keep_and_adopted(tmp_path: Path) -> None:
     )
     resume_trial(ResumeRequest(trial_id=trial_id, approve_plan=plan_dig), deps)
 
+    ws.is_included = True
     view_adopted = record_decision(trial_id, "adopted", deps)
     assert view_adopted.state is not None
     assert view_adopted.state.phase == TrialPhase.CLOSED
@@ -876,9 +877,11 @@ def test_resume_trial_ci_override_planned_and_ready(tmp_path: Path) -> None:
     )
     assert res1.state is not None and res1.state.plan is not None
     assert res1.state.plan.ci_argv == ("pytest", "-k", "unit")
-    assert res1.state.budget.plan_revision == 1
-    assert res1.state.budget.cycles_started == 0
-    assert len(proc_runner.call_history) == 0
+    assert (
+        res1.state.budget.plan_revision,
+        res1.state.budget.cycles_started,
+        len(proc_runner.call_history),
+    ) == (1, 0, 0)
     new_dig = validate_plan(
         res1.state.plan, tmp_path, "implement something", ws.base_sha
     )
@@ -904,11 +907,13 @@ def test_resume_trial_ci_override_planned_and_ready(tmp_path: Path) -> None:
     )
     assert res3.effective_phase == TrialPhase.PLANNED
     assert res3.state is not None and res3.state.plan is not None
-    assert res3.state.budget.plan_revision == 2
-    assert res3.state.budget.cycles_started == 1
-    assert res3.state.approved_plan_digest is None
-    assert res3.state.ci_evidence is None
-    assert res3.state.review_evidence is None
+    assert (
+        res3.state.budget.plan_revision,
+        res3.state.budget.cycles_started,
+        res3.state.approved_plan_digest,
+        res3.state.ci_evidence,
+        res3.state.review_evidence,
+    ) == (2, 1, None, None, None)
     ready_dig = validate_plan(
         res3.state.plan, tmp_path, "implement something", ws.base_sha
     )

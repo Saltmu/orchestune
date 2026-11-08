@@ -444,7 +444,6 @@ def _apply_approval(
     has_saved_head = (
         state.budget.cycles_started > 0
         and state.head_sha.lower() != state.repository.base_sha.lower()
-        and deps.workspace.includes_head(state)
     )
     checkpoint = Checkpoint.CI if has_saved_head else Checkpoint.IMPLEMENT
 
