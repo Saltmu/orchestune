@@ -17,6 +17,7 @@ from orchestune.status_snapshot import (
     StatusSnapshot,
     WorktreeStatus,
     build_status_snapshot,
+    compact_status_attention,
     format_status_report,
 )
 
@@ -153,8 +154,12 @@ def status_block(
     if footer is None or _fits_screen(out, full.rich):
         return full
     # Live crops what does not fit; keep the rows and the footer on screen instead.
+    attention = compact_status_attention(snapshot)
     return _rich_block(
-        plain, [view.heading, table, "\n" + _OVERFLOW_NOTICE], out, footer
+        plain,
+        [view.heading, table, "\n" + attention, "\n" + _OVERFLOW_NOTICE],
+        out,
+        footer,
     )
 
 

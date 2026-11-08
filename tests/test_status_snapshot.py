@@ -11,7 +11,9 @@ import os
 import pytest
 
 import orchestune.status_snapshot as status_snapshot_module
+from orchestune.infra.cli_guidance import render_guidance
 from orchestune.ledger.run_state import RunState
+from orchestune.operator_guidance import EvidenceState, NextOwner, ProgressOutlook
 from orchestune.status_snapshot import (
     MonitorState,
     StatusSnapshot,
@@ -22,7 +24,9 @@ from orchestune.status_snapshot import (
     _format_duration,
     _read_log_tail,
     build_status_snapshot,
+    compact_status_attention,
     format_status_report,
+    guidance_from_status,
 )
 from tests.dispatch_test_support import make_test_active_worktree
 from tests.dispatch_test_support import save_locked_run_state as save_run_state
@@ -559,6 +563,103 @@ class TestFormatStatusReport:
         )
         assert "最終dispatchサイクル" in report
         assert "未記録" in report
+
+
+class TestStatusGuidance:
+    def test_plain_report_includes_guidance_for_each_state(self):
+        states = (
+            MonitorState.QUEUED,
+            MonitorState.RUNNING,
+            MonitorState.PROCESS_EXITED,
+            MonitorState.BLOCKED,
+            MonitorState.BLOCKED_HUMAN_REVIEW,
+            MonitorState.MANUAL_MERGE_REQUIRED,
+            MonitorState.UNKNOWN,
+        )
+        for state in states:
+            report = format_status_report(
+                StatusSnapshot(
+                    worktrees=[_status(state=state)], last_reconciled_at=None
+                ),
+                now=1_700_000_100.0,
+            )
+            assert "案内:" in report
+            assert f"段階: {state.value}" in report
+
+        stale = format_status_report(
+            StatusSnapshot(
+                worktrees=[
+                    _status(
+                        state=MonitorState.DONE,
+                        label_evidence=EvidenceState.STALE.value,
+                    )
+                ],
+                last_reconciled_at=None,
+            ),
+            now=1_700_000_100.0,
+        )
+        assert "根拠: stale" in stale
+        assert "完了は断定しません" in stale
+
+    def test_queued_running_exited_blocked_and_unknown(self):
+        queued = render_guidance(
+            guidance_from_status(_status(state=MonitorState.QUEUED))
+        )
+        assert "自動進行: conditional" in queued and "保証しません" in queued
+        running = guidance_from_status(_status(state=MonitorState.RUNNING))
+        assert running.next_owner is NextOwner.ENGINE
+        assert running.progress is ProgressOutlook.IN_PROGRESS
+        exited = render_guidance(
+            guidance_from_status(
+                _status(state=MonitorState.PROCESS_EXITED, alive=False)
+            )
+        )
+        assert "停止確認ではありません" in exited
+        blocked = render_guidance(
+            guidance_from_status(_status(state=MonitorState.BLOCKED))
+        )
+        assert "依存待ちとは断定できません" in blocked
+        assert "次の担当: unknown" in blocked
+        unknown = render_guidance(
+            guidance_from_status(_status(state=MonitorState.UNKNOWN))
+        )
+        assert "自動進行: unknown" in unknown
+
+    def test_review_and_manual_merge_have_no_recovery_command(self):
+        for state in (
+            MonitorState.BLOCKED_HUMAN_REVIEW,
+            MonitorState.MANUAL_MERGE_REQUIRED,
+        ):
+            text = render_guidance(guidance_from_status(_status(state=state)))
+            assert "復旧引数は作りません" in text
+            assert "コマンド:" not in text
+
+    def test_unavailable_labels_do_not_assert_stop(self):
+        text = render_guidance(
+            guidance_from_status(
+                _status(
+                    state=MonitorState.PROCESS_EXITED,
+                    labels_fetch_failed=True,
+                    label_evidence=EvidenceState.UNAVAILABLE.value,
+                )
+            )
+        )
+        assert "根拠: unavailable" in text
+        assert "自動再開・停止済み・完了は断定しません" in text
+
+    def test_compact_attention_names_the_target(self):
+        text = compact_status_attention(
+            StatusSnapshot(
+                worktrees=[
+                    _status(issue_number=12, state=MonitorState.BLOCKED),
+                    _status(issue_number=13, state=MonitorState.RUNNING),
+                ],
+                last_reconciled_at=None,
+            )
+        )
+        assert "Issue #12" in text and "要対応:あり" in text
+        assert "Issue #13" in text and "要対応:なし" in text
+        assert "orchestune status" in text
 
 
 class _NestedOnlyActive:

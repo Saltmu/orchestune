@@ -60,6 +60,8 @@ Issueとclaimを検証できるよう、この場合はstateにbackendが無く�
 `next` は `ready` として `prepare` 操作および `context_recorded.missing` に作成案内を返します。
 `check` は同じ案内を返しながら `unmet` のままです。どちらのコマンドもファイルを作成せず、
 不正なcontextは引き続き `unmet` です。
+`next` の通常表示には、対象・段階・理由・次の担当・自動進行の条件・次の操作・根拠が同じ案内として出ます。操作候補は既存の actions だけを使い、未解決の値はコマンドにしません。`check` の表示と、どちらの JSON もこの案内を足しません。
+
 段階とJSON schemaの詳細は[workflow証拠契約](../plans/local-ci-workflow-enforcement.md)を参照してください。
 `complete`段階では、全体statusが`ready`でも`terminal_receipt` checkは`unmet`になります。
 これは候補として表示された`complete`操作が作成するOutcome receiptを表します。
@@ -1188,11 +1190,19 @@ PR/Outcomeの完了判定（MERGED/closed PR、handoff-ready）は成果物の�
 `pending`を実行中と扱います）。それ以外の外部ターゲット（Cloud Routine等）は、操作者の停止確認がなければ終了後も保持されます。
 クラウド側の実行状態と成果物を確認し、必要なら停止して、上記の停止確認付き `recover` を使ってください。
 
+## ディスパッチ状態（`orchestune status`）
+
+`orchestune status` は、現在の active worktree について、既存の表示状態に加えて同じ案内を出します。対象は snapshot に載る active worktree だけです。`blocked` ラベルだけでは依存待ちとは断定しません。ラベル取得の失敗や期限切れキャッシュは根拠の状態として示し、自動再開・停止済み・完了は断定しません。dispatcher の稼働は観測しないため、queued などは条件付きの可能性として示します。
+
+`--watch` で詳細が画面に収まらないときは、対象と要対応の有無を残し、詳細の入口として `orchestune status` を示します。TTY でも plain でも案内の意味は同じです。status に JSON 出力は追加しません。
+
 ---
 
 ## 10. ローカル自律試行 (`orchestune trial`)
 
 `trial` サブコマンド群は、GitHub設定やリモートリポジトリなしで、単一タスクの計画・承認・実装・CI・別セッションレビュー・採用判断をローカル完走できる機能です。
+
+`status` と `result` の人向け表示、および `start` / `resume` のテキスト出力は、workflow next と同じ案内を出します。承認 digest、作業ツリー digest、attempt ID が無い操作はコマンドにしません。停止未確認では、プロセスと成果物の確認を先に示し、確認前の `--confirm-stopped` は実行可能なコマンドにしません。`--json` にはこの案内を混ぜません。
 
 ### CLI 構文 (Grammar)
 

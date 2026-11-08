@@ -104,7 +104,7 @@ class TestMain:
 
         captured = capsys.readouterr()
         assert exit_code == 0
-        assert captured.out.count("#133") == 2
+        assert captured.out.count("[RUNNING] Issue #133") == 2
         assert sleep_mock.call_count == 2
 
     def test_watch_mode_reuses_label_cache_across_iterations(
@@ -481,6 +481,7 @@ class TestWatchLiveOverflow:
 
         assert "#134" in text and "#135" in text and "#136" in text
         assert "表示領域に収まらない" in text
+        assert "要対応:" in text
         assert "orchestune status" in text
         assert "3秒ごとに自動更新します。" in text
         assert "log-136-a" not in text

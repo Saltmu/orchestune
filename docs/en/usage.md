@@ -64,6 +64,8 @@ state file is ordinary missing work: `next` returns `ready` with creation guidan
 in the `prepare` action and `context_recorded.missing`. `check` remains `unmet` and
 reports the same guidance. Neither command creates files; malformed context stays
 `unmet`.
+Plain text from `next` also shows the target, stage, reason, next owner, progress condition, next action, and evidence in one guidance block. It projects the existing actions only, and an unresolved value is not shown as a command. `check` text and both JSON results omit this block.
+
 A verified handoff returns `ready`, reason `handed_off`, and no actions. See the
 [workflow evidence contract](../plans/local-ci-workflow-enforcement.md) for the
 stage and JSON schema details. In the `complete` stage, `terminal_receipt` can
@@ -1242,11 +1244,19 @@ example Cloud Routine) remain held without operator confirmation, including afte
 they finish. Check the cloud-side run and artifacts, stop it there if needed, and
 use the operator-confirmed external recovery procedure above.
 
+## Dispatch status (`orchestune status`)
+
+`orchestune status` adds the same guidance block to each active worktree already shown. It covers only worktrees in the current snapshot. A `blocked` label alone is not proof of a dependency wait. A failed label fetch or an expired cache is shown as evidence state, and the text does not assert auto-resume, a confirmed stop, or completion. Dispatcher liveness is not observed, so queued and similar states stay conditional.
+
+When `--watch` cannot fit the details, the frame keeps each target, whether attention is needed, and `orchestune status` as the way to read the rest. TTY and plain output carry the same meaning. Status does not gain a JSON mode.
+
 ---
 
 ## 10. Local autonomous trial (`orchestune trial`)
 
 The `trial` subcommands provide a self-contained local experience for running an autonomous coding cycle on a single task without GitHub configuration or remote repositories.
+
+Text from `status`, `result`, `start`, and `resume` uses the same guidance block as `workflow next`. An action without the current approval digest, worktree digest, or attempt id is not shown as a command. An unconfirmed stop says to check the process and artifacts first and does not offer `--confirm-stopped` as an executable command. `--json` does not include the block.
 
 ### CLI Grammar
 

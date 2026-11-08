@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
+import orchestune.workflow.cli as workflow_cli
 from orchestune.workflow.cli import main
 from orchestune.workflow.contracts import WorkflowResult
 from tests.test_workflow_readers import prepared_context
@@ -164,3 +165,40 @@ def test_internal_tool_failure_has_no_json(tmp_path, capsys):
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "invalid package stages" in captured.err
+
+
+def test_next_text_shows_guidance_and_json_does_not(tmp_path, capsys, monkeypatch):
+    context = prepared_context(tmp_path)
+    next_result = WorkflowResult(
+        issue_number=context.issue_number,
+        claim_id=context.state["claim_id"],
+        stage_id="claim",
+        gate_id=None,
+        status="ready",
+        reason_codes=(),
+        checks=(),
+        actions=(
+            {
+                "description": "Use the existing claim operation.",
+                "argv": ["orchestune", "claim", "1496"],
+                "references": [],
+            },
+        ),
+        references=(),
+        artifacts={},
+        observed_head_sha=context.head_sha,
+    )
+    monkeypatch.setattr(workflow_cli, "read_context", lambda *_args, **_kwargs: context)
+    monkeypatch.setattr(
+        workflow_cli, "next_step", lambda *_args, **_kwargs: next_result
+    )
+    args = ["next", "--issue", "1496", "--session-dir", str(context.session_dir)]
+    assert main(args) == 0
+    text = capsys.readouterr().out
+    assert "案内:" in text
+    assert "コマンド: orchestune claim 1496" in text
+
+    assert main([*args, "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["stage_id"] == "claim"
+    assert "案内" not in json.dumps(payload)
