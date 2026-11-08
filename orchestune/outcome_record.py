@@ -17,6 +17,11 @@ from datetime import datetime
 from typing import Any, cast
 
 from orchestune.not_needed_review_contract import NotNeededReview
+from orchestune.read_dependencies.codec import (
+    parse_read_evidence,
+    read_evidence_to_dict,
+)
+from orchestune.read_dependencies.contracts import ReadEvidenceV1
 
 OUTCOME_MARKER = "<!-- orchestune:outcome -->"
 
@@ -97,10 +102,16 @@ class OutcomeRecord:
     head_sha: str | None = None
     completion_id: str | None = None
     not_needed_review: NotNeededReview | None = None
+    read_evidence: ReadEvidenceV1 | None = None
 
     def __post_init__(self) -> None:
         if self.not_needed_review is not None and self.result != "not-needed":
             raise ValueError("review requirement is only valid for not-needed")
+        if self.read_evidence is not None:
+            if self.result != RESULT_DONE:
+                raise ValueError("read evidence is only valid for done")
+            if not isinstance(self.read_evidence, ReadEvidenceV1):
+                raise TypeError("read_evidence must be ReadEvidenceV1")
 
     def render(self) -> str:
         """`parse_from_comments`で往復変換できるコメント本文を生成する。"""
@@ -120,6 +131,8 @@ class OutcomeRecord:
         }
         if self.not_needed_review is not None:
             payload["not_needed_review"] = self.not_needed_review.to_dict()
+        if self.read_evidence is not None:
+            payload["read_evidence"] = read_evidence_to_dict(self.read_evidence)
         body = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=False)
         return f"{OUTCOME_MARKER}\n```json\n{body}\n```\n"
 
@@ -290,6 +303,14 @@ def _optional_outcome_fields(
     baseline_regressions = _baseline_regressions_from_value(
         data.get("baseline_regressions")
     )
+    read_evidence: ReadEvidenceV1 | None = None
+    if "read_evidence" in data:
+        if result != RESULT_DONE:
+            return None
+        try:
+            read_evidence = parse_read_evidence(data["read_evidence"])
+        except (TypeError, ValueError):
+            return None
     identity = _identity_fields_from_dict(data)
     if (
         pr is _INVALID
@@ -314,6 +335,7 @@ def _optional_outcome_fields(
         "claim_id": claim_id,
         "head_sha": head_sha,
         "completion_id": completion_id,
+        "read_evidence": read_evidence,
     }
 
 
