@@ -65,7 +65,6 @@ _SCAFFOLDS = (
     "orchestune/read_dependencies/validation.py",
     "orchestune/read_dependencies/report_codec.py",
     "orchestune/read_dependencies/snapshot_codec.py",
-    "orchestune/read_dependencies/git.py",
     "orchestune/read_dependencies/storage.py",
     "orchestune/claim/read_checkpoint.py",
     "orchestune/complete/read_evidence.py",
