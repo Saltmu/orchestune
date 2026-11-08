@@ -546,10 +546,10 @@ def _finish_implement_attempt(
     responses = state.responses
     payload = res.agent_payload.payload if res.agent_payload else None
     if isinstance(payload, ImplementationPayload):
-        fids = {r.finding_id for r in responses}
+        new_fids = {r.finding_id for r in payload.responses}
         responses = (
-            *responses,
-            *(r for r in payload.responses if r.finding_id not in fids),
+            *(r for r in responses if r.finding_id not in new_fids),
+            *payload.responses,
         )
     return _commit_implementation(
         state, deps, pending_attempt=None, attempt_ids=aids, responses=responses
@@ -852,13 +852,12 @@ def _reconcile_attempt_by_kind(
             raise TrialError(
                 "worktree_dirty", "Worktree modified during planning phase"
             )
-        validate_attempt(res, state, AttemptKind.PLAN, state.head_sha, None)
-        if res.process.returncode != 0:
-            return _handle_plan_error(
-                state,
-                TrialError("agent_failed", f"Plan agent failed: {res.process.detail}"),
-                deps,
-            )
+        try:
+            validate_attempt(res, state, AttemptKind.PLAN, state.head_sha, None)
+        except TrialError as err:
+            if err.code == "agent_failed":
+                return _handle_plan_error(state, err, deps)
+            raise
         return _handle_plan_success(
             state, res, deps, state.request.ci_argv_override, aid
         )

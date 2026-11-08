@@ -14,6 +14,7 @@ from orchestune.local_trial.contracts import (
     AttemptResult,
     Checkpoint,
     DisciplineStatus,
+    FindingResponse,
     ImplementationPayload,
     PlanPayload,
     ProcessRecord,
@@ -254,6 +255,31 @@ def test_reconcile_pending_attempt_success_plan_and_ci(tmp_path: Path) -> None:
     assert res_view.state.checkpoint == Checkpoint.AWAIT_APPROVAL
     assert att_id in res_view.state.attempt_ids
 
+    # Persisted plan failure attempt recovers to NEEDS_ATTENTION with agent_failed
+    fail_id = "plan_att_fail"
+    fail_inp = replace(plan_inp, attempt_id=fail_id)
+    fail_res = AttemptResult(
+        schema_version=1,
+        input=fail_inp,
+        process=_proc_rec(
+            outcome=ProcessStatus.NONZERO_EXIT,
+            returncode=1,
+            stop_confirmed=True,
+            detail="Planning agent crashed",
+        ),
+        agent_payload=None,
+        ended_at="2026-01-01T00:00:00Z",
+    )
+    store.record_attempt(fail_res)
+    s_plan_fail = replace(state, pending_attempt=fail_inp)
+    store.save(s_plan_fail, expected_revision=None)
+
+    res_fail_view = resume_trial(ResumeRequest(trial_id=state.trial_id), deps)
+    assert res_fail_view.effective_phase == TrialPhase.NEEDS_ATTENTION
+    assert res_fail_view.reason == "agent_failed"
+    assert res_fail_view.state is not None
+    assert res_fail_view.state.pending_attempt is None
+
 
 def test_reconcile_pending_attempt_implement_and_review(tmp_path: Path) -> None:
     deps, store, ws, agents, proc_runner = _make_fake_deps(tmp_path)
@@ -269,6 +295,9 @@ def test_reconcile_pending_attempt_implement_and_review(tmp_path: Path) -> None:
         checkpoint=Checkpoint.IMPLEMENT,
         phase=TrialPhase.IMPLEMENTING,
         budget=replace(state.budget, cycles_started=1),
+        responses=(
+            FindingResponse(finding_id="f1", action="declined", explanation="old"),
+        ),
     )
 
     impl_id = "impl_att_1"
@@ -295,7 +324,12 @@ def test_reconcile_pending_attempt_implement_and_review(tmp_path: Path) -> None:
             kind=AttemptKind.IMPLEMENT,
             input_head_sha=state.head_sha,
             plan_digest=plan_dig,
-            payload=ImplementationPayload(summary="done", responses=()),
+            payload=ImplementationPayload(
+                summary="done",
+                responses=(
+                    FindingResponse(finding_id="f1", action="fixed", explanation="new"),
+                ),
+            ),
         ),
         ended_at="2026-01-01T00:00:00Z",
     )
@@ -311,6 +345,10 @@ def test_reconcile_pending_attempt_implement_and_review(tmp_path: Path) -> None:
     assert res_view.state is not None
     assert impl_id in res_view.state.attempt_ids
     assert res_view.state.budget.cycles_started == 1
+    assert any(
+        r.finding_id == "f1" and r.explanation == "new"
+        for r in res_view.state.responses
+    )
 
 
 def test_reconcile_pending_attempt_ci_and_review(tmp_path: Path) -> None:
