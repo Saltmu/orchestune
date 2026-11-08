@@ -169,6 +169,11 @@ _CONSISTENCY_MODE_CHOICES = frozenset({"off", "shadow", "repair"})
 _CHILD_REVIEW_GATE_CHOICES = VALID_CHILD_REVIEW_GATE_MODES
 
 _SEMANTIC_REVIEW_MODE_CHOICES = frozenset({"required", "advisory", "off"})
+VALID_STALE_READ_GATE_MODES = frozenset({"advisory", "required", "off"})
+_STALE_READ_GATE_REQUIRED_CONFLICT = (
+    "stale_read_gate 'required' requires semantic_review_mode 'required' "
+    "and enabled semantic review"
+)
 _SEMANTIC_REVIEW_PROVIDER_CHOICES = frozenset({"auto", "claude", "codex"})
 _SEMANTIC_FIX_PROVIDER_CHOICES = frozenset(
     {
@@ -251,6 +256,7 @@ def _validate_choice_entry(normalized_key: str, raw_key: str, value: Any) -> Any
         "consistency_mode": _CONSISTENCY_MODE_CHOICES,
         "child_review_gate": _CHILD_REVIEW_GATE_CHOICES,
         "semantic_review_mode": _SEMANTIC_REVIEW_MODE_CHOICES,
+        "stale_read_gate": VALID_STALE_READ_GATE_MODES,
         "final_acceptance_review": VALID_FINAL_ACCEPTANCE_REVIEW_MODES,
         "semantic_review_provider": _SEMANTIC_REVIEW_PROVIDER_CHOICES,
         "semantic_fix_provider": _SEMANTIC_FIX_PROVIDER_CHOICES,
@@ -382,6 +388,7 @@ def _validate_single_entry(normalized_key: str, raw_key: str, value: Any) -> Any
         "consistency_mode",
         "child_review_gate",
         "semantic_review_mode",
+        "stale_read_gate",
         "final_acceptance_review",
         "semantic_review_provider",
         "semantic_fix_provider",
@@ -426,5 +433,43 @@ def validate_toml_config(config_data: dict[str, Any]) -> dict[str, Any]:
         or "default-execution-profile" in config_data
     ):
         extract_execution_profile_config(config_data)
-
+    _reject_unresolved_stale_read_gate(validated)
     return validated
+
+
+def stale_read_gate_conflict(
+    gate: object,
+    semantic_review_mode: object,
+    *,
+    review_enabled: bool | None,
+) -> str | None:
+    """Return the stable conflict text, or None when this pair is allowed.
+
+    ``review_enabled is None`` means the legacy enable flag is still unresolved.
+    A missing semantic mode is unresolved too, so TOML-only validation leaves it
+    to the loader.
+    """
+    if gate != "required":
+        return None
+    mode_ok = semantic_review_mode is None or semantic_review_mode == "required"
+    enabled_ok = review_enabled is None or review_enabled
+    if mode_ok and enabled_ok:
+        return None
+    return _STALE_READ_GATE_REQUIRED_CONFLICT
+
+
+def _reject_unresolved_stale_read_gate(validated: dict[str, Any]) -> None:
+    if "stale_read_gate" not in validated:
+        return
+    mode = (
+        validated["semantic_review_mode"]
+        if "semantic_review_mode" in validated
+        else None
+    )
+    message = stale_read_gate_conflict(
+        validated["stale_read_gate"],
+        mode,
+        review_enabled=None,
+    )
+    if message is not None:
+        raise config_contracts.ConfigError(message)

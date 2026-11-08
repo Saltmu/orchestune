@@ -260,6 +260,67 @@ def test_skip_readiness_check_in_advanced_questions():
     assert q.category == "readiness"
 
 
+def test_stale_read_gate_question_uses_the_advisory_default():
+    from orchestune.config_wizard.questions import ADVANCED_QUESTIONS
+
+    question = next(
+        item
+        for item in ADVANCED_QUESTIONS["integration"]
+        if item.key == "stale-read-gate"
+    )
+    assert question.input_kind == "choice"
+    assert question.choices == ["advisory", "required", "off"]
+    assert question.get_code_default() == "advisory"
+
+
+def test_wizard_saves_stale_read_gate(tmp_path: Path):
+    prompt = MockPromptPort(
+        choice_responses=[
+            "auto",
+            "claude",
+            "advanced",
+            "integration",
+            "advisory",
+            "back",
+            "preview",
+            "save",
+        ],
+        text_responses=["pytest -v"],
+        integer_responses=[2, None, 3600],
+    )
+
+    result = run_config_wizard(mode="init", project_dir=tmp_path, prompt=prompt)
+
+    assert result.status == "saved"
+    saved = (tmp_path / "orchestune.toml").read_text(encoding="utf-8")
+    assert 'stale-read-gate = "advisory"' in saved
+
+
+def test_wizard_refuses_required_gate_when_semantic_review_is_off(tmp_path: Path):
+    original = 'semantic-review-mode = "off"\n'
+    (tmp_path / "orchestune.toml").write_text(original, encoding="utf-8")
+    prompt = MockPromptPort(
+        choice_responses=[
+            "auto",
+            "claude",
+            "advanced",
+            "integration",
+            "required",
+            "back",
+            "preview",
+            "cancel",
+        ],
+        text_responses=["pytest -v"],
+        integer_responses=[2, None, 3600],
+    )
+
+    result = run_config_wizard(mode="edit", project_dir=tmp_path, prompt=prompt)
+
+    assert result.status == "cancelled"
+    assert (tmp_path / "orchestune.toml").read_text(encoding="utf-8") == original
+    assert any("stale_read_gate" in message for message in prompt.messages)
+
+
 def test_wizard_advanced_menu_edit_skip_readiness_check(tmp_path: Path):
     from orchestune.config_wizard.wizard import run_config_wizard
 

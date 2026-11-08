@@ -13,6 +13,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
+from orchestune.config_schema import stale_read_gate_conflict
 from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.result import PhaseResult, PhaseStatus
 from orchestune.dispatch.semantic_review.postcycle import (
@@ -131,6 +132,7 @@ def _build_integrator_config(
         dag_similarity_threshold=config.dag_similarity_threshold,
         child_review_gate=config.child_review_gate,
         semantic_review_mode=config.semantic_review_mode,
+        stale_read_gate=config.stale_read_gate,
         force_integration_review=config.force_integration_review,
         integration_dependency_timeout_seconds=config.integration_dependency_timeout_seconds,
         integration_ci_timeout_seconds=config.integration_ci_timeout_seconds,
@@ -154,7 +156,21 @@ def _build_integrator_config(
             integrator_config.enable_semantic_review = False
     else:
         integrator_config.enable_semantic_review = False
+    _reject_stale_read_gate_handoff(config, semantic_review_enabled)
     return integrator_config
+
+
+def _reject_stale_read_gate_handoff(
+    config: DispatcherConfig, semantic_review_enabled: bool
+) -> None:
+    """Use the incoming enable flag, not the mode-forced attribute (#1384)."""
+    message = stale_read_gate_conflict(
+        config.stale_read_gate,
+        config.semantic_review_mode,
+        review_enabled=semantic_review_enabled,
+    )
+    if message is not None:
+        raise ValueError(message)
 
 
 def _advance_pending_semantic_reviews(

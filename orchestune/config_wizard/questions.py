@@ -247,6 +247,19 @@ ADVANCED_QUESTIONS: dict[str, list[QuestionSpec]] = {
             min_value=1,
             code_default_field="integration_timeout_backoff_seconds",
         ),
+        QuestionSpec(
+            key="stale-read-gate",
+            label="陳腐化読み取りゲート (stale-read-gate)",
+            help_text=(
+                "共有読み取りの陳腐化ゲート。advisory（既定）/ required / off。"
+                "required は semantic-review-mode が required かつレビュー有効時のみ"
+            ),
+            input_kind="choice",
+            category="integration",
+            choices=["advisory", "required", "off"],
+            allow_unset=True,
+            code_default_field="stale_read_gate",
+        ),
     ],
     "tokens": [
         QuestionSpec(
