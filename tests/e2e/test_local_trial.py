@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import stat
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 
 import pytest
 
+from orchestune.config_schema import parse_ci_command
 from orchestune.local_trial.contracts import plan_digest
 from orchestune.local_trial.models import TrialPlan
 
@@ -605,12 +607,46 @@ def test_e2e_stopped_confirmation(e2e_setup):
     assert "trial_id:" in res_conf.stdout
 
 
-def test_e2e_ci_command_change_reapproval(e2e_setup):
+def _ci_command(executable: PurePath, *args: str) -> str:
+    return shlex.join([executable.as_posix(), *args])
+
+
+@pytest.mark.parametrize(
+    "executable,script,expected",
+    [
+        (
+            PureWindowsPath("C:/Python/python.exe"),
+            "new_test.py",
+            ["C:/Python/python.exe", "new_test.py"],
+        ),
+        (
+            PureWindowsPath("C:/Program Files/Python/python.exe"),
+            "new test.py",
+            ["C:/Program Files/Python/python.exe", "new test.py"],
+        ),
+        (
+            PurePosixPath("/opt/python/bin/python"),
+            "new_test.py",
+            ["/opt/python/bin/python", "new_test.py"],
+        ),
+        (
+            PurePosixPath("/opt/python env/bin/python"),
+            "new test.py",
+            ["/opt/python env/bin/python", "new test.py"],
+        ),
+    ],
+)
+def test_ci_command_round_trips_platform_paths(executable, script, expected):
+    assert parse_ci_command(_ci_command(executable, script)) == expected
+
+
+@pytest.mark.parametrize("script_name", ["new_test.py", "new test.py"])
+def test_e2e_ci_command_change_reapproval(e2e_setup, script_name):
     repo = e2e_setup["repo_dir"]
     req = e2e_setup["req_file"]
     env = e2e_setup["env"]
 
-    new_ci_script = repo / "new_test.py"
+    new_ci_script = repo / script_name
     marker_path = repo / "new_ci_marker.txt"
     new_ci_script.write_text(
         f"""import sys
@@ -619,7 +655,7 @@ Path({repr(str(marker_path))}).write_text("ran new ci")
 sys.exit(0)
 """
     )
-    subprocess.run(["git", "add", "new_test.py"], cwd=repo, env=env, check=True)
+    subprocess.run(["git", "add", script_name], cwd=repo, env=env, check=True)
     subprocess.run(
         ["git", "commit", "-m", "add new_test.py"], cwd=repo, env=env, check=True
     )
@@ -649,7 +685,7 @@ sys.exit(0)
     old_dig = plan_digest(p_obj, st["request"]["digest"], st["repository"]["base_sha"])
 
     # 2. Change CI command to new_test.py
-    new_cmd = f"{sys.executable} new_test.py"
+    new_cmd = _ci_command(Path(sys.executable), script_name)
     res = _run_cli(
         ["resume", trial_id, "--ci-command", new_cmd, "--repo", str(repo)],
         env,
