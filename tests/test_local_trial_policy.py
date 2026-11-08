@@ -325,7 +325,7 @@ def test_assess_ready_matrix() -> None:
         changes=(),
     )
     # Missing CI evidence
-    ready, reason = assess_ready(state, "b" * 40, snap, True)
+    ready, reason = assess_ready(state, snap, True)
     assert ready is False
     assert reason == "ci_failed"
 
@@ -341,7 +341,7 @@ def test_assess_ready_matrix() -> None:
         passed=True,
     )
     state = replace(state, ci_evidence=ci_ev)
-    ready, reason = assess_ready(state, "b" * 40, snap, True)
+    ready, reason = assess_ready(state, snap, True)
     assert ready is False
     assert reason == "review_failed"
 
@@ -355,7 +355,7 @@ def test_assess_ready_matrix() -> None:
         passed=True,
     )
     state = replace(state, review_evidence=rev_ev)
-    ready, reason = assess_ready(state, "b" * 40, snap, True)
+    ready, reason = assess_ready(state, snap, True)
     assert ready is True
     assert reason is None
 
@@ -363,11 +363,12 @@ def test_assess_ready_matrix() -> None:
     from orchestune.local_trial.models import Change
 
     snap_dirty = replace(snap, changes=(Change(status="M", path="foo.py"),))
-    ready, reason = assess_ready(state, "b" * 40, snap_dirty, True)
+    ready, reason = assess_ready(state, snap_dirty, True)
     assert ready is False
     assert reason == "worktree_dirty"
 
-    # Base changed
-    ready, reason = assess_ready(state, "x" * 40, snap, True)
+    # Base changed (base_tip_sha differs from state.repository.base_sha)
+    snap_base_changed = replace(snap, base_tip_sha="x" * 40)
+    ready, reason = assess_ready(state, snap_base_changed, True)
     assert ready is False
     assert reason == "base_changed"
