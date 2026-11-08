@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import ast
 import importlib
+import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -325,6 +328,63 @@ def test_unavailable_checkpoint_does_not_invent_a_sha() -> None:
             availability=CheckpointAvailability.UNAVAILABLE,
             input_base_sha=SHA_BASE,
         )
+
+
+def test_snapshot_reader_order_is_independent_of_hash_seed() -> None:
+    script = """
+from orchestune.read_dependencies.contracts import (
+    ParentReadSnapshotV1,
+    ReaderSnapshotEntry,
+    ValidationCheckpoint,
+    seal_snapshot,
+)
+head = "b" * 40
+base = "a" * 40
+digest = "a" * 64
+report = "e" * 64
+later = ReaderSnapshotEntry(
+    issue_number=10,
+    claim_id="claim-a",
+    completion_id="completion-b",
+    source_sha=head,
+    evidence_digest=digest,
+    validations=(
+        ValidationCheckpoint(candidate_head_sha=head, report_digest=report),
+    ),
+)
+earlier = ReaderSnapshotEntry(
+    issue_number=10,
+    claim_id="claim-a",
+    completion_id="completion-a",
+    source_sha=base,
+    evidence_digest=digest,
+)
+snapshot = seal_snapshot(
+    ParentReadSnapshotV1(
+        repository="example/repo",
+        parent_issue_number=1230,
+        parent_head_sha=head,
+        readers=(later, earlier),
+    )
+)
+print(",".join(item.completion_id for item in snapshot.readers))
+print(snapshot.digest)
+"""
+    observed: list[str] = []
+    for seed in ("1", "2"):
+        env = os.environ.copy()
+        env["PYTHONHASHSEED"] = seed
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert completed.returncode == 0, completed.stderr
+        observed.append(completed.stdout.strip())
+    assert observed[0] == observed[1]
+    assert observed[0].splitlines()[0] == "completion-a,completion-b"
 
 
 def test_scaffold_modules_are_docstrings_without_functions() -> None:

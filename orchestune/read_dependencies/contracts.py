@@ -1077,15 +1077,24 @@ def _unknown_key(item: StaleUnknown) -> tuple[object, ...]:
     return (item.reason.value, item.path, item.reader_issue_number or 0, item.detail)
 
 
+def _snapshot_reader_key(item: ReaderSnapshotEntry) -> tuple[object, ...]:
+    checkpoints = tuple(
+        (point.candidate_head_sha, point.report_digest) for point in item.validations
+    )
+    return (
+        item.issue_number,
+        item.claim_id,
+        item.completion_id,
+        item.source_sha,
+        item.evidence_digest,
+        checkpoints,
+    )
+
+
 def _canon_snapshot_readers(
     items: tuple[ReaderSnapshotEntry, ...],
 ) -> tuple[ReaderSnapshotEntry, ...]:
-    return tuple(
-        sorted(
-            set(items),
-            key=lambda item: (item.issue_number, item.claim_id, item.evidence_digest),
-        )
-    )
+    return tuple(sorted(set(items), key=_snapshot_reader_key))
 
 
 def _observation_payload(obs: ReadObservationV1) -> dict[str, Any]:
