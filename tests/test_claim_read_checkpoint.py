@@ -11,9 +11,11 @@ import pytest
 
 from orchestune.claim import service
 from orchestune.claim.contracts import ClaimRequest, ClaimStage
+from orchestune.claim.ownership import with_claim
 from orchestune.claim.read_checkpoint import (
     checkpoint_marker,
     ensure_read_checkpoint,
+    publish_claim_read_checkpoint,
     restore_read_checkpoint,
 )
 from orchestune.claim.service import claim_task, resume_claim
@@ -26,6 +28,7 @@ from orchestune.read_dependencies.contracts import (
     ReadCheckpointV1,
 )
 from tests.claim_helpers import MockForge, _make_issue
+from tests.dispatch_test_support import make_test_active_worktree
 
 REPOSITORY = "owner/repo"
 ISSUE = 1770
@@ -81,6 +84,10 @@ def test_conflicting_duplicates_are_rejected() -> None:
         {"issue_number": ISSUE + 1},
         {"version": 2},
         {"version": True},
+        {"version": 1.0},
+        {"issue_number": True},
+        {"claim_id": "claim with spaces"},
+        {"repository": "https://github.com/owner/repo"},
         {"input_base_sha": "bad"},
         {"availability": "invalid"},
         {"owner_token": "secret"},
@@ -104,6 +111,26 @@ def test_missing_checkpoint_is_unavailable_without_a_write() -> None:
     checkpoint = ensure_read_checkpoint(forge, REPOSITORY, ISSUE, "claim-old")
     assert checkpoint.input_base_sha is None
     assert checkpoint.availability == CheckpointAvailability.UNAVAILABLE
+    assert not forge.event_comments
+
+
+def test_adopted_pr_does_not_infer_checkpoint_from_its_prepared_head() -> None:
+    forge = CheckpointForge()
+    active = make_test_active_worktree(
+        issue_number=ISSUE,
+        claim_id="claim-adopted",
+        base_sha=BASE,
+    )
+    active = with_claim(
+        active,
+        dataclasses.replace(
+            active.claim, adopted_pr_number=123, adopted_pr_head_sha=BASE
+        ),
+    )
+    assert publish_claim_read_checkpoint(forge, active, input_base_sha=BASE) is None
+    restored = ensure_read_checkpoint(forge, REPOSITORY, ISSUE, "claim-adopted")
+    assert restored.availability == CheckpointAvailability.UNAVAILABLE
+    assert restored.input_base_sha is None
     assert not forge.event_comments
 
 
@@ -194,6 +221,22 @@ def test_success_response_without_durable_marker_is_not_accepted() -> None:
             ensure_read_checkpoint(
                 forge, REPOSITORY, ISSUE, "claim-one", input_base_sha=BASE
             )
+
+
+def test_read_failure_after_post_is_recovered_on_resume_without_a_write() -> None:
+    forge = CheckpointForge()
+    with patch.object(
+        forge, "list_all_issue_comments", side_effect=[[], ForgeError("offline")]
+    ):
+        with pytest.raises(ForgeError):
+            ensure_read_checkpoint(
+                forge, REPOSITORY, ISSUE, "claim-one", input_base_sha=BASE
+            )
+    assert len(forge.event_comments) == 1
+    assert (
+        ensure_read_checkpoint(forge, REPOSITORY, ISSUE, "claim-one") == _checkpoint()
+    )
+    assert len(forge.event_comments) == 1
 
 
 def _advance_and_rebase(repo: Path, worktree: Path) -> str:
