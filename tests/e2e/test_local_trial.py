@@ -696,3 +696,92 @@ sys.exit(0)
     assert res.returncode == 0, res.stderr
     assert "effective_phase: ready" in res.stdout
     assert marker_path.exists(), "New CI command was executed"
+
+
+def test_e2e_persisted_attempt_reconciliation(e2e_setup):
+    repo = e2e_setup["repo_dir"]
+    req = e2e_setup["req_file"]
+    env = e2e_setup["env"]
+
+    res = _run_cli(
+        ["start", "--request-file", str(req), "--repo", str(repo)], env, repo
+    )
+    assert res.returncode == 0
+    res = _run_cli(["status", "--repo", str(repo), "--json"], env, repo)
+    data = json.loads(res.stdout)
+    trial_id = data["trial_id"]
+    head_sha = data["state"]["head_sha"]
+    base_sha = data["state"]["repository"]["base_sha"]
+    impl_path = data["state"]["workspace"]["implementation_path"]
+
+    # Inject pending_attempt and its corresponding persisted attempt file
+    attempt_id = "f" * 32
+    attempt_input = {
+        "trial_id": trial_id,
+        "attempt_id": attempt_id,
+        "kind": "plan",
+        "input_head_sha": head_sha,
+        "base_sha": base_sha,
+        "plan_digest": None,
+        "plan_revision": 0,
+        "cwd": impl_path,
+        "artifact_dir": f"{impl_path}/.orchestune/artifacts/{attempt_id}",
+        "started_at": "2026-01-01T00:00:00Z",
+    }
+    state_file = repo / ".orchestune" / "trials" / trial_id / "state.json"
+    state_data = json.loads(state_file.read_text(encoding="utf-8"))
+    state_data["pending_attempt"] = attempt_input
+    state_file.write_text(json.dumps(state_data))
+
+    attempt_file = (
+        repo / ".orchestune" / "trials" / trial_id / "attempts" / f"{attempt_id}.json"
+    )
+    attempt_file.parent.mkdir(parents=True, exist_ok=True)
+    attempt_payload = {
+        "schema_version": 1,
+        "input": attempt_input,
+        "process": {
+            "outcome": "success",
+            "returncode": 0,
+            "stop_confirmed": True,
+            "elapsed_seconds": 1.0,
+            "timeout_seconds": 60.0,
+            "stdout_tail": "",
+            "stderr_tail": "",
+            "detail": "",
+        },
+        "agent_payload": {
+            "schema_version": 1,
+            "trial_id": trial_id,
+            "attempt_id": attempt_id,
+            "kind": "plan",
+            "input_head_sha": head_sha,
+            "plan_digest": None,
+            "payload": {
+                "plan": {
+                    "goal": "persisted plan goal",
+                    "acceptance_criteria": ["ac1"],
+                    "write_paths": ["hello.py"],
+                    "discipline_paths": [],
+                    "discipline_notes": [],
+                    "ci_argv": ["pytest"],
+                    "discipline_status": "compatible",
+                }
+            },
+        },
+        "ended_at": "2026-01-01T00:00:01Z",
+    }
+    attempt_file.write_text(json.dumps(attempt_payload))
+
+    # Resume succeeds and reconciles the persisted attempt
+    res = _run_cli(["resume", trial_id, "--repo", str(repo)], env, repo)
+    assert res.returncode == 0, res.stderr
+    assert "effective_phase: planned" in res.stdout
+
+    # Verify status reflects the reconciled attempt
+    res_st = _run_cli(["status", trial_id, "--repo", str(repo), "--json"], env, repo)
+    data_st = json.loads(res_st.stdout)
+    assert data_st["effective_phase"] == "planned"
+    assert data_st["state"]["pending_attempt"] is None
+    assert attempt_id in data_st["state"]["attempt_ids"]
+    assert data_st["state"]["plan"]["goal"] == "persisted plan goal"
