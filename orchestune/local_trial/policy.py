@@ -159,7 +159,6 @@ def _check_evidence_match(ev, state: TrialState) -> bool:
 
 def assess_ready(
     state: TrialState,
-    repo_tip_sha: str,
     workspace_snapshot: WorkspaceSnapshot,
     workspace_includes_head: bool = True,
 ) -> tuple[bool, str | None]:
@@ -168,8 +167,12 @@ def assess_ready(
         return (False, "approval_required")
     if state.plan is None:
         return (False, "plan_missing")
-    if repo_tip_sha.lower() != state.repository.base_sha.lower():
-        return (False, "base_changed")
+    if workspace_snapshot.base_tip_sha.lower() != state.repository.base_sha.lower():
+        if not (
+            workspace_includes_head
+            and workspace_snapshot.base_tip_sha.lower() == state.head_sha.lower()
+        ):
+            return (False, "base_changed")
     if workspace_snapshot.head_sha.lower() != state.head_sha.lower():
         return (False, "head_changed")
     if workspace_snapshot.changes:

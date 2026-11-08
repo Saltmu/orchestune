@@ -138,7 +138,6 @@ def _make_view(
             attempts.append(att)
     ready, _ = assess_ready(
         state,
-        state.repository.base_sha,
         snapshot,
         deps.workspace.includes_head(state),
     )
@@ -962,9 +961,7 @@ def inspect_trial(trial_id: str | None, deps: TrialDependencies) -> TrialView:
     state = deps.store.load(tid)
     repo = deps.workspace.discover(state.repository.source_root)
     snap = deps.workspace.inspect(repo, state.workspace)
-    ready, reason = assess_ready(
-        state, repo.base_sha, snap, deps.workspace.includes_head(state)
-    )
+    ready, reason = assess_ready(state, snap, deps.workspace.includes_head(state))
     effective_phase = state.phase
     if (
         state.pending_attempt is not None or state.pending_git is not None
@@ -1007,7 +1004,6 @@ def record_decision(
             snap = deps.workspace.inspect(repo, state.workspace)
             ready, reason = assess_ready(
                 state,
-                state.repository.base_sha,
                 snap,
                 deps.workspace.includes_head(state),
             )

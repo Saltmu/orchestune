@@ -79,6 +79,10 @@ def _validate_plan_paths(plan: TrialPlan, repo_root: Path) -> None:
     for p in plan.write_paths:
         if not p or not p.strip():
             raise TrialError("artifact_invalid", "Empty write_path")
+        if p.startswith(("./", ".\\")):
+            raise TrialError(
+                "artifact_invalid", f"write_path cannot start with dot-slash: {p}"
+            )
         if p.startswith(("/", "\\")) or Path(p).is_absolute():
             raise TrialError("artifact_invalid", f"write_path must be relative: {p}")
         if any(ch in p for ch in "*?[]"):

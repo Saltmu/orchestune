@@ -117,6 +117,23 @@ def test_validate_plan_escape(tmp_path: Path) -> None:
     assert exc.value.code == "artifact_invalid"
 
 
+def test_validate_plan_dot_slash_prefix_rejected(tmp_path: Path) -> None:
+    (tmp_path / "CONTRIBUTING.md").write_text("rules")
+    for bad_path in ("./src/foo.py", ".\\src\\foo.py"):
+        plan = TrialPlan(
+            goal="Implement feature",
+            acceptance_criteria=("ac1",),
+            write_paths=(bad_path,),
+            discipline_paths=(),
+            discipline_notes=(),
+            ci_argv=("pytest",),
+            discipline_status=DisciplineStatus.COMPATIBLE,
+        )
+        with pytest.raises(TrialError) as exc:
+            validate_plan(plan, tmp_path, "do it", "a" * 40)
+        assert exc.value.code == "artifact_invalid"
+
+
 def test_validate_plan_ci_mismatch(tmp_path: Path) -> None:
     plan = TrialPlan(
         goal="Implement feature",
