@@ -180,6 +180,10 @@ class TestCompletePayloadsAndRequests:
         assert first.request_fingerprint == same_request.request_fingerprint
         assert first.request_fingerprint != changed_request.request_fingerprint
         assert len(first.request_fingerprint) == 64
+        assert (
+            first.request_fingerprint
+            == "70cff0a7d3dff5211623cb6e30d94cadd5839e356ae5a7b9bb5b81b04ce572aa"
+        )
 
     def test_blocked_request_construction_and_validation(self):
         req = CompleteRequest.blocked(
