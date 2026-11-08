@@ -906,8 +906,8 @@ def test_resume_trial_reconciles_pending_git(tmp_path: Path) -> None:
     state = replace(
         view.state,
         approved_plan_digest=plan_dig,
-        checkpoint=Checkpoint.IMPLEMENT,
-        phase=TrialPhase.IMPLEMENTING,
+        checkpoint=Checkpoint.CI,
+        phase=TrialPhase.READY,
     )
     intent = GitIntent(
         operation="commit",
@@ -919,11 +919,13 @@ def test_resume_trial_reconciles_pending_git(tmp_path: Path) -> None:
     state = replace(state, pending_git=intent)
     store.save(state, expected_revision=None)
 
+    ws.head_sha = "c" * 40
     # Resume should reconcile git intent and proceed to ready
     view_res = resume_trial(ResumeRequest(trial_id=view.state.trial_id), deps)
     assert view_res.state is not None
     assert view_res.state.pending_git is None
     assert view_res.effective_phase == TrialPhase.READY
+    assert view_res.state.head_sha == "c" * 40
 
 
 def test_resume_trial_new_request_text_resets_budget(tmp_path: Path) -> None:

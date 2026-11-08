@@ -794,9 +794,7 @@ def _reconcile_pending_git(state: TrialState, deps: TrialDependencies) -> TrialS
                 raise TrialError(
                     "execution_unknown", "Unreconciled pending Git commit operation"
                 )
-            return _save_state(
-                state, deps, pending_git=None, head_sha=head, checkpoint=Checkpoint.CI
-            )
+            return _save_state(state, deps, head_sha=head, **_COMMIT_RESETS)
         except (TrialError, OSError) as err:
             raise TrialError(
                 "execution_unknown", "Unreconciled pending Git operation"
