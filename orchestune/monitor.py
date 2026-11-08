@@ -8,6 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from rich.cells import cell_len, chop_cells
 from rich.console import Group, RenderableType
 
 from orchestune.forge import Forge
@@ -153,13 +154,9 @@ def status_block(
     full = _rich_block(plain, [view.heading, table, details], out, footer)
     if footer is None or _fits_screen(out, full.rich):
         return full
-    # Live crops what does not fit; keep the rows and the footer on screen instead.
-    attention = compact_status_attention(snapshot)
-    return _rich_block(
-        plain,
-        [view.heading, table, "\n" + attention, "\n" + _OVERFLOW_NOTICE],
-        out,
-        footer,
+    # Live crops what does not fit. Keep the rows, attention, and footer on screen.
+    return _overflow_block(
+        out, plain, view.heading, table, compact_status_attention(snapshot), footer
     )
 
 
@@ -172,6 +169,49 @@ def _rich_block(
     if footer is not None:
         renderables.append(out.text_block("\n" + footer).rich)
     return Block(plain.plain, Group(*renderables), soft_wrap=False)
+
+
+def _overflow_block(
+    out: CliOutput,
+    plain: Block,
+    heading: str,
+    table: RenderableType,
+    attention: str,
+    footer: str | None,
+) -> Block:
+    """Overflow frame without the blank lines that push the footer off a short TTY."""
+    block = _packed_overflow(out, plain, heading, table, attention, footer)
+    if _fits_screen(out, block.rich):
+        return block
+    clipped = _clip_attention(out, attention)
+    if clipped == attention:
+        return block
+    return _packed_overflow(out, plain, heading, table, clipped, footer)
+
+
+def _packed_overflow(
+    out: CliOutput,
+    plain: Block,
+    heading: str,
+    table: RenderableType,
+    text: str,
+    footer: str | None,
+) -> Block:
+    parts: list[str | RenderableType] = [heading, table, text, _OVERFLOW_NOTICE]
+    if footer is not None:
+        parts.append(footer)
+    return _rich_block(plain, parts, out, None)
+
+
+def _clip_attention(out: CliOutput, attention: str) -> str:
+    console = out.console
+    width = 80 if console is None else console.width
+    suffix = " orchestune status"
+    if cell_len(attention) <= width or cell_len(suffix) >= width:
+        return attention
+    lines = chop_cells(attention, width - cell_len(suffix))
+    head = lines[0].rstrip() if lines else ""
+    return f"{head}{suffix}"
 
 
 def _fits_screen(out: CliOutput, renderable: RenderableType) -> bool:

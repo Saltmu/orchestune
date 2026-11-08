@@ -16,6 +16,7 @@ import pytest
 
 import orchestune.monitor as monitor
 from orchestune.infra.cli_output import CliOutput, make_output
+from orchestune.infra.cli_progress import progress
 from orchestune.ledger.run_state import RunState
 from orchestune.monitor import main
 from tests.dispatch_test_support import make_test_active_worktree
@@ -473,6 +474,26 @@ def _watch_frame(tmp_path, forge, lines: str) -> str:
     return ANSI.sub("", stream.getvalue())
 
 
+def _assert_live_frame_fits(tmp_path, forge) -> None:
+    """The Live region itself must keep the attention line and the watch footer."""
+    args = _many_tasks_args(tmp_path)
+    snapshot = monitor.build_status_snapshot(args[1], args[3], NOW, 3, {}, forge=forge)
+    footer = "3秒ごとに自動更新します。"
+    out, stream = _output(tty=True, env={"LINES": "14"})
+    block = monitor.status_block(out, snapshot, NOW, footer)
+    console = out.console
+    assert console is not None
+    rendered = console.render_lines(block.rich, console.options, pad=False)
+    assert len(rendered) < console.height
+    with progress(out) as handle:
+        handle.update(block)
+        shown = ANSI.sub("", stream.getvalue())
+    assert "要対応:" in shown
+    assert "orchestune status" in shown
+    assert footer in shown
+    assert "..." not in shown
+
+
 class TestWatchLiveOverflow:
     def test_frame_taller_than_the_screen_degrades_to_the_table(
         self, tmp_path, _stub_get_issue_labels
@@ -485,6 +506,7 @@ class TestWatchLiveOverflow:
         assert "orchestune status" in text
         assert "3秒ごとに自動更新します。" in text
         assert "log-136-a" not in text
+        _assert_live_frame_fits(tmp_path, _stub_get_issue_labels)
 
     def test_frame_that_fits_keeps_every_detail(self, tmp_path, _stub_get_issue_labels):
         text = _watch_frame(tmp_path, _stub_get_issue_labels, "100")
