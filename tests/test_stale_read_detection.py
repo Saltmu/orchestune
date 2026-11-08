@@ -6,6 +6,8 @@ from itertools import permutations
 import pytest
 
 from orchestune.read_dependencies.contracts import (
+    CandidateConclusion,
+    CandidateJudgment,
     ChangeKind,
     ExclusionReason,
     ObservationAvailability,
@@ -15,12 +17,16 @@ from orchestune.read_dependencies.contracts import (
     ReaderIdentity,
     ReaderInput,
     ReadEvidenceV1,
+    ReadGateInputs,
     ReadSource,
+    ReadValidationV1,
     ResourcePresence,
+    StaleReadGate,
     StaleVerdict,
     UnknownReason,
     ValidationCheckpoint,
     WriterChanges,
+    decide_read_gate,
     seal_evidence,
     seal_report,
 )
@@ -334,3 +340,110 @@ def test_input_order_and_duplicates_do_not_change_report(
     other = detect_stale_reads(replace(same_attempt, writers=(changed, own)))
     assert other.digest != expected.digest
     assert other.candidates[0].candidate_id != expected.candidates[0].candidate_id
+
+
+def unchecked_context(forward: ReadContextInputs, problem: str) -> ReadContextInputs:
+    """Keep a known candidate while introducing independent unchecked input."""
+    value = evidence(declared=(), issue_number=12, claim_id="claim-unchecked")
+    if problem in {"digest", "unavailable_digest", "unavailable"}:
+        if problem != "digest":
+            value = seal_evidence(
+                replace(
+                    value,
+                    declared_reads=None,
+                    source=ReadSource.UNAVAILABLE,
+                    coverage=ReadCoverage.UNAVAILABLE,
+                )
+            )
+        if problem != "unavailable":
+            value = replace(value, digest="0" * 64)
+    elif problem == "observation":
+        value = seal_evidence(
+            replace(
+                value,
+                observations=(
+                    observation("other.py", None, presence=ResourcePresence.UNKNOWN),
+                ),
+            )
+        )
+    elif problem == "partial":
+        value = seal_evidence(replace(value, coverage=ReadCoverage.PARTIAL))
+    unchecked = ReaderInput(
+        identity=replace(READER, issue_number=12, claim_id="claim-unchecked"),
+        evidence=None if problem == "missing" else value,
+    )
+    inputs = replace(forward, readers=(*forward.readers, unchecked))
+    if problem == "writer":
+        inputs = replace(
+            inputs,
+            writers=(
+                *inputs.writers,
+                replace(WRITER, issue_number=None, claim_id=None),
+            ),
+        )
+    elif problem == "change":
+        unresolved = replace(
+            MODIFY,
+            availability=ObservationAvailability.UNKNOWN,
+            unknown_reason=UnknownReason.FETCH_FAILED,
+        )
+        inputs = replace(
+            inputs, writers=(*inputs.writers, replace(WRITER, changes=(unresolved,)))
+        )
+    return inputs
+
+
+@pytest.mark.parametrize(
+    "problem",
+    [
+        "digest",
+        "unavailable_digest",
+        "missing",
+        "observation",
+        "writer",
+        "change",
+        "partial",
+        "unavailable",
+    ],
+)
+def test_validating_candidates_cannot_publish_with_unchecked_inputs(
+    forward: ReadContextInputs, problem: str
+) -> None:
+    inputs = unchecked_context(forward, problem)
+    report = detect_stale_reads(inputs)
+    assert report.candidates and report.unknowns
+    assert report.digest is not None
+    validation = ReadValidationV1(
+        round_number=1,
+        head_sha=report.candidate_head_sha,
+        report_digest=report.digest,
+        decisions=tuple(
+            CandidateJudgment(
+                candidate_id=item.candidate_id,
+                conclusion=CandidateConclusion.COMPATIBLE,
+                rationale="Known candidate is compatible",
+            )
+            for item in report.candidates
+        ),
+    )
+    decision = decide_read_gate(
+        ReadGateInputs(
+            mode=StaleReadGate.REQUIRED,
+            verdict=report.verdict,
+            coverage=report.coverage,
+            candidate_head_sha=report.candidate_head_sha,
+            report_digest=report.digest,
+            candidate_ids=tuple(item.candidate_id for item in report.candidates),
+            validation=validation,
+        )
+    )
+    assert not decision.allow_parent_update
+    assert not decision.allow_fast_path
+    expected = (
+        ReadCoverage.PARTIAL if problem == "partial" else ReadCoverage.UNAVAILABLE
+    )
+    assert report.coverage is expected
+    assert (
+        detect_stale_reads(replace(inputs, readers=tuple(reversed(inputs.readers))))
+        == report
+    )

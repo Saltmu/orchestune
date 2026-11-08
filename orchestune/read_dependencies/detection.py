@@ -159,6 +159,10 @@ def _gap(
 def _unknown(
     reader: ReaderInput, path: str, reason: UnknownReason, result: _Detection
 ) -> None:
+    # The required gate receives coverage and candidate ids, not unknown items.
+    # Candidate approval must never authorize a report with unchecked inputs.
+    if reason is not UnknownReason.COVERAGE_PARTIAL:
+        result.coverage = ReadCoverage.UNAVAILABLE
     result.unknowns.append(
         StaleUnknown(
             reason=reason,
