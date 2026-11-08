@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import json
+
+import pytest
+from read_dependency_test_support import EMPTY_DECLARATION
+
 from orchestune.outcome_record import (
     OUTCOME_MARKER,
     OutcomeLookupResult,
@@ -13,6 +18,7 @@ from orchestune.outcome_record import (
     identifies_child,
     parse_from_comments,
 )
+from orchestune.read_dependencies.codec import read_evidence_to_dict
 
 
 class TestRenderParseRoundTrip:
@@ -79,6 +85,49 @@ class TestRenderParseRoundTrip:
         record = OutcomeRecord(result="done", issue=1, pr=2)
         assert OUTCOME_MARKER in record.render()
 
+    def test_legacy_record_without_read_evidence_parses_as_unavailable(self):
+        body = f"{OUTCOME_MARKER}\n```json\n" '{"result": "done", "issue": 1}\n```\n'
+        record = parse_from_comments([{"body": body}])
+        assert record is not None
+        assert record.read_evidence is None
+
+    def test_explicit_empty_read_evidence_round_trips(self):
+        evidence_payload = read_evidence_to_dict(EMPTY_DECLARATION)
+        record = OutcomeRecord(result="done", issue=10, read_evidence=EMPTY_DECLARATION)
+        body = record.render()
+        assert (
+            json.loads(
+                body.split("```json\n", maxsplit=1)[1].split("\n```", maxsplit=1)[0]
+            )["read_evidence"]
+            == evidence_payload
+        )
+        assert parse_from_comments([{"body": body}]) == record
+        assert record.read_evidence.declared_reads == ()
+
+    @pytest.mark.parametrize("read_evidence", [None, [], {}, {"schema": "invalid"}])
+    def test_invalid_read_evidence_payload_is_rejected(self, read_evidence):
+        payload = {
+            "result": "done",
+            "issue": 1,
+            "read_evidence": read_evidence,
+        }
+        body = f"{OUTCOME_MARKER}\n```json\n{json.dumps(payload)}\n```\n"
+        assert parse_from_comments([{"body": body}]) is None
+
+    def test_non_done_outcome_cannot_contain_read_evidence(self):
+        for result, reason in (("not-needed", None), ("blocked", "base-branch-red")):
+            with pytest.raises(ValueError, match="only valid for done"):
+                OutcomeRecord(
+                    result=result,
+                    issue=1,
+                    reason=reason,
+                    read_evidence=EMPTY_DECLARATION,
+                )
+
+    def test_missing_read_evidence_is_omitted_when_rendered(self):
+        record = OutcomeRecord(result="not-needed", issue=1)
+        assert '"read_evidence"' not in record.render()
+
 
 class TestParseFromCommentsLatestWins:
     def test_picks_comment_with_max_created_at(self):
@@ -96,6 +145,17 @@ class TestParseFromCommentsLatestWins:
         comments = [
             {"body": newer.render(), "created_at": "2026-08-21T00:00:00Z"},
             {"body": older.render(), "created_at": "2026-08-20T00:00:00Z"},
+        ]
+        assert parse_from_comments(comments) == newer
+
+    def test_latest_record_keeps_its_read_evidence(self):
+        older = OutcomeRecord(result="done", issue=1, pr=2)
+        newer = OutcomeRecord(
+            result="done", issue=1, pr=2, read_evidence=EMPTY_DECLARATION
+        )
+        comments = [
+            {"body": older.render(), "created_at": "2026-08-20T00:00:00Z"},
+            {"body": newer.render(), "created_at": "2026-08-21T00:00:00Z"},
         ]
         assert parse_from_comments(comments) == newer
 
