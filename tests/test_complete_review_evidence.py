@@ -530,6 +530,19 @@ def test_legacy_journal_validation_ignores_only_absent_review():
     )
 
 
+def test_read_digest_is_immutable_and_not_added_to_legacy_validation():
+    from orchestune.complete.service import _same_validation
+
+    legacy = {"validation": {"pr": {}, "ci": {"head_sha": HEAD}}}
+    bound = {"validation": {**legacy["validation"], "read_evidence_digest": "a" * 64}}
+    changed = {"validation": {**bound["validation"], "read_evidence_digest": "b" * 64}}
+    assert _same_validation(legacy, legacy)
+    assert _same_validation(bound, bound)
+    assert not _same_validation(legacy, bound)
+    assert not _same_validation(bound, legacy)
+    assert not _same_validation(bound, changed)
+
+
 # --- #1207: same-bot review replies are not evidence ---------------------------
 
 
