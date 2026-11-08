@@ -250,7 +250,7 @@ orchestune dispatch --dispatch-target grok-cli
 orchestune dispatch --dispatch-target auto
 ```
 
-これは各サブタスクの専用worktree内で `claude -p "..." --permission-mode bypassPermissions` / `agy -p "..." --add-dir . --print-timeout 60m --dangerously-skip-permissions` / `codex exec "..." --dangerously-bypass-approvals-and-sandbox` / `grok -p "..." --always-approve --no-plan --no-auto-update --output-format streaming-json`（非対話・print/execモード）を実行します。いずれのプリセットも、許可プロンプトのバイパスフラグを毎回付与することで無人実行がブロックされないようにしています。
+これは各サブタスクの専用worktree内で `claude -p "..." --permission-mode bypassPermissions` / `agy -p "..." --add-dir . --dangerously-skip-permissions` / `codex exec "..." --dangerously-bypass-approvals-and-sandbox` / `grok -p "..." --always-approve --no-plan --no-auto-update --output-format streaming-json`（非対話・print/execモード）を実行します。いずれのプリセットも、許可プロンプトのバイパスフラグを毎回付与することで無人実行がブロックされないようにしています。
 
 PATH 上の `claude` と `codex` が片方だけの場合、上書きのない `auto` は子タスクと第2層レビューでその担当を使い、変更理由を表示します。両方ある場合と両方ない場合は従来のクロスベンダー既定です。明示の provider とターゲット別設定はそれぞれ優先され、上書きのない `local` は未解決のままです。子レビューと第2層の必須ゲートは変わりません。ローカル CLI の検出は GitHub レビューワークフローの存在を保証しません。`config init` は reviewer-bot が未設定の場合だけ単一ベンダーを候補の既定値にし、既存値は保持します。
 

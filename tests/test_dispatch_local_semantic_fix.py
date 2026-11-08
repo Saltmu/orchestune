@@ -43,6 +43,7 @@ class TestBuildLocalSemanticFixCmd:
         assert cmd[1] == "-p"
         assert cmd[2] == "Fix this finding"
         assert "--dangerously-skip-permissions" in cmd
+        assert "--print-timeout" not in cmd
 
     def test_grok_cli_command(self) -> None:
         cmd = build_local_semantic_fix_cmd("grok-cli", prompt="Fix this finding")

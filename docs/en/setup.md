@@ -250,7 +250,7 @@ orchestune dispatch --dispatch-target grok-cli
 orchestune dispatch --dispatch-target auto
 ```
 
-These run `claude -p "..." --permission-mode bypassPermissions` / `agy -p "..." --add-dir . --print-timeout 60m --dangerously-skip-permissions` / `codex exec "..." --dangerously-bypass-approvals-and-sandbox` / `grok -p "..." --always-approve --no-plan --no-auto-update --output-format streaming-json` (non-interactive print/exec mode) in each subtask's own worktree. All presets always pass a permission-bypass flag so an unattended run never blocks on an interactive prompt.
+These run `claude -p "..." --permission-mode bypassPermissions` / `agy -p "..." --add-dir . --dangerously-skip-permissions` / `codex exec "..." --dangerously-bypass-approvals-and-sandbox` / `grok -p "..." --always-approve --no-plan --no-auto-update --output-format streaming-json` (non-interactive print/exec mode) in each subtask's own worktree. All presets always pass a permission-bypass flag so an unattended run never blocks on an interactive prompt.
 
 When exactly one of `claude` and `codex` is on PATH, unoverridden `auto` uses that reviewer for both child tasks and semantic review, and reports the change. With both or neither installed, cross-vendor defaults remain. Explicit providers and target overrides win independently; `local` without an override stays unresolved. The required child and semantic gates do not change. Local CLI detection does not prove the GitHub review workflow exists. `config init` suggests the sole vendor only when reviewer-bot is unset; existing values remain the defaults.
 
