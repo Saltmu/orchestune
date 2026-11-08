@@ -468,6 +468,33 @@ class TestInteractiveFlowAndExitCodes:
             code = main(["resume", trial_id])
             assert code == expected_code
 
+    @pytest.mark.parametrize(
+        "command,expected",
+        [
+            (
+                '"C:/Program Files/Python/python.exe" "scripts/new test.py"',
+                ("C:/Program Files/Python/python.exe", "scripts/new test.py"),
+            ),
+            (
+                '"/opt/python env/bin/python" "scripts/new test.py"',
+                ("/opt/python env/bin/python", "scripts/new test.py"),
+            ),
+        ],
+    )
+    def test_resume_forwards_quoted_ci_command(self, command, expected):
+        state = _dummy_state("1" * 32)
+        with (
+            patch.object(
+                trial_cli, "make_dependencies", return_value=_make_fake_deps(state)
+            ),
+            patch.object(
+                trial_cli, "resume_trial", return_value=_dummy_view(state)
+            ) as resume,
+            patch("sys.stdin.isatty", return_value=False),
+        ):
+            assert main(["resume", state.trial_id, "--ci-command", command]) == 0
+        assert resume.call_args.args[0].ci_argv_override == expected
+
     def test_resume_trial_error_interrupted_returns_130(self):
         trial_id = "1" * 32
         fake_deps = _make_fake_deps()
