@@ -15,6 +15,7 @@ from orchestune.complete.contracts import (
     CompleteStage,
     CompletionEvidence,
 )
+from orchestune.complete.read_evidence import load_read_evidence
 from orchestune.complete.service import complete_task
 from orchestune.infra.cli_output import CliOutput, make_output
 
@@ -29,6 +30,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--reason")
     parser.add_argument("--reviewer", choices=("claude", "codex", "skip"))
     parser.add_argument("--review-reply", type=Path)
+    parser.add_argument(
+        "--read-evidence", type=Path, help="read-evidence-v1 JSON artifact"
+    )
     parser.add_argument("--state", type=Path, help="shared run_state.json path")
     parser.add_argument(
         "--completion-id", help="resume or read an immutable completion result"
@@ -53,6 +57,8 @@ def _credentials(
 
 
 def _request_from_args(args: argparse.Namespace) -> CompleteRequest:
+    if args.read_evidence is not None and args.result != "done":
+        raise ValueError("--read-evidence is only valid when --result=done")
     token, claim_id, state_path = _credentials(args.issue, args.state)
     common = {
         "completion_id": args.completion_id,
@@ -74,6 +80,9 @@ def _request_from_args(args: argparse.Namespace) -> CompleteRequest:
         evidence = CompletionEvidence(
             reviewer=args.reviewer,
             review_reply=args.review_reply,
+            read_evidence=load_read_evidence(args.read_evidence)
+            if args.read_evidence
+            else None,
         )
         return CompleteRequest.done(
             args.issue,

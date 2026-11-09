@@ -51,6 +51,7 @@ from orchestune.complete.publication import (
     PublicationContext,
     publish_reserved_completion_locked,
 )
+from orchestune.complete.read_evidence import freeze_read_evidence, verify_read_evidence
 from orchestune.complete.replay import find_replay
 from orchestune.complete.review_evidence import (
     ReviewEvidenceForge,
@@ -117,6 +118,7 @@ class _PolicyValidation(TypedDict, total=False):
     ci: _PolicyCi | None
     review: _PolicyReview
     pr: _PolicyPullRequest
+    read_evidence_digest: str
 
 
 class _PolicyContext(TypedDict, total=False):
@@ -360,6 +362,9 @@ def _new_record(
     )
     _check_adopted_pr(active.claim, request.result, outcome.pr, outcome.head_sha)
     outcome = _reviewed_outcome(outcome, request, policy)
+    outcome = freeze_read_evidence(
+        outcome, policy.get("validation", {}).get("read_evidence_digest")
+    )
     _ensure_validated_head(request, outcome.head_sha, policy)
     policy = _record_policy(policy, forge, request.issue_number, active)
     target = {
@@ -458,11 +463,30 @@ def _fresh_review(
     return review
 
 
+def _pr_validation(pr: _FetchedPullRequest) -> _PolicyPullRequest:
+    return cast(
+        _PolicyPullRequest,
+        {
+            name: _pr_attr(pr, name)
+            for name in (
+                "number",
+                "head_ref",
+                "base_ref",
+                "changed_files",
+                "head_sha",
+                "is_ci_passing",
+            )
+        },
+    )
+
+
 def _validation_policy(
     request: CompleteRequest,
     forge: Forge,
     policy: _PublicationPolicy,
     ci: _PolicyCi | None,
+    active: ActiveWorktree,
+    worktree: Path,
     *,
     legacy_review: bool = False,
 ) -> _PublicationPolicy:
@@ -478,25 +502,27 @@ def _validation_policy(
     review: _PolicyReview = (
         {} if legacy_review else _fresh_review(request, forge, pr, ci)
     )
+    digest = verify_read_evidence(
+        request,
+        forge,
+        active.claim.claim_id,
+        worktree,
+        review.get("summary", {}).get("reviewed_head_sha"),
+    )
+    if digest is not None:
+        latest, _, error = _fetched_pr(forge, pr_number)
+        if error or latest is None or latest.head_sha != pr.head_sha:
+            raise CompletionJournalError(
+                CompleteFailureReason.REVIEW_HEAD_MISMATCH,
+                "PR HEAD changed during read evidence acquisition",
+            )
     return {
         **policy,
         "validation": {
             "ci": ci,
+            **({"read_evidence_digest": digest} if digest is not None else {}),
             **({"review": review} if not legacy_review else {}),
-            "pr": cast(
-                _PolicyPullRequest,
-                {
-                    name: _pr_attr(pr, name)
-                    for name in (
-                        "number",
-                        "head_ref",
-                        "base_ref",
-                        "changed_files",
-                        "head_sha",
-                        "is_ci_passing",
-                    )
-                },
-            ),
+            "pr": _pr_validation(pr),
         },
     }
 
@@ -577,6 +603,8 @@ def _policy_for_request(
                     forge,
                     policy,
                     ci,
+                    active,
+                    worktree,
                     legacy_review=(
                         pending is not None
                         and "review"
