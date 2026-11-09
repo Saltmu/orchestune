@@ -65,7 +65,6 @@ _SCAFFOLDS = (
     "orchestune/complete/read_evidence.py",
     "orchestune/integrator/read_gate.py",
     "orchestune/integrator/read_publish.py",
-    "orchestune/dispatch/semantic_review/read_context.py",
 )
 
 

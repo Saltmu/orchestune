@@ -55,6 +55,7 @@ from orchestune.dispatch.semantic_review.postcycle_support import (
     run_cycle_cleanup,
     semantic_ci_verifier,
 )
+from orchestune.dispatch.semantic_review.read_context import SemanticReadContext
 from orchestune.dispatch.semantic_review.triggers import (
     parse_iso,
     round_triggers,
@@ -161,7 +162,14 @@ class SemanticReviewPorts:
 
 
 _PORT_FIELDS = frozenset(
-    ("forge", "verify_ci_fn", "operations", "claims", "remote_head_fn", "clock")
+    (
+        "forge",
+        "verify_ci_fn",
+        "operations",
+        "claims",
+        "remote_head_fn",
+        "clock",
+    )
 )
 
 
@@ -247,6 +255,9 @@ class SemanticReviewCycleRunner:
             lambda name: remote_branch_sha(repository_root, name)
         )
         self._mode = SemanticReviewMode(config.semantic_review_mode)
+        self._read_context = SemanticReadContext(
+            self._forge, config.stale_read_gate, self._ops.read_context_builder
+        )
         self._lease = SemanticReviewLease(
             forge=self._forge,
             repository_root=self._root,
@@ -286,6 +297,7 @@ class SemanticReviewCycleRunner:
     ) -> tuple[SemanticReviewStateV1, ReviewDiagnostics]:
         """Read-only state and diagnostics of one attempt (`review status`)."""
         ctx = self._evidence.restore(pr)
+        ctx.read_context = self._read_context.restore(ctx.state, ctx.pr.head_sha)
         return ctx.state, self._diagnose(ctx, ctx.state, self._acquire_review(ctx))[0]
 
     def _diagnose(
@@ -347,6 +359,7 @@ class SemanticReviewCycleRunner:
 
     def _observe(self, ctx: _Attempt) -> SemanticTransitionObservation:
         state = ctx.state
+        ctx.read_context = self._read_context.restore(state, ctx.pr.head_sha)
         if state.phase in _REVIEW_PHASES and state.round > 0:
             ctx.review = self._acquire_review(ctx)
         operation = self._poll(ctx) if self._needs_poll(state) else None
@@ -356,7 +369,7 @@ class SemanticReviewCycleRunner:
             _P.CI_VERIFICATION,
         ):
             judgments = self._evidence.judgments(ctx)
-        return SemanticTransitionObservation(
+        obs = SemanticTransitionObservation(
             identity=self._current_identity(state),
             observed_head_sha=ctx.pr.head_sha,
             now=self._now,
@@ -370,6 +383,10 @@ class SemanticReviewCycleRunner:
             reviewed_sha=state.head_sha if ctx.review.complete else None,
             judgments=judgments,
             operation=operation,
+        )
+        comment = self._evidence.judgment_comment(ctx) if state.operation_id else None
+        return ctx.read_context.observation(
+            obs, str(comment.get("body") or "") if comment else "", state
         )
 
     @staticmethod
@@ -386,6 +403,10 @@ class SemanticReviewCycleRunner:
         state, comments = ctx.state, ctx.comments
         triggers = self._evidence.trusted_triggers(ctx)
         requested = round_triggers(triggers, state, fresh=True)
+        if ctx.read_context is not None:
+            requested = [
+                t for t in requested if ctx.read_context.matches_trigger(t.body, state)
+            ]
         if not requested:
             return _Review()
         trigger = requested[-1]
@@ -459,7 +480,10 @@ class SemanticReviewCycleRunner:
         state = ctx.state
         obs = ctx.obs = self._observe(ctx)
         decision = evaluate_semantic_review_transition(state, obs)
-        if decision.next_phase == _P.INVALIDATED:
+        if (
+            decision.next_phase == _P.INVALIDATED
+            or decision.reason == "read_report_changed"
+        ):
             return self._guard_invalidation(state, obs, decision)
         if self._config.apply and self._needs_preflight(state, decision):
             preflight = self._ops.preflight(self._config, repository_root=self._root)
@@ -569,6 +593,15 @@ class SemanticReviewCycleRunner:
             self._lease.require_unchanged(ctx)
             self._lease.revalidate(ctx)
             ctx.comments = self._forge.list_all_issue_comments(ctx.pr.pr_number)
+            ctx.read_context = self._read_context.restore(ctx.state, ctx.pr.head_sha)
+            if (
+                ctx.read_context.required
+                and ctx.read_context.digest != ctx.state.read_report_digest
+            ):
+                raise _Stop("read_context_invalid", error="retry report changed")
+            ctx.read_context = self._read_context.persist(
+                ctx.read_context, ctx.pr.pr_number
+            )
             ctx.review = self._acquire_review(ctx)  # a late answer cancels the retry
             if self._diagnose(ctx, ctx.state, ctx.review)[1].action != AckAction.RETRY:
                 return self._report(ctx, "held", ctx.state, reason="retry_not_due")
@@ -606,6 +639,11 @@ class SemanticReviewCycleRunner:
     ) -> SemanticTransitionDecision:
         state = ctx.state
         assert ctx.claim is not None and state.operation_id is not None
+        assert ctx.obs is not None and ctx.obs.operation is not None
+        promoted = str(ctx.obs.operation.output_sha)
+        ctx.read_context = self._read_context.restore(state, promoted)
+        if ctx.read_context.required and ctx.read_context.digest is None:
+            return _escalated(state, "read_report_missing", self._stamp)
         result = self._lease.promote_fix_output(
             ctx, fix_branch=semantic_fix_output_branch(state.operation_id)
         )
@@ -613,8 +651,7 @@ class SemanticReviewCycleRunner:
             if result.detail == DETAIL_FIX_NOT_DESCENDANT:
                 return _escalated(state, "fix_output_not_descendant", self._stamp)
             raise _Stop("promotion_failed", detail=result.detail)
-        assert ctx.obs is not None and ctx.obs.operation is not None
-        promoted = str(ctx.obs.operation.output_sha)
+        ctx.obs = ctx.read_context.observation(ctx.obs, "", state)
         moved = evaluate_semantic_review_transition(
             state, replace(ctx.obs, observed_head_sha=promoted)
         )
@@ -626,6 +663,18 @@ class SemanticReviewCycleRunner:
         self, ctx: _Attempt, decision: SemanticTransitionDecision
     ) -> SemanticReviewStateV1:
         nxt = decision.next_state
+        if (
+            ctx.read_context is not None
+            and ctx.read_context.report is not None
+            and (
+                nxt.phase not in (_P.INVALIDATED, _P.ESCALATED)
+                or decision.reason == "read_report_changed"
+            )
+        ):
+            self._lease.revalidate(ctx)
+            ctx.read_context = self._read_context.persist(
+                ctx.read_context, ctx.pr.pr_number
+            )
         if decision.requires_review_trigger:
             self._effects.post_trigger(ctx, nxt)
         if nxt.phase == _P.INVALIDATED:
