@@ -670,9 +670,26 @@ def test_make_default_read_context_builder_wires_recomputation(tmp_path: Path):
     forge = MagicMock()
     forge.get_repository_slug.return_value = "owner/repo"
     forge.get_authenticated_user.return_value = "bot"
+    from orchestune.review.semantic_records import (
+        SemanticFixResultV1,
+        format_semantic_fix_result_marker,
+    )
+
+    fix_marker = format_semantic_fix_result_marker(
+        SemanticFixResultV1(
+            attempt_id="attempt-1230-1",
+            operation_id="attempt-1230-1-fix",
+            input_sha=base_sha,
+            output_sha=new_head,
+            judgment_comment_id=1,
+            status="completed",
+        )
+    )
+
     forge.list_all_issue_comments.return_value = [
         {"user": {"login": "bot"}, "body": checkpoint_marker(chk)},
         {"user": {"login": "bot"}, "body": outcome.render()},
+        {"user": {"login": "bot"}, "body": fix_marker},
     ]
     forge.find_issues_by_parent_metadata.return_value = []
     forge.list_sub_issues.return_value = []
@@ -787,9 +804,26 @@ def test_semantic_review_runner_wires_default_builder_and_restores_fix_writes(
     forge = MagicMock()
     forge.get_repository_slug.return_value = "owner/repo"
     forge.get_authenticated_user.return_value = "bot"
+    from orchestune.review.semantic_records import (
+        SemanticFixResultV1,
+        format_semantic_fix_result_marker,
+    )
+
+    fix_marker = format_semantic_fix_result_marker(
+        SemanticFixResultV1(
+            attempt_id="attempt-1230-1",
+            operation_id="attempt-1230-1-fix",
+            input_sha=base_sha,
+            output_sha=fix_head,
+            judgment_comment_id=1,
+            status="completed",
+        )
+    )
+
     forge.list_all_issue_comments.return_value = [
         {"user": {"login": "bot"}, "body": checkpoint_marker(chk)},
         {"user": {"login": "bot"}, "body": outcome.render()},
+        {"user": {"login": "bot"}, "body": fix_marker},
     ]
     forge.find_issues_by_parent_metadata.return_value = []
     forge.list_sub_issues.return_value = []
@@ -820,6 +854,7 @@ def test_semantic_review_runner_wires_default_builder_and_restores_fix_writes(
     state.attempt_id = "attempt-1230-1"
     state.operation_id = "attempt-1230-1-fix"
     state.fix_output_sha = fix_head
+    state.read_report_digest = None
     state.child_sources = (TaskIntegrationProof(10, "task-10", base_sha, base_sha),)
 
     read_ctx = runner._read_context.restore(state, fix_head)
@@ -830,3 +865,17 @@ def test_semantic_review_runner_wires_default_builder_and_restores_fix_writes(
     assert read_ctx.report.coverage == ReadCoverage.COMPLETE
     assert len(read_ctx.report.candidates) == 1
     assert read_ctx.report.candidates[0].identity.writer_issue_number == 1230
+
+    # Step.reserve() starts round 2: clears fix_output_sha and replaces operation_id
+    state.head_sha = fix_head
+    state.fix_output_sha = None
+    state.operation_id = "attempt-1230-2-review"
+
+    read_ctx2 = runner._read_context.restore(state, fix_head)
+    assert read_ctx2.required is True
+    assert read_ctx2.digest is not None
+    assert not read_ctx2.error
+    assert read_ctx2.report is not None
+    assert read_ctx2.report.coverage == ReadCoverage.COMPLETE
+    assert len(read_ctx2.report.candidates) == 1
+    assert read_ctx2.report.candidates[0].identity.writer_issue_number == 1230

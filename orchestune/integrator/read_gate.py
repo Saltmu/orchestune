@@ -58,6 +58,7 @@ from orchestune.read_dependencies.validation import (
 from orchestune.review.semantic_gate import (
     TERMINAL_PASSED_PHASES,
     SemanticReviewPhase,
+    parse_semantic_fix_result_marker,
     restore_latest_fix_result,
 )
 
@@ -222,14 +223,8 @@ def _read_paths(sources: list[ReaderSourceProof]) -> tuple[str, ...]:
 def _is_semantic_fix_head(
     ctx: Any, head: str, state: Any, identity: Any, attempt_id: str
 ) -> bool:
-    if state is not None:
-        if getattr(state, "fix_output_sha", None) == head:
-            return True
-        if (
-            getattr(state, "operation_id", None)
-            and getattr(state, "head_sha", None) != head
-        ):
-            return True
+    if state is not None and getattr(state, "fix_output_sha", None) == head:
+        return True
     pr = (
         getattr(identity, "pr_number", None)
         or getattr(state, "pr_number", None)
@@ -238,16 +233,26 @@ def _is_semantic_fix_head(
     if not pr:
         return False
     try:
-        comments = _trusted_comments(ctx, pr)
-        op = str(
-            getattr(identity, "operation_id", "") or getattr(state, "operation_id", "")
-        )
-        res = restore_latest_fix_result(
-            [c["body"] for c in comments], attempt_id=attempt_id, operation_id=op
-        )
-        return bool(res and res.status == "completed" and res.output_sha == head)
+        for c in reversed(_trusted_comments(ctx, pr)):
+            res = parse_semantic_fix_result_marker(c.get("body", ""))
+            if (
+                res is not None
+                and res.attempt_id == attempt_id
+                and res.status == "completed"
+                and res.output_sha
+            ):
+                if res.output_sha == head:
+                    return True
+                anc = run_git(
+                    ["merge-base", "--is-ancestor", res.output_sha, head],
+                    cwd=ctx.repository_root,
+                    check=False,
+                )
+                if anc.returncode == 0:
+                    return True
     except Exception:  # noqa: BLE001 - ignore comment extraction failures
         return False
+    return False
 
 
 def _semantic_fix_writer(
