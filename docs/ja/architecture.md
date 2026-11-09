@@ -252,7 +252,9 @@ record APIは外部I/Oを行わず、呼出側の成功確認済みの事実だ�
 
 表の `pkg.*` は、トップレベルパッケージ `pkg` のモジュールのうち、表のほかの項目で個別に書かれていないものすべて（パッケージ自身の `__init__` とサブパッケージを含む）を表し、`name` はそのモジュール1つを表します（パッケージ名だけの `name` はその `__init__` です）。`pkg.*` は、パッケージのモジュールが最も多く属する層の行に書き、ほかの層に属するモジュールだけをその層の行に個別に書きます。機能パッケージ（`claim`、`complete`、`dispatch` など）は、1つの機能の CLI（L4）・手順（L3）・処理本体（L2）・データ型（L0）をまとめたもので、中を層で分けるのは意図した構成です。
 
-`read_dependencies` の過半数は L0 です。`contracts` が共有 v1 型と判定関数を定義します。同パッケージの `codec`、`detection`、`validation`、`report_codec`、`snapshot_codec`、`git`、`storage`、および `claim.read_checkpoint`、`complete.read_evidence`、`integrator.read_context`、`integrator.read_gate`、`integrator.read_reports`、`integrator.read_publish`、`dispatch.semantic_review.read_context` は、責務と後続 Issue の owner を記した docstring だけの scaffold です。未実装の関数は置きません。Issue #1782 がこの注記を実装済みの構成へ置き換えます。
+read証跡は、claim時の開始点、`complete --read-evidence` の凍結済みOutcome、統合済みreader snapshotをつないで、記録済みの読み取り依存を親統合前に双方向で照合します。`read_dependencies.contracts` は共有v1型と純粋な判定規則を持ち、`codec` / `detection` / `validation` / `report_codec` / `snapshot_codec` はL0です。`read_dependencies.git` と `storage` はGit object・snapshotを扱うL1です。`claim.read_checkpoint`、`complete.read_evidence`、`integrator.read_context` / `read_gate` / `read_reports` / `read_publish`、`dispatch.semantic_review.read_context` はL2の既存claim・complete・第2層レビュー・統合処理に接続します。
+
+Integratorは新しいreaderの入力に対する順方向、同一試行内、親へ統合済みreaderに対する逆方向の候補を検出します。内容・pathの交差は `candidate_stale` であり、意味的な不整合を断定しません。候補時は既存の第2層レビューへreport digestと候補を渡し、headまたはreportが変われば再検証します。read証跡の欠落や部分coverageは `unknown` のままです。`stale-read-gate` の既定 `advisory` は表示のみ、`off` は検出を省略し、`required` は完全なcoverageと必要な第2層検証が揃うまで親更新を止めます。これは記録されたGit管理下のファイル依存だけを扱い、未観測のreadや意味的正しさまでは保証しません。[旧#490](https://github.com/Saltmu/orchestune/issues/490)は設計背景であり、tool-call telemetryやserializabilityを保証するものではありません。
 
 
 | 層 | 役割 | モジュール |

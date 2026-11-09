@@ -180,3 +180,13 @@ def test_local_ci_skill_migrates_preclaim_plan_into_task_worktree():
     assert "<planning-session-dir>" in instructions
     assert "worktree-local" in instructions
     assert "migrate" in instructions.lower()
+
+
+def test_workflow_skills_preserve_read_evidence_until_completion():
+    for skill in ("local-ci-developer", "workflow-template"):
+        root = REPOSITORY_ROOT / "skills" / skill
+        instructions = (root / "SKILL.md").read_text(encoding="utf-8")
+        review = (root / "references" / "review-loop.md").read_text(encoding="utf-8")
+        assert "read-evidence" in instructions
+        assert "read-evidence" in review
+        assert "reviewed HEAD" in review or "reviewed head" in review.lower()
