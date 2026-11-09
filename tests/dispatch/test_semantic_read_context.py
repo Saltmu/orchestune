@@ -21,6 +21,7 @@ from orchestune.read_dependencies.contracts import (
     ReaderInput,
     StaleReadGate,
     WriterChanges,
+    candidate_id,
     seal_report,
 )
 from orchestune.read_dependencies.detection import detect_stale_reads
@@ -481,7 +482,7 @@ def test_safe_reply_fallback_preserves_required_durable_context(monkeypatch):
     monkeypatch.setattr(evidence, "trigger_reply", lambda *_: "Review\n```unclosed")
     reply = evidence.safe_reply(ctx, state(), "codex")
     assert context.marker(state()) in reply
-    assert "orchestune-read-report:v1" in reply
+    assert "durable report chunk" in reply
     ctx.read_context = replace(context, durable=False)
     with pytest.raises(ReadContextError, match="durable"):
         evidence.safe_reply(ctx, state(), "codex")
@@ -501,6 +502,7 @@ def test_unavailable_coverage_builder_or_transport_is_never_a_required_pass():
         context.render(state())
     with pytest.raises(ReadContextError):
         reader.persist(context, 42)
+
     reader = SemanticReadContext(
         forge,
         "required",
@@ -532,3 +534,40 @@ def test_advisory_rendering_and_transport_failure_do_not_enforce_validation():
     assert off.render(state()) == ""
     with pytest.raises(ReadContextError, match="heads differ"):
         context.render(state(head_sha=FIXED))
+
+
+@pytest.mark.parametrize("compact", [True, False])
+def test_posted_compact_reference_does_not_poison_durable_report_restoration(
+    compact,
+):
+    forge, reader = stored()
+    current = state()
+    if not compact:
+        candidate = report().candidates[0]
+        identity = replace(
+            candidate.identity,
+            change=replace(
+                candidate.identity.change,
+                evidence_commits=tuple(f"{i:040x}" for i in range(1000)),
+            ),
+        )
+        large = seal_report(
+            replace(
+                report(),
+                candidates=(
+                    replace(
+                        candidate,
+                        identity=identity,
+                        candidate_id=candidate_id(identity),
+                    ),
+                ),
+                digest=None,
+            )
+        )
+        save_read_report(forge, 42, large, target_head_sha=large.candidate_head_sha)
+        current = state(read_report_digest=large.digest)
+    context = reader.persist(reader.restore(current), 42)
+    forge.create_issue_comment(42, context.render(current, compact=compact))
+    restored = reader.restore(current)
+    assert restored.digest == context.digest, restored.error
+    assert reader.persist(restored, 42).durable
