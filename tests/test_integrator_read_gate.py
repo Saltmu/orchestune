@@ -879,3 +879,211 @@ def test_semantic_review_runner_wires_default_builder_and_restores_fix_writes(
     assert read_ctx2.report.coverage == ReadCoverage.COMPLETE
     assert len(read_ctx2.report.candidates) == 1
     assert read_ctx2.report.candidates[0].identity.writer_issue_number == 1230
+
+
+def test_historical_fix_provenance_retained_across_integration_attempts(
+    tmp_path: Path,
+):
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from orchestune.claim.read_checkpoint import checkpoint_marker
+    from orchestune.infra.git_cli import run_git
+    from orchestune.integrator.finalization import (
+        render_integration_receipt,
+    )
+    from orchestune.integrator.proofs import TaskIntegrationProof
+    from orchestune.integrator.read_gate import build_integration_read_report
+    from orchestune.outcome_record import OutcomeRecord, ReviewSummary
+    from orchestune.read_dependencies.contracts import (
+        CheckpointAvailability,
+        ReadCheckpointV1,
+        ReadCoverage,
+        ReadEvidenceV1,
+        ReadSource,
+        seal_evidence,
+    )
+    from orchestune.review.semantic_records import (
+        SemanticFixResultV1,
+        format_semantic_fix_result_marker,
+    )
+    from tests.read_dependency_test_support import observation
+
+    repo = tmp_path / "repo"
+    run_git(["init", "-b", "main", str(repo)], cwd=tmp_path)
+    run_git(["config", "user.name", "Tester"], cwd=repo)
+    run_git(["config", "user.email", "tester@example.com"], cwd=repo)
+
+    (repo / "file.txt").write_text("initial\n")
+    run_git(["add", "."], cwd=repo)
+    run_git(["commit", "-m", "initial base"], cwd=repo)
+    base_sha = run_git(["rev-parse", "HEAD"], cwd=repo).stdout.strip()
+
+    # Semantic fix from attempt 1 modifies file.txt
+    (repo / "file.txt").write_text("fixed by attempt 1\n")
+    run_git(["commit", "-am", "fix commit"], cwd=repo)
+    fix_head = run_git(["rev-parse", "HEAD"], cwd=repo).stdout.strip()
+
+    # Child 2 commit on top of fix_head
+    (repo / "other.txt").write_text("child 2 work\n")
+    run_git(["add", "."], cwd=repo)
+    run_git(["commit", "-m", "child 2 commit"], cwd=repo)
+    child2_head = run_git(["rev-parse", "HEAD"], cwd=repo).stdout.strip()
+
+    # Historical child 1 recorded a read on file.txt at snapshot base_sha
+    ev1 = seal_evidence(
+        ReadEvidenceV1(
+            repository="owner/repo",
+            issue_number=10,
+            claim_id="claim-10",
+            input_base_sha=base_sha,
+            head_sha=base_sha,
+            declared_reads=("file.txt",),
+            observations=(observation("file.txt", "deadbeef" * 5, snapshot=base_sha),),
+            source=ReadSource.ADAPTER_OBSERVED,
+            coverage=ReadCoverage.COMPLETE,
+        )
+    )
+    outcome1 = OutcomeRecord(
+        result="done",
+        issue=10,
+        claim_id="claim-10",
+        completion_id="comp-10",
+        head_sha=base_sha,
+        review=ReviewSummary(reviewed_head_sha=base_sha),
+        read_evidence=ev1,
+    )
+    chk1 = ReadCheckpointV1(
+        repository="owner/repo",
+        issue_number=10,
+        claim_id="claim-10",
+        availability=CheckpointAvailability.RECORDED,
+        input_base_sha=base_sha,
+    )
+
+    proof1 = TaskIntegrationProof(10, "task-10", "branch-10", base_sha)
+    receipt1_body = render_integration_receipt(
+        proof1,
+        "parent/issue-1230",
+        integration_pr_number=1800,
+        notice_base_branch="parent/issue-1230",
+    )
+
+    # Historical PR 1800 contains the fix result marker
+    fix_marker = format_semantic_fix_result_marker(
+        SemanticFixResultV1(
+            attempt_id="attempt-1230-1",
+            operation_id="attempt-1230-1-fix",
+            input_sha=base_sha,
+            output_sha=fix_head,
+            judgment_comment_id=1,
+            status="completed",
+        )
+    )
+
+    # Current child 2
+    ev2 = seal_evidence(
+        ReadEvidenceV1(
+            repository="owner/repo",
+            issue_number=20,
+            claim_id="claim-20",
+            input_base_sha=fix_head,
+            head_sha=child2_head,
+            declared_reads=("other.txt",),
+            observations=(observation("other.txt", "cafebeef" * 5, snapshot=fix_head),),
+            source=ReadSource.ADAPTER_OBSERVED,
+            coverage=ReadCoverage.COMPLETE,
+        )
+    )
+    outcome2 = OutcomeRecord(
+        result="done",
+        issue=20,
+        claim_id="claim-20",
+        completion_id="comp-20",
+        head_sha=child2_head,
+        review=ReviewSummary(reviewed_head_sha=child2_head),
+        read_evidence=ev2,
+    )
+    chk2 = ReadCheckpointV1(
+        repository="owner/repo",
+        issue_number=20,
+        claim_id="claim-20",
+        availability=CheckpointAvailability.RECORDED,
+        input_base_sha=fix_head,
+    )
+
+    forge = MagicMock()
+    forge.get_repository_slug.return_value = "owner/repo"
+    forge.get_authenticated_user.return_value = "bot"
+
+    def mock_list_comments(number: int):
+        if number == 10:
+            return [
+                {
+                    "user": {"login": "bot"},
+                    "author": "bot",
+                    "body": checkpoint_marker(chk1),
+                },
+                {"user": {"login": "bot"}, "author": "bot", "body": outcome1.render()},
+                {"user": {"login": "bot"}, "author": "bot", "body": receipt1_body},
+            ]
+        if number == 20:
+            return [
+                {
+                    "user": {"login": "bot"},
+                    "author": "bot",
+                    "body": checkpoint_marker(chk2),
+                },
+                {"user": {"login": "bot"}, "author": "bot", "body": outcome2.render()},
+            ]
+        if number == 1800:
+            return [
+                {"user": {"login": "bot"}, "author": "bot", "body": fix_marker},
+            ]
+        return []
+
+    forge.list_all_issue_comments.side_effect = mock_list_comments
+
+    issue10 = MagicMock()
+    issue10.number = 10
+    issue10.state = "closed"
+    issue10.labels = []
+    issue10.parent = {"number": 1230}
+    issue10.body = "```yaml\nsubtask_id: task-10\nparent_issue_number: 1230\n```"
+
+    issue20 = MagicMock()
+    issue20.number = 20
+    issue20.state = "open"
+    issue20.labels = []
+    issue20.parent = {"number": 1230}
+    issue20.body = "```yaml\nsubtask_id: task-20\nparent_issue_number: 1230\n```"
+
+    forge.find_issues_by_parent_metadata.return_value = [issue10, issue20]
+    forge.list_sub_issues.return_value = []
+
+    identity = SimpleNamespace(
+        parent_issue_number=1230,
+        base_sha=fix_head,
+        attempt_id="attempt-1230-2",
+        child_sources=(TaskIntegrationProof(20, "task-20", "branch-20", child2_head),),
+        pr_number=1815,
+        operation_id="attempt-1230-2-review",
+    )
+
+    ctx = SimpleNamespace(
+        forge=forge,
+        repository_root=repo,
+        attempt_identity=identity,
+        semantic_review_state=None,
+        integration_pr_number=1815,
+    )
+
+    report = build_integration_read_report(ctx, child2_head)
+    assert report.coverage == ReadCoverage.COMPLETE
+    assert not report.unknowns
+    # Historical reader Child 1's read on file.txt was modified by attempt 1 fix
+    candidates = [
+        c for c in report.candidates if c.identity.writer_issue_number == 1230
+    ]
+    assert len(candidates) == 1
+    assert candidates[0].identity.writer_claim_id == "attempt-1230-1"

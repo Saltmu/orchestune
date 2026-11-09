@@ -57,6 +57,7 @@ from orchestune.read_dependencies.validation import (
 )
 from orchestune.review.semantic_gate import (
     TERMINAL_PASSED_PHASES,
+    SemanticFixResultV1,
     SemanticReviewPhase,
     parse_semantic_fix_result_marker,
     restore_latest_fix_result,
@@ -155,6 +156,7 @@ def _historical_sources(ctx: Any) -> list[TaskIntegrationProof]:
     issues.update({i.number: i for i in ctx.forge.list_sub_issues(parent)})
     incoming = {c.issue_number for c in ctx.attempt_identity.child_sources}
     proofs = []
+    historical_prs: set[int] = set()
     for issue in issues.values():
         if issue.number in incoming:
             continue
@@ -171,6 +173,9 @@ def _historical_sources(ctx: Any) -> list[TaskIntegrationProof]:
                 raise ValueError("included reader lacks a receipt")
             continue
         proof = lookup.receipt.proof
+        pr_num = getattr(lookup.receipt, "integration_pr_number", None)
+        if isinstance(pr_num, int) and not isinstance(pr_num, bool):
+            historical_prs.add(pr_num)
         ancestor = run_git(
             [
                 "merge-base",
@@ -184,6 +189,7 @@ def _historical_sources(ctx: Any) -> list[TaskIntegrationProof]:
         if ancestor.returncode:
             raise ValueError("historical reader is not integrated at P")
         proofs.append(proof)
+    ctx.historical_pr_numbers = historical_prs
     return proofs
 
 
@@ -275,11 +281,77 @@ def _semantic_fix_writer(
     return None
 
 
+def _trusted_fix_results(
+    ctx: Any, candidate_numbers: set[int]
+) -> list[SemanticFixResultV1]:
+    results = []
+    for num in candidate_numbers:
+        try:
+            for c in _trusted_comments(ctx, num):
+                res = parse_semantic_fix_result_marker(c.get("body", ""))
+                if res is not None and res.status == "completed" and res.output_sha:
+                    results.append(res)
+        except Exception:  # noqa: BLE001 - ignore comment extraction failures
+            continue
+    return results
+
+
+def _semantic_fix_writers(
+    ctx: Any, head: str, paths: tuple[str, ...]
+) -> list[WriterChanges]:
+    identity = getattr(ctx, "attempt_identity", None)
+    if identity is None:
+        return []
+    parent = getattr(identity, "parent_issue_number", None)
+    if not isinstance(parent, int) or isinstance(parent, bool):
+        return []
+    state = getattr(ctx, "semantic_review_state", None)
+    candidate_numbers: set[int] = set(getattr(ctx, "historical_pr_numbers", ()))
+    for num in (
+        getattr(identity, "pr_number", None),
+        getattr(state, "pr_number", None),
+        getattr(ctx, "integration_pr_number", None),
+        parent,
+    ):
+        if isinstance(num, int) and not isinstance(num, bool):
+            candidate_numbers.add(num)
+    writers: list[WriterChanges] = []
+    seen: set[str] = set()
+    for res in _trusted_fix_results(ctx, candidate_numbers):
+        if not res.output_sha or res.output_sha in seen:
+            continue
+        out_sha = res.output_sha
+        seen.add(out_sha)
+        is_anc = out_sha == head
+        if not is_anc:
+            anc = run_git(
+                ["merge-base", "--is-ancestor", out_sha, head],
+                cwd=ctx.repository_root,
+                check=False,
+            )
+            is_anc = anc.returncode == 0
+        if is_anc:
+            changes = observe_changed_resources(
+                res.input_sha, out_sha, paths, cwd=ctx.repository_root
+            )
+            if changes:
+                writers.append(
+                    WriterChanges(
+                        issue_number=parent,
+                        claim_id=res.attempt_id,
+                        changes=changes,
+                    )
+                )
+    return writers
+
+
 def _writers(
     ctx: Any, sources: list[ReaderSourceProof], head: str
 ) -> tuple[WriterChanges, ...]:
     paths = _read_paths(sources)
-    known = _known_writers(ctx, sources, paths)
+    known = _known_writers(ctx, sources, paths) + _semantic_fix_writers(
+        ctx, head, paths
+    )
     writers: list[WriterChanges] = []
     bases = {ctx.attempt_identity.base_sha}
     for s in sources:
