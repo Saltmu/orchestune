@@ -181,6 +181,7 @@ def _identity(value: object) -> CandidateIdentity:
 
 def _candidate(value: object) -> StaleCandidate:
     data = _object(value, "candidate")
+    _keys(data, {"identity", "candidate_id"}, "candidate")
     return _construct(
         StaleCandidate,
         data,
@@ -191,6 +192,7 @@ def _candidate(value: object) -> StaleCandidate:
 
 def _exclusion(value: object) -> StaleExclusion:
     data = _object(value, "exclusion")
+    _keys(data, {"identity", "reason", "detail"}, "exclusion")
     return _construct(
         StaleExclusion,
         data,

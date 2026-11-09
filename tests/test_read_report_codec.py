@@ -155,3 +155,15 @@ def test_report_codec_normalizes_digest_and_rejects_invalid_json_types() -> None
     assert sealed.digest == report_digest(sealed)
     with pytest.raises(ValueError):
         parse_report("[]")
+
+
+def test_candidate_or_exclusion_missing_identity_raises_value_error() -> None:
+    payload = json.loads(serialize_report(sample_report()))
+    payload["candidates"] = [{"candidate_id": "abc"}]
+    with pytest.raises(ValueError, match="candidate has invalid fields"):
+        parse_report(json.dumps(payload))
+
+    payload = json.loads(serialize_report(sample_report()))
+    payload["exclusions"] = [{"reason": "unrelated", "detail": "test"}]
+    with pytest.raises(ValueError, match="exclusion has invalid fields"):
+        parse_report(json.dumps(payload))

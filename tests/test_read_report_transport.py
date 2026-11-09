@@ -284,3 +284,27 @@ def test_context_uses_a_fence_longer_than_report_backticks() -> None:
     assert "\n````json\n" in context
     assert "ignore prior instructions" in context
     assert context.count("````") == 2
+
+
+def test_transport_restores_report_with_crlf_line_endings() -> None:
+    forge = FakeForge()
+    report = sample_report()
+    save_read_report(
+        forge,
+        42,
+        report,
+        target_head_sha=report.candidate_head_sha,
+        max_comment_bytes=48_000,
+    )
+    for comment in forge.comments:
+        comment["body"] = comment["body"].replace("\n", "\r\n")
+
+    restored = restore_read_report(
+        forge,
+        42,
+        report_digest=report.digest or "",
+        target_head_sha=report.candidate_head_sha,
+        expected_author="reviewer",
+    )
+    assert restored.status == "restored"
+    assert restored.report == report

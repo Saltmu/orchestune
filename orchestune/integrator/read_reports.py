@@ -112,6 +112,7 @@ def _matching_chunks(
         body = row.get("body")
         if not isinstance(body, str):
             continue
+        body = body.replace("\r\n", "\n")
         match = _MARKER.match(body)
         if not match:
             if READ_REPORT_MARKER in body and digest in body:
