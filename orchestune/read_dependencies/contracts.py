@@ -515,6 +515,7 @@ class ReaderInput:
     identity: ReaderIdentity
     evidence: ReadEvidenceV1 | None
     validations: tuple[ValidationCheckpoint, ...] = ()
+    integrated: bool = False
 
     def __post_init__(self) -> None:
         if self.evidence is None:
