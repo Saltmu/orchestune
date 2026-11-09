@@ -76,6 +76,7 @@ Check `orchestune workflow --help` and use `workflow next` and `workflow check` 
 ### Completion commands
 Use `orchestune complete` for every outcome. It creates or reuses the canonical
 Outcome Record in Issue comments; do not compose JSON or post the Outcome Record to PR comments (the `review-reply.md` PR comment of Step 11 is separate and still required).
+For a claimed task under a parent using the stale-read gate, start from the claim's recorded `input_base_sha`, record declared and observed reads as work proceeds, and keep the evidence artifact with the task session. Submit it with `--read-evidence <session-dir>/read-evidence.json` on the `done` command below. It is bound to the reviewed HEAD and immutable completion request; if a fix advances HEAD, collect applicable reads for the new work and rerun CI and review before completing. An old completion replay cannot acquire or attach new evidence.
 Replace placeholders with the task Issue number, PR number, or concrete reason:
 
 ```bash
@@ -84,7 +85,6 @@ orchestune complete --issue <N> --result not-needed
 
 # Claude/Codex require the current-round judgment table; skip requires its PR marker (skipped, not pass).
 orchestune complete --issue <N> --pr <PR> --result done --reviewer <claude|codex|skip> --review-reply <session-dir>/review-reply.md
-
 # Claimed task: run from its worktree when work cannot continue.
 orchestune complete --issue <N> --result blocked --reason <REASON>
 ```

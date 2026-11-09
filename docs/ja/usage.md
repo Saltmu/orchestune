@@ -491,6 +491,7 @@ else { Write-Warning 'report not created' }
 - **プロファイルとモデルランクを併用していた場合:** 他タスクの設定を変えないよう既存プロファイルを複製し、専用プロファイルを作ります。各ターゲットで `model` だけを以前のランクに対応するモデルへ置き換え、既存の `reasoning_effort` はそのまま維持します。タスクの `execution_profile` に新しいプロファイルを指定します。
 
 dry-run dispatchを使って各ターゲットの解決結果を確認します。たとえば `orchestune-dispatch -p <N> --no-apply --dispatch-target claude-cli` を実行し、その実行で保存された `result.json` の `execution_selections` を開きます。対象タスクの `profile`、`model`、`reasoning_effort` を確認し、計画で使う各ターゲットについて繰り返します。
+`Luna`の高推論やGemini Flashの`HIGH`を意図する場合も、対象ターゲットごとの実効 `model` / `reasoning_effort` をdispatch結果で確認してください。`agy-cli`のプロファイルに `reasoning_effort = "high"` を記載しただけでは、Flashの`HIGH`が有効になったことの確認にはなりません。
 
 #### 設定ファイル項目一覧
 
@@ -501,6 +502,7 @@ dry-run dispatchを使って各ターゲットの解決結果を確認します�
 | `child-review-gate` | `"required"` | 子タスクのレビュー合格証跡（`verdict=pass`、SHA一致）を検証するゲート（`"required"`, `"off"`）。`"off"`で検証をスキップし警告を出力。 |
 | `final-acceptance-review` | `"advisory"` | 最終PR/headごとに、そのheadのCI完了後に1件依頼。`"off"` で無効。CLI > TOML > `ORCHESTUNE_FINAL_ACCEPTANCE_REVIEW` > 既定。 |
 | `semantic-review-mode` | `"required"` | 統合PRの第2層セマンティックレビューモード（`"required"`, `"advisory"`, `"off"`）。既定値は`"required"`。 |
+| `stale-read-gate` | `"advisory"` | 記録済みreadと統合変更の照合モード（`"advisory"`, `"required"`, `"off"`）。`required` は第2層レビューがrequiredかつ有効な場合だけ設定可能。 |
 | `force-integration-review` | `false` | 単一タスクFast-Pathをバイパスし、子タスク1件の場合でも統合PRセマンティックレビュー（第2層）を強制実行するかどうか。 |
 | `semantic-review-provider` | `"auto"` | 第2層セマンティックレビューのレビュアープロバイダ（`"auto"`, `"claude"`, `"codex"`）。 |
 | `semantic-fix-provider` | `"auto"` | 第2層セマンティック修正のプロバイダ（`"auto"` または設定されたディスパッチターゲット）。 |
@@ -764,6 +766,49 @@ Orchestuneでは、子タスクから親ブランチ（`parent/issue-{N}`）へ�
 - **第2層（統合PRセマンティックレビューゲート）**: 複数タスクの統合PRに対し、結合特化のセマンティックレビュー・修正ループ（レビュー収集 → 判断兼修正ジョブ → claim付き昇格 → ローカルCI → 再レビュー）を実行します（既定: `required`）。子タスクが1件のみで第1層を通過している場合は、単一タスクFast-Path（`fast_path_passed`）により第2層レビューをバイパスして即時統合されます（`--force-integration-review` で強制可能）。詳細なアーキテクチャは [architecture/integration.md](architecture/integration.md) を参照してください。
   > [!NOTE]
   > `semantic_review_mode = "required"` のもとでは、Integratorの第2層ゲート検証はディスパッチターゲット種別（クラウド／ローカル）や旧環境フラグによらず常に有効です。第2層レビューの実行（ループ進行）はRunnerが担当し、第2層が完了（`passed` または `skipped_by_human`）するまでIntegratorによる親ブランチ確定は保留されます。
+
+**陳腐化readゲート (`stale-read-gate`)**
+
+このゲートは同じ親Issue配下のタスクについて、完了時に固定したread証跡と親の変更を順方向・同一試行内・逆方向に照合します。`candidate_stale` はpathと内容が交差する候補で、意味的な不整合の断定ではありません。候補は既存の第2層レビューへ渡します。`advisory`（既定）は候補・coverage不足・縮退理由を報告するだけです。`off` は検出を省略します。`required` は `semantic-review-mode = "required"` かつレビュー有効時だけ許可され、unknownやpartial coverageでは親更新を止め、候補の全件が同じheadとreport digestに束縛された検証で判断されるまで進みません。read証跡はCI・子PRレビュー・第2層レビューの代わりにはなりません。
+
+#### read証跡の提出
+
+タスク開始時に保存された `orchestune-read-checkpoint` の `input_base_sha` を使い、完了するレビュー済みHEADについてJSON artifactを作ります。判定対象readは `declared_reads` と `observations` の和集合です。`--read-evidence` は `done` にだけ指定でき、repository・Issue・claim・checkpoint・snapshot object・`head_sha` が現在のclaimとレビュー済みHEADに一致しなければ完了は拒否されます。`source` が `adapter_observed` はツールで観測したread、`agent_reported` は自己申告、`declared_only` は宣言だけ、`unavailable` は観測不能を表します。これらを同じ保証として扱わず、観測漏れや未追跡ファイルのreadがあり得る場合は `coverage` を `partial` / `unavailable` にします。
+
+```json
+{
+  "schema": "read-evidence-v1",
+  "version": 1,
+  "repository": "owner/repo",
+  "issue_number": 123,
+  "claim_id": "claim-abc123",
+  "input_base_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "declared_reads": ["src/registry.py"],
+  "observations": [
+    {
+      "path": "src/registry.py",
+      "snapshot_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "presence": "present",
+      "blob_oid": "cccccccccccccccccccccccccccccccccccccccc",
+      "file_mode": "100644",
+      "source": "adapter_observed"
+    }
+  ],
+  "source": "adapter_observed",
+  "coverage": "complete"
+}
+```
+
+`digest` は省略可能で、CLIがpayloadから計算します。含める場合は正規化済みpayloadのSHA-256と一致する必要があります。提出例:
+
+```bash
+orchestune complete --issue 123 --pr 456 --result done --reviewer codex \
+  --review-reply .orchestune/tmp/task-123/review-reply.md \
+  --read-evidence .orchestune/tmp/task-123/read-evidence.json
+```
+
+rebaseやpushでHEADが変わった後は、古い証跡を付け替えず、新しいHEADをレビューし、そのHEADに対応するread証跡を再生成してください。`unknown` になった場合は、checkpoint、Issue Outcome、snapshotとGit objectの対応を調べます。既存parentへrequiredを導入する際は統合済み子のreceipt・Outcomeからsnapshotを復元できることを先に確認します。不足が残る場合は不足を解消するまで `advisory` のままにし、`unknown` をreadなしとみなしてはいけません。
 
 **人間による2段階のスキップ方法**
 

@@ -56,6 +56,16 @@ cp orchestune.toml.example orchestune.toml
 ci-command = "make ci"
 ```
 
+### Stale-Read Gate
+
+`stale-read-gate` compares Git-tracked file reads recorded at task completion with changes made during integration. The default, `advisory`, reports candidates, coverage gaps, and degraded conditions without changing integration requirements. `off` skips detection. `required` is valid only when `semantic-review-mode = "required"` and Layer-2 review is enabled; an unknown input, incomplete coverage, or unresolved candidate prevents the parent branch from updating.
+
+```toml
+stale-read-gate = "advisory" # advisory / required / off
+```
+
+New parents record claim checkpoints and reader snapshots. Before switching an existing parent to `required`, verify that its snapshot can be rebuilt from integration receipts and Outcomes for previously integrated children. Missing history remains `unknown`; it is never treated as an empty read set. See [Usage §4.5](usage.md#45-child-review-evidence-gate-and-layer-2-semantic-review-gate) for the operating procedure and `complete --read-evidence` JSON format. Read evidence does not replace CI, child-PR review, or Layer-2 review.
+
 ---
 
 ## 1. Installation

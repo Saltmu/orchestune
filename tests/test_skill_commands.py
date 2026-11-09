@@ -1363,3 +1363,14 @@ def test_review_loop_wait_process_guidance_and_anti_patterns(skill_name: str):
     # シェル PID 扱い時の wait "$PID" と kill -0 の限界（生存確認にすぎず完了証明にならない）
     assert '`wait "$PID"`' in loop
     assert "`kill -0`" in loop
+
+
+@pytest.mark.parametrize("skill_name", ["local-ci-developer", "workflow-template"])
+def test_read_evidence_completion_command_is_documented(skill_name):
+    skill = SKILLS_ROOT / skill_name
+    combined = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in [skill / "SKILL.md", *sorted((skill / "references").glob("*.md"))]
+    )
+    assert "orchestune complete" in combined and "--read-evidence" in combined
+    assert "reviewed HEAD" in combined or "reviewed head" in combined.lower()

@@ -56,6 +56,16 @@ cp orchestune.toml.example orchestune.toml
 ci-command = "make ci"
 ```
 
+### 陳腐化読み取りゲート
+
+`stale-read-gate` は同じ親Issue配下のタスク間で、完了時に記録されたGit管理ファイルのreadと統合時の変更を照合します。既定値 `advisory` は候補・coverage不足・縮退理由を表示しますが、統合条件は変えません。`off` は検出を省略します。`required` は `semantic-review-mode = "required"` かつ第2層レビューが有効な場合だけ設定でき、入力不明またはcoverage不足、候補の判断未完了では親ブランチを更新しません。
+
+```toml
+stale-read-gate = "advisory" # advisory / required / off
+```
+
+新しい親ではclaim checkpointとreader snapshotを作成します。既存の親でrequiredへ移行する前に、過去に統合した子のreceiptとOutcomeからreader snapshotを復元できることを確認してください。復元できない履歴は空のread集合とみなさず `unknown` になります。運用手順と `complete --read-evidence` のJSON形式は[使い方 §4.5](usage.md#45-子レビュー証跡ゲートと第2層セマンティックレビューゲート)を参照してください。read証跡はCIや子PRレビュー、第2層レビューの代替ではありません。
+
 ---
 
 ## 1. インストール方法
