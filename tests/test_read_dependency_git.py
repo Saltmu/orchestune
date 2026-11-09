@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import subprocess
 from pathlib import Path
 
@@ -32,8 +31,16 @@ def _git(repo: Path, *args: str) -> str:
     ).stdout.strip()
 
 
-def _commit(repo: Path, message: str) -> str:
+def _commit(
+    repo: Path,
+    message: str,
+    *,
+    chmod: tuple[str, str] | None = None,
+) -> str:
     _git(repo, "add", "--all")
+    if chmod is not None:
+        flag, path = chmod
+        _git(repo, "update-index", f"--chmod={flag}", path)
     _git(repo, "commit", "-m", message)
     return _git(repo, "rev-parse", "HEAD")
 
@@ -45,23 +52,22 @@ def repository(tmp_path: Path) -> tuple[Path, str, str]:
     _git(repo, "init", "--quiet")
     _git(repo, "config", "user.name", "Test")
     _git(repo, "config", "user.email", "test@example.invalid")
+    _git(repo, "config", "core.filemode", "false")
 
     (repo / "rename source.txt").write_text("stable rename content\n")
     (repo / "changed.txt").write_text("before\n")
     (repo / "deleted.txt").write_text("remove me\n")
     (repo / "mode.sh").write_text("#!/bin/sh\nexit 0\n")
     (repo / "same.txt").write_text("unchanged\n")
-    os.chmod(repo / "mode.sh", 0o644)
-    old_sha = _commit(repo, "base")
+    old_sha = _commit(repo, "base", chmod=("-x", "mode.sh"))
 
     _git(repo, "mv", "rename source.txt", "renamed target.txt")
     (repo / "changed.txt").write_text("after\n")
     (repo / "deleted.txt").unlink()
     (repo / "added.txt").write_text("new file\n")
     (repo / "line break.txt").write_text("NUL-delimited path\n")
-    os.chmod(repo / "mode.sh", 0o755)
     (repo / "link").symlink_to("added.txt")
-    new_sha = _commit(repo, "changes")
+    new_sha = _commit(repo, "changes", chmod=("+x", "mode.sh"))
     return repo, old_sha, new_sha
 
 
