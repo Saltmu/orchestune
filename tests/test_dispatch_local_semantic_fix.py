@@ -5,14 +5,27 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+from orchestune.dispatch import local_semantic_fix
 from orchestune.dispatch.gc.git import WorktreeRemovalEvaluation
 from orchestune.dispatch.local_semantic_fix import (
     build_local_semantic_fix_cmd,
     cleanup_semantic_fix_worktree,
     create_semantic_fix_worktree,
+    launch_local_semantic_fix,
 )
-from orchestune.dispatch.targets import LocalProcessDispatchTarget
+from orchestune.dispatch.targets import (
+    LocalProcessDispatchTarget,
+    TargetBuildConfig,
+    _default_local_cmd_template,
+    build_dispatch_target,
+)
+from orchestune.infra.detached_process import DetachedProcess
 from orchestune.targets.contracts import DispatchHandle
+
+_BUILTIN_CLI_TARGETS = ("claude-cli", "codex-cli", "agy-cli", "grok-cli")
+_DISPATCH_ISSUE_TEXT = "GitHub Issue #{issue_number}"
 
 
 class TestBuildLocalSemanticFixCmd:
@@ -230,3 +243,172 @@ class TestLocalProcessDispatchTargetLaunchSemanticFix:
                 tmp_path / "worktrees" / "semantic-fix-op-err",
                 repo_root=tmp_path / "repo",
             )
+
+
+def _record_start(calls: list[tuple[list[str], Path]]):
+    def start(cmd: list[str], *, cwd: Path, log_path: Path) -> DetachedProcess:
+        calls.append((list(cmd), Path(cwd)))
+        return DetachedProcess(pid=11, log_path=Path(log_path), log_offset=0)
+
+    return start
+
+
+class TestBuiltinPresetSemanticFixLaunch:
+    @pytest.mark.parametrize("target_name", _BUILTIN_CLI_TARGETS)
+    def test_omitted_local_cmd_launches_fix_argv(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target_name: str
+    ) -> None:
+        built = build_dispatch_target(
+            TargetBuildConfig(
+                target_name,
+                None,
+                None,
+                tmp_path / "logs",
+                allow_unsafe_agent_execution=True,
+            )
+        )
+        assert isinstance(built, LocalProcessDispatchTarget)
+        target = built
+        calls: list[tuple[list[str], Path]] = []
+        worktree = tmp_path / "detached"
+        monkeypatch.setattr(
+            LocalProcessDispatchTarget,
+            "start_process",
+            property(lambda self: _record_start(calls)),
+        )
+        monkeypatch.setattr(
+            local_semantic_fix,
+            "create_semantic_fix_worktree",
+            lambda **kwargs: worktree,
+        )
+        handle = target.launch_semantic_fix(
+            operation_id="op-preset",
+            prompt="fix prompt",
+            expected_head_sha="a" * 40,
+            worktree_root=tmp_path / "worktrees",
+            repo_root=tmp_path / "repo",
+        )
+        expected = build_local_semantic_fix_cmd(target_name, prompt="fix prompt")
+        assert handle is not None
+        assert calls == [(expected, worktree)]
+        assert all(_DISPATCH_ISSUE_TEXT not in arg for arg in calls[0][0])
+
+    @pytest.mark.parametrize("target_name", _BUILTIN_CLI_TARGETS)
+    def test_user_local_cmd_does_not_start(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target_name: str
+    ) -> None:
+        built = build_dispatch_target(
+            TargetBuildConfig(
+                target_name,
+                None,
+                None,
+                tmp_path / "logs",
+                local_cmd="custom runner",
+                allow_unsafe_agent_execution=True,
+            )
+        )
+        assert isinstance(built, LocalProcessDispatchTarget)
+        target = built
+        calls: list[tuple[list[str], Path]] = []
+        monkeypatch.setattr(
+            LocalProcessDispatchTarget,
+            "start_process",
+            property(lambda self: _record_start(calls)),
+        )
+        handle = target.launch_semantic_fix(
+            operation_id="op-custom",
+            prompt="fix prompt",
+            expected_head_sha="c" * 40,
+        )
+        assert handle is None
+        assert calls == []
+
+    def test_none_reviewer_preset_template_launches(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        target = LocalProcessDispatchTarget(
+            log_dir=tmp_path / "logs",
+            target_name="claude-cli",
+            reviewer_bot=None,
+            local_cmd=_default_local_cmd_template("claude-cli", None),
+        )
+        calls: list[tuple[list[str], Path]] = []
+        worktree = tmp_path / "detached"
+        monkeypatch.setattr(
+            LocalProcessDispatchTarget,
+            "start_process",
+            property(lambda self: _record_start(calls)),
+        )
+        monkeypatch.setattr(
+            local_semantic_fix,
+            "create_semantic_fix_worktree",
+            lambda **kwargs: worktree,
+        )
+        handle = target.launch_semantic_fix(
+            operation_id="op-none-reviewer",
+            prompt="fix prompt",
+            expected_head_sha="d" * 40,
+        )
+        expected = build_local_semantic_fix_cmd("claude-cli", prompt="fix prompt")
+        assert handle is not None
+        assert calls == [(expected, worktree)]
+
+    def test_other_reviewer_template_returns_none(self, tmp_path: Path) -> None:
+        target = LocalProcessDispatchTarget(
+            log_dir=tmp_path / "logs",
+            target_name="claude-cli",
+            reviewer_bot="claude",
+            local_cmd=_default_local_cmd_template("claude-cli", None),
+        )
+        handle = target.launch_semantic_fix(
+            operation_id="op-mismatch",
+            prompt="fix prompt",
+            expected_head_sha="e" * 40,
+        )
+        assert handle is None
+
+    def test_preset_start_failure_cleans_up_worktree(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        built = build_dispatch_target(
+            TargetBuildConfig(
+                "claude-cli",
+                None,
+                None,
+                tmp_path / "logs",
+                allow_unsafe_agent_execution=True,
+            )
+        )
+        assert isinstance(built, LocalProcessDispatchTarget)
+        target = built
+        worktree = tmp_path / "worktrees" / "semantic-fix-op-preset-err"
+
+        def fail_start(cmd: list[str], *, cwd: Path, log_path: Path) -> DetachedProcess:
+            raise OSError("executable not found")
+
+        monkeypatch.setattr(
+            LocalProcessDispatchTarget,
+            "start_process",
+            property(lambda self: fail_start),
+        )
+        monkeypatch.setattr(
+            local_semantic_fix,
+            "create_semantic_fix_worktree",
+            lambda **kwargs: worktree,
+        )
+        cleanup = MagicMock()
+        monkeypatch.setattr(
+            local_semantic_fix,
+            "cleanup_semantic_fix_worktree",
+            cleanup,
+        )
+        with pytest.raises(OSError, match="executable not found"):
+            launch_local_semantic_fix(
+                target=target,
+                operation_id="op-preset-err",
+                prompt="fix prompt",
+                expected_head_sha="b" * 40,
+                repo_root=tmp_path / "repo",
+                worktree_root=tmp_path / "worktrees",
+            )
+        cleanup.assert_called_once_with(worktree, repo_root=tmp_path / "repo")

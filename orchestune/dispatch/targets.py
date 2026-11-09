@@ -273,6 +273,23 @@ class LocalProcessDispatchTarget(LocalUsageProvider, DispatchTarget):
         return self._local_cmd
 
     @property
+    def semantic_fix_custom_local_cmd(self) -> str | None:
+        """Return a user command, or None when this target uses a built-in preset."""
+        local_cmd = self._local_cmd
+        target_name = self.target_name
+        if (
+            isinstance(target_name, str)
+            and target_name in _LOCAL_CMD_BASE_BY_TARGET
+            and (
+                local_cmd is None
+                or local_cmd
+                == _default_local_cmd_template(target_name, self._reviewer_bot)
+            )
+        ):
+            return None
+        return local_cmd
+
+    @property
     def start_process(self) -> DetachedProcessStarter:
         return self._start_process
 

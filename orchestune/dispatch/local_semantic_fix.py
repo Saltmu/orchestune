@@ -22,6 +22,9 @@ class LocalSemanticFixTarget(Protocol):
     def local_cmd(self) -> str | None: ...
 
     @property
+    def semantic_fix_custom_local_cmd(self) -> str | None: ...
+
+    @property
     def target_name(self) -> str | None: ...
 
     @property
@@ -139,11 +142,12 @@ def launch_local_semantic_fix(
     worktree_root: Path | None = None,
 ) -> DispatchHandle | None:
     """Launch a semantic fix agent on a local CLI target."""
-    if target.local_cmd is not None:
-        return None
-
     target_name = target.target_name or ""
-    cmd = build_local_semantic_fix_cmd(target_name, prompt=prompt)
+    cmd = build_local_semantic_fix_cmd(
+        target_name,
+        prompt=prompt,
+        custom_local_cmd=target.semantic_fix_custom_local_cmd,
+    )
     if cmd is None:
         return None
 
