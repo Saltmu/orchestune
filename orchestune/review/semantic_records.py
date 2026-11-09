@@ -300,6 +300,9 @@ class SemanticReviewStateV1:
     restart_count: int = 0
     last_retry_request_id: str | None = None
     limits_reset_reason: str | None = None
+    #: Report for the current head and the report actually judged this round.
+    read_report_digest: str | None = None
+    reviewed_read_report_digest: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {f.name: getattr(self, f.name) for f in fields(self)}
@@ -329,6 +332,12 @@ class SemanticReviewStateV1:
 
 
 def _coerce_state_field(name: str, value: object) -> object:
+    if name in {"read_report_digest", "reviewed_read_report_digest"}:
+        if value is not None and (
+            not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None
+        ):
+            raise ValueError(f"{name} must be a SHA-256 digest or null")
+        return value
     if name == "parent_issue_number":
         return _require_int(value, name, minimum=1)
     if name in _INT_FIELDS:

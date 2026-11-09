@@ -391,6 +391,32 @@ class TestSemanticReviewOperations:
         assert "orchestune claim" in target.prompt
         assert "orchestune complete" in target.prompt
 
+    def test_fix_dispatch_carries_read_context_and_local_launch_paths(
+        self, tmp_path: Path
+    ) -> None:
+        from orchestune.dispatch.semantic_review.adapters import (
+            SemanticFixLaunchContext,
+        )
+
+        target = MagicMock(spec=["launch_semantic_fix"])
+        target.launch_semantic_fix.return_value = DispatchHandle(pid=4321)
+        context = (
+            "Read head abc, report digest def; orchestune-read-validation required"
+        )
+        result = dispatch_semantic_fix_agent(
+            target,
+            pr_number=7,
+            attempt_id=ATTEMPT,
+            operation_id=OPERATION,
+            temp_branch="integration/temp",
+            expected_head_sha=HEAD,
+            round_number=2,
+            launch_context=SemanticFixLaunchContext(tmp_path / "worktrees", tmp_path),
+            read_context=context,
+        )
+        assert result.status is SemanticOperationStatus.DISPATCHING
+        assert context in target.launch_semantic_fix.call_args.kwargs["prompt"]
+
     def test_fix_dispatch_fails_when_launch_unsupported_without_attempt(self) -> None:
         class UnsupportedTarget:
             def __init__(self) -> None:

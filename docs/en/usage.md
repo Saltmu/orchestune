@@ -509,6 +509,7 @@ Non-routine options (storage paths, rate limits, timeouts, reviewer selection, c
 - **Profile plus tier:** Copy the existing profile to a dedicated profile so other tasks keep their current settings. For each target, replace `model` with the model previously selected by the tier and retain that target's existing `reasoning_effort`. Set the task's `execution_profile` to the dedicated profile.
 
 Check each target's resolved values with a dry-run dispatch, for example `orchestune-dispatch -p <N> --no-apply --dispatch-target claude-cli`. Read that run's saved `result.json` and inspect `execution_selections` for the task's `profile`, `model`, and `reasoning_effort`; repeat for every target used by the plan.
+For tasks intended to use high reasoning with `Luna` or `HIGH` with Gemini Flash, verify the effective `model` and `reasoning_effort` for each target in the dispatch result. Merely setting `reasoning_effort = "high"` in an `agy-cli` profile does not confirm that Flash `HIGH` is active.
 
 #### Configuration File Settings
 
@@ -519,6 +520,7 @@ Check each target's resolved values with a dry-run dispatch, for example `orches
 | `child-review-gate` | `"required"` | Child sub-issue review gate mode (`"required"`, `"off"`). Verifies review evidence (`verdict=pass`, SHA match) before merging to parent branch. `"off"` skips verification with a warning. |
 | `final-acceptance-review` | `"advisory"` | One request per final PR/head, posted after that head's CI has finished; `"off"` disables it. CLI > TOML > `ORCHESTUNE_FINAL_ACCEPTANCE_REVIEW` > default. |
 | `semantic-review-mode` | `"required"` | Layer-2 integration-PR semantic review mode (`"required"`, `"advisory"`, `"off"`). Default is `"required"`. |
+| `stale-read-gate` | `"advisory"` | Compares recorded reads with integration changes (`"advisory"`, `"required"`, `"off"`). `required` is allowed only when Layer-2 review is required and enabled. |
 | `force-integration-review` | `false` | Forces layer-2 integration-PR review even when a single child task qualifies for the Fast-Path. |
 | `semantic-review-provider` | `"auto"` | Layer-2 semantic review provider (`"auto"`, `"claude"`, `"codex"`). |
 | `semantic-fix-provider` | `"auto"` | Layer-2 semantic fix provider (`"auto"` or a configured dispatch target). |
@@ -782,6 +784,49 @@ Orchestune uses a two-tier review gate architecture for integrating child tasks 
 - **Layer 2 (Integration-PR semantic review gate)**: Advances a multi-round review and fix loop (review acquisition → judgment & fix job → promotion with claim → local CI → re-review) on multi-task integration PRs (default: `required`). When only a single child task is being merged and passed Layer 1, the single-task Fast-Path (`fast_path_passed`) bypasses Layer-2 review and integrates immediately (can be forced with `--force-integration-review`). For full architectural details, see [architecture/integration.md](architecture/integration.md).
   > [!NOTE]
   > Under `semantic_review_mode = "required"`, Integrator Layer-2 gating applies across all dispatch targets (cloud and local) and environment settings. The Runner advances the Layer-2 review/fix loop, and the Integrator blocks parent branch finalization until Layer-2 review completes (`passed` or `skipped_by_human`).
+
+**Stale-read gate (`stale-read-gate`)**
+
+For tasks under the same parent Issue, this gate compares evidence frozen at completion with parent changes in the forward, same-attempt, and reverse directions. `candidate_stale` means a path/content intersection that needs review; it does not assert a semantic defect. Candidates go through the existing Layer-2 review. `advisory` (the default) reports candidates, coverage gaps, and degraded conditions. `off` skips detection. `required` is allowed only when `semantic-review-mode = "required"` and review is enabled. It blocks parent updates when inputs are unknown or coverage is partial, and until every candidate is judged against the same head and report digest. Read evidence does not replace CI, child-PR review, or Layer-2 review.
+
+#### Submitting read evidence
+
+Use the `input_base_sha` from the `orchestune-read-checkpoint` recorded when the task starts, and create a JSON artifact for the reviewed HEAD being completed. The read set is the union of `declared_reads` and `observations`. `--read-evidence` is valid only with `done`. Completion rejects evidence whose repository, Issue, claim, checkpoint, snapshot objects, or `head_sha` do not match the current claim and reviewed HEAD. `source` distinguishes `adapter_observed` (tool-observed reads), `agent_reported` (self-reported), `declared_only`, and `unavailable`; these have different guarantees. If reads may be missing, including reads from untracked content, set `coverage` to `partial` or `unavailable`.
+
+```json
+{
+  "schema": "read-evidence-v1",
+  "version": 1,
+  "repository": "owner/repo",
+  "issue_number": 123,
+  "claim_id": "claim-abc123",
+  "input_base_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "declared_reads": ["src/registry.py"],
+  "observations": [
+    {
+      "path": "src/registry.py",
+      "snapshot_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "presence": "present",
+      "blob_oid": "cccccccccccccccccccccccccccccccccccccccc",
+      "file_mode": "100644",
+      "source": "adapter_observed"
+    }
+  ],
+  "source": "adapter_observed",
+  "coverage": "complete"
+}
+```
+
+`digest` is optional; the CLI computes it from the payload. If supplied, it must match the SHA-256 of the canonical payload. Example:
+
+```bash
+orchestune complete --issue 123 --pr 456 --result done --reviewer codex \
+  --review-reply .orchestune/tmp/task-123/review-reply.md \
+  --read-evidence .orchestune/tmp/task-123/read-evidence.json
+```
+
+After a rebase or push changes the HEAD, do not rebind old evidence: review the new HEAD and regenerate evidence for it. When the gate reports `unknown`, inspect the checkpoint, Issue Outcome, snapshot, and corresponding Git objects. Before enabling `required` on an existing parent, verify that snapshots can be rebuilt from receipts and Outcomes for integrated children. Keep the mode at `advisory` while history is incomplete; never treat `unknown` as no reads.
 
 **Two levels of explicit human skip**
 

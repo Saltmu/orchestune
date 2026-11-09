@@ -5,6 +5,7 @@
 """
 
 import inspect
+import json
 import pathlib
 import re
 import tomllib
@@ -51,6 +52,37 @@ def test_dispatch_report_file_migration_documented(lang):
     ):
         assert marker in text
     assert "report-dir" in (REPO_ROOT / "orchestune.toml.example").read_text()
+
+
+@pytest.mark.parametrize("lang", ["ja", "en"])
+def test_stale_read_docs_match_the_implemented_contract(lang):
+    docs = REPO_ROOT / "docs" / lang
+    architecture = (docs / "architecture.md").read_text(encoding="utf-8")
+    setup = (docs / "setup.md").read_text(encoding="utf-8")
+    usage = (docs / "usage.md").read_text(encoding="utf-8")
+    for marker in ("candidate_stale", "unknown", "advisory", "required", "off"):
+        assert marker in architecture
+    assert "stale-read-gate" in setup
+    assert "stale-read-gate" in usage
+    assert "orchestune complete" in usage and "--read-evidence" in usage
+    assert "read-evidence-v1" in usage
+    assert "agent_reported" in usage and "adapter_observed" in usage
+    assert "semantic-review-mode" in usage
+
+
+@pytest.mark.parametrize("lang", ["ja", "en"])
+def test_documented_read_evidence_json_round_trips(lang):
+    from orchestune.read_dependencies.codec import (
+        parse_read_evidence,
+        read_evidence_to_dict,
+    )
+
+    usage = (REPO_ROOT / "docs" / lang / "usage.md").read_text(encoding="utf-8")
+    example = re.search(r"```json\n(.*?)\n```", usage, re.DOTALL)
+    assert example is not None
+    evidence = parse_read_evidence(json.loads(example.group(1)))
+    round_tripped = parse_read_evidence(read_evidence_to_dict(evidence))
+    assert round_tripped == evidence
 
 
 def _section(lang: str, heading_number: int) -> str:

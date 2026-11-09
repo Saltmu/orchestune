@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 import sys
 from unittest.mock import patch
 
@@ -51,6 +52,63 @@ def test_done_carries_reviewer_and_reply_path():
         )
     assert service.call_args.args[0].payload.review_reply == Path("reply.md")
     assert service.call_args.args[0].payload.reviewer == "codex"
+
+
+def test_done_carries_parsed_read_evidence(tmp_path):
+    from read_dependency_test_support import evidence
+
+    from orchestune.complete import cli
+    from orchestune.read_dependencies.codec import (
+        parse_read_evidence,
+        read_evidence_to_dict,
+    )
+
+    value = evidence(declared=())
+    path = tmp_path / "reads.json"
+    path.write_text(json.dumps(read_evidence_to_dict(value)), encoding="utf-8")
+    with (
+        patch.object(cli, "_credentials", return_value=(None, None, None)),
+        patch.object(cli, "complete_task") as service,
+    ):
+        assert cli.main([*_DONE_ARGS, "--read-evidence", str(path)]) == 0
+    assert service.call_args.args[0].payload.read_evidence == parse_read_evidence(
+        read_evidence_to_dict(value)
+    )
+
+
+@pytest.mark.parametrize(
+    "content", [None, "{broken", "[]", '{"schema":"wrong"}', b"\xff"]
+)
+def test_read_evidence_input_errors_are_cli_errors(tmp_path, content, capsys):
+    from orchestune.complete import cli
+
+    path = tmp_path / "reads.json"
+    if isinstance(content, bytes):
+        path.write_bytes(content)
+    elif content is not None:
+        path.write_text(content, encoding="utf-8")
+    with (
+        patch.object(cli, "_credentials", return_value=(None, None, None)),
+        patch.object(cli, "complete_task") as service,
+    ):
+        assert cli.main([*_DONE_ARGS, "--read-evidence", str(path)]) == 40
+    assert "Error:" in capsys.readouterr().out
+    service.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "options",
+    [["--result", "not-needed"], ["--result", "blocked", "--reason", "blocked"]],
+)
+def test_read_evidence_only_valid_for_done(options, capsys):
+    from orchestune.complete import cli
+
+    with patch.object(cli, "_credentials", return_value=(None, None, None)):
+        assert (
+            cli.main(["--issue", "1003", *options, "--read-evidence", "unused.json"])
+            == 40
+        )
+    assert "--read-evidence is only valid when --result=done" in capsys.readouterr().out
 
 
 def test_dry_run_builds_done_request_without_calling_service() -> None:

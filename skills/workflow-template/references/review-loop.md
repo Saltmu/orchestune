@@ -1,6 +1,7 @@
 # Review Loop Reference (Step 11)
 
 Keep the review loop, feedback, CI, commits and pushes in the PR's task worktree. During #822 observation, apply [measurement.md](measurement.md) to every round: capture the reviewed SHA, deduplicate and classify findings, and record re-review reasons. Before Step 12, finalize the record even for zero findings, timeout, or blocked work.
+Keep the task's read-evidence artifact in the session alongside review evidence. When an adopted fix advances HEAD, collect applicable reads for the new work and repeat CI and review; do not reuse a completion artifact bound to the old reviewed HEAD. Submit the current artifact with `orchestune complete --read-evidence <session-dir>/read-evidence.json`; the completion request freezes it, so replay cannot add or replace it.
 
 ## 11. Automated LLM PR Review Loop (Review Cycle)
 

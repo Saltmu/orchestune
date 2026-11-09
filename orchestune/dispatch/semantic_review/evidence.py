@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Any, cast
 
 from orchestune.dispatch.semantic_review.ack import AckAssessment
+from orchestune.dispatch.semantic_review.read_context import ReadReviewContext
 from orchestune.dispatch.semantic_review.triggers import (
     restore_round_triggers,
 )
@@ -24,6 +25,7 @@ from orchestune.integrator.semantic_claim import (
     SemanticClaim,
 )
 from orchestune.pr_link_notice_trust import NoticePresence, TrustContext
+from orchestune.read_dependencies.contracts import READ_REPORT_CHUNK_BODY_BYTES
 from orchestune.review.rounds import (
     ReviewTrigger,
     build_restorable_trigger_body,
@@ -77,6 +79,7 @@ class _Attempt:
     obs: SemanticTransitionObservation | None = None
     claim: SemanticClaim | None = None
     ack: AckAssessment | None = None
+    read_context: ReadReviewContext | None = None
 
 
 class _Stop(Exception):
@@ -189,7 +192,12 @@ class SemanticReviewEvidence:
             )
         except ValueError:
             return None
-        if result is None or result.judgment_comment_id is None:
+        if (
+            result is None
+            or result.judgment_comment_id is None
+            or result.status != "completed"
+            or result.input_sha != (state.fix_input_sha or state.head_sha)
+        ):
             return None
         for comment in ctx.comments:
             if comment.get("id") == result.judgment_comment_id:
@@ -232,19 +240,32 @@ class SemanticReviewEvidence:
         block = (
             _JUDGMENT_BLOCK.search(str(comment.get("body") or "")) if comment else None
         )
-        if nxt.round <= 1 or block is None:
-            return f"{intro}\n\nReview head: `{nxt.head_sha}`."
-        return (
-            f"{intro}\n\nRound {ctx.state.round} judgments, addressed at "
-            f"`{nxt.head_sha}`:\n\n{block.group(0)}\n"
-        )
+        reply = f"{intro}\n\nReview head: `{nxt.head_sha}`."
+        if nxt.round > 1 and block is not None:
+            reply = (
+                f"{intro}\n\nRound {ctx.state.round} judgments, addressed at "
+                f"`{nxt.head_sha}`:\n\n{block.group(0)}\n"
+            )
+        context = ctx.read_context.render(nxt) if ctx.read_context else ""
+        return f"{reply}\n\n{context}" if context else reply
 
     def safe_reply(
         self, ctx: _Attempt, nxt: SemanticReviewStateV1, reviewer: str
     ) -> str:
         reply = self.trigger_reply(ctx, nxt)
         try:
-            build_restorable_trigger_body(reply, reviewer, nxt.round, nxt.head_sha)
+            body = build_restorable_trigger_body(
+                reply, reviewer, nxt.round, nxt.head_sha
+            )
+            if len(body.encode("utf-8")) > READ_REPORT_CHUNK_BODY_BYTES:
+                raise EvidenceContractError(
+                    "review reply exceeds the comment byte limit"
+                )
         except EvidenceContractError:
             reply = f"Review head: `{nxt.head_sha}`."
+            if ctx.read_context is not None:
+                reply += "\n\n" + ctx.read_context.render(nxt, compact=True)
+            build_restorable_trigger_body(reply, reviewer, nxt.round, nxt.head_sha)
+        if ctx.read_context and not ctx.read_context.matches_trigger(reply, nxt):
+            raise _Stop("read_context_invalid", error="required context was lost")
         return reply

@@ -277,6 +277,7 @@ def _fix_prompt(
     temp_branch: str,
     expected_head_sha: str,
     round_number: int,
+    read_context: str = "",
 ) -> str:
     output_branch = semantic_fix_output_branch(operation_id)
     return (
@@ -291,6 +292,7 @@ def _fix_prompt(
         "and do not post review trigger comments.\n"
         "Finally post the SemanticFixResultV1 marker with operation_id, input_sha, "
         "output_sha (null when unchanged), judgment_comment_id, and status."
+        + (f"\n\n{read_context}" if read_context else "")
     )
 
 
@@ -349,7 +351,13 @@ def _make_fix_op_result(
 
 
 def _build_fix_prompt(
-    pr: int, attempt: str, op: str, branch: str, sha: str, rnd: int
+    pr: int,
+    attempt: str,
+    op: str,
+    branch: str,
+    sha: str,
+    rnd: int,
+    read_context: str = "",
 ) -> str:
     return _fix_prompt(
         pr_number=pr,
@@ -358,6 +366,7 @@ def _build_fix_prompt(
         temp_branch=branch,
         expected_head_sha=sha,
         round_number=rnd,
+        read_context=read_context,
     )
 
 
@@ -404,6 +413,14 @@ def _launch_fix_agent(
     )
 
 
+@dataclass(frozen=True)
+class SemanticFixLaunchContext:
+    """Repository paths of a local semantic-fix launch."""
+
+    worktree_root: Path | None = None
+    repo_root: Path | None = None
+
+
 def dispatch_semantic_fix_agent(
     target: Any,
     *,
@@ -413,9 +430,10 @@ def dispatch_semantic_fix_agent(
     temp_branch: str,
     expected_head_sha: str,
     round_number: int,
-    worktree_root: Path | None = None,
-    repo_root: Path | None = None,
+    launch_context: SemanticFixLaunchContext | None = None,
+    read_context: str = "",
 ) -> SemanticOperationResult:
+    paths = launch_context or SemanticFixLaunchContext()
     output_branch = semantic_fix_output_branch(operation_id)
     prompt = _build_fix_prompt(
         pr_number,
@@ -424,6 +442,7 @@ def dispatch_semantic_fix_agent(
         temp_branch,
         expected_head_sha,
         round_number,
+        read_context,
     )
     return _launch_fix_agent(
         target,
@@ -432,8 +451,8 @@ def dispatch_semantic_fix_agent(
         output_branch,
         pr_number,
         expected_head_sha,
-        worktree_root,
-        repo_root,
+        paths.worktree_root,
+        paths.repo_root,
     )
 
 

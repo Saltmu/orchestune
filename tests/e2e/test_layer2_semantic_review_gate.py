@@ -41,6 +41,7 @@ from orchestune.dispatch.semantic_review.adapters import (
 )
 from orchestune.infra.git_cli import GitResult
 from orchestune.integrator.attempt import (
+    publish_parent_under_claim,
     validate_finalization_context,
 )
 from orchestune.integrator.semantic_claim import ClaimResult, SemanticClaim
@@ -67,11 +68,115 @@ from tests.dispatch.test_postcycle_semantic_review import (
     World,
     _phases,
 )
+from tests.stale_read_e2e_support import (
+    PARENT_REF,
+    GitReviewWorld,
+    StaleReadScenario,
+    git,
+)
 
 
 @pytest.fixture
 def e2e_world(tmp_path: Path) -> World:
     return World(tmp_path)
+
+
+@pytest.fixture
+def git_review_world(tmp_path, in_memory_forge, monkeypatch):
+    scenario = StaleReadScenario(tmp_path, in_memory_forge, monkeypatch)
+    parent = scenario.commit("adapter.py", "uses v1\n")
+    scenario.record(1101, scenario.base, parent, ("registry.py",), integrated=True)
+    git(scenario.root, "push", "origin", f"HEAD:{PARENT_REF}")
+    head = scenario.commit("registry.py", "v2\n")
+    child = scenario.record(1102, parent, head)
+    assert scenario.attempt(parent, child) == "semantic_review_pending"
+    world = GitReviewWorld(scenario)
+    world.seed()
+    return world
+
+
+@pytest.mark.e2e
+def test_stale_read_fix_ci_new_report_and_rereview(git_review_world):
+    world = git_review_world
+    scenario = world.scenario
+    original_outcome = scenario.forge.list_all_issue_comments(1101)
+    first = world.cycle()
+    assert _phases(first) == ("not_started", "review_pending"), str(first)
+    old_digest = world.state.read_report_digest
+    assert old_digest in world.triggers()[0]
+    world.review("Repair the consumer after registry v2")
+    assert _phases(world.cycle()) == ("review_pending", "fix_in_progress")
+    fixed = scenario.commit("adapter.py", "uses v2\n")
+    world.finish_job(output=fixed)
+    assert _phases(world.cycle()) == ("fix_in_progress", "ci_verification")
+    assert world.state.head_sha == fixed
+    assert world.state.read_report_digest != old_digest
+    assert world.state.reviewed_read_report_digest is None
+    assert world.state.ci_verified_sha is None
+    assert _phases(world.cycle()) == ("ci_verification", "review_pending")
+    assert world.ci[0][1] == fixed
+    assert fixed in world.triggers()[-1]
+    assert world.state.read_report_digest in world.triggers()[-1]
+    world.review("Consumer now matches registry v2")
+    world.cycle()
+    world.finish_job(output=None)
+    assert _phases(world.cycle()) == ("fix_in_progress", "passed")
+    assert world.state.reviewed_read_report_digest == world.state.read_report_digest
+    assert scenario.refs()[0] == scenario.ctx.attempt_identity.base_sha
+    world.handoff()
+    result = publish_parent_under_claim(scenario.ctx)
+    assert result.pushed, result.detail
+    assert scenario.refs()[0] == fixed
+    assert scenario.forge.list_all_issue_comments(1101) == original_outcome
+    assert scenario.forge.get_issue_state(1101) == "CLOSED"
+    assert set(scenario.forge.get_issue_labels(1101)) == {
+        "status:done",
+        "integration:included",
+    }
+
+
+@pytest.mark.e2e
+def test_stale_read_fix_cannot_bypass_review_budget(git_review_world):
+    world = git_review_world
+    world.config.max_semantic_review_rounds = 1
+    world.cycle()
+    world.review()
+    world.cycle()
+    fixed = world.scenario.commit("adapter.py", "uses v2\n")
+    world.finish_job(output=fixed)
+    world.cycle()
+    world.cycle()
+    assert world.state.phase is P.ESCALATED
+    assert world.state.escalation_reason == "max_rounds"
+    assert world.state.reviewed_read_report_digest is None
+    assert len(world.triggers()) == 1
+    assert len(world.dispatched) == 1
+    assert world.scenario.refs()[0] != fixed
+
+
+@pytest.mark.e2e
+@pytest.mark.parametrize("damage", ["digest", "missing_candidates", "missing_chunk"])
+def test_stale_read_runner_never_passes_unknown_evidence(git_review_world, damage):
+    world = git_review_world
+    world.cycle()
+    if damage == "missing_chunk":
+        world.read_context_builder = None
+        chunks = [
+            c for c in world.comments[PR] if "orchestune-read-report" in c["body"]
+        ]
+        assert chunks
+        world.comments[PR].remove(chunks[0])
+    world.review()
+    world.cycle()
+    if damage != "missing_chunk":
+        changes = (
+            {"report_digest": "0" * 64} if damage == "digest" else {"decisions": []}
+        )
+        world.finish_job(output=None, **changes)
+        world.cycle()
+    assert world.state.phase is P.ESCALATED
+    assert world.state.reviewed_read_report_digest is None
+    assert world.scenario.refs()[0] == world.scenario.ctx.attempt_identity.base_sha
 
 
 class TestLayer2SemanticReviewGateE2E:

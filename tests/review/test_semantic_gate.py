@@ -784,3 +784,195 @@ def test_child_source_ref_instances_are_validated_and_normalized() -> None:
         IntegrationAttemptIdentity.create(1033, BASE, [ChildSourceRef(0, "", "")])
     padded: list[Any] = [ChildSourceRef(11, " alpha ", f" {'1' * 40} "), CHILDREN[0]]
     assert IntegrationAttemptIdentity.create(1033, BASE, padded) == IDENTITY
+
+
+# --- opt-in read report binding ---------------------------------------------
+
+READ_DIGEST = "a" * 64
+NEW_READ_DIGEST = "b" * 64
+READ_ID = "sr1-" + "c" * 64
+
+
+def read_evidence(**changes: Any) -> dict[str, Any]:
+    from orchestune.read_dependencies.contracts import (
+        CandidateConclusion,
+        CandidateJudgment,
+        ReadValidationV1,
+    )
+
+    validation = ReadValidationV1(
+        round_number=1,
+        head_sha=HEAD,
+        report_digest=READ_DIGEST,
+        decisions=(
+            CandidateJudgment(
+                candidate_id=READ_ID,
+                conclusion=CandidateConclusion.COMPATIBLE,
+                rationale="Checked all readers",
+            ),
+        ),
+    )
+    return {
+        **EVIDENCE,
+        "judgments": PASS,
+        "read_validation_required": True,
+        "read_report_digest": READ_DIGEST,
+        "read_candidate_ids": (READ_ID,),
+        "read_validation": validation,
+        **changes,
+    }
+
+
+def test_required_read_report_is_bound_at_initial_review() -> None:
+    decision = run(make_state(), **read_evidence())
+    assert decision.next_phase == P.REVIEW_PENDING
+    assert decision.next_state.read_report_digest == READ_DIGEST
+    missing = run(make_state(), **read_evidence(read_report_digest=None))
+    assert missing.next_phase == P.ESCALATED
+
+
+@pytest.mark.parametrize(
+    "mutate", ["missing", "omitted", "unknown_id", "unknown", "round", "head", "digest"]
+)
+def test_required_read_decisions_block_unchanged_clean_job(mutate: str) -> None:
+    from orchestune.read_dependencies.contracts import CandidateConclusion
+
+    evidence = read_evidence()
+    validation = evidence["read_validation"]
+    decision = validation.decisions[0]
+    cases = {
+        "missing": None,
+        "omitted": replace(validation, decisions=()),
+        "unknown_id": replace(
+            validation, decisions=(replace(decision, candidate_id="sr1-" + "d" * 64),)
+        ),
+        "unknown": replace(
+            validation,
+            decisions=(replace(decision, conclusion=CandidateConclusion.UNKNOWN),),
+        ),
+        "round": replace(validation, round_number=2),
+        "head": replace(validation, head_sha=OTHER),
+        "digest": replace(validation, report_digest=NEW_READ_DIGEST),
+    }
+    evidence["read_validation"] = cases[mutate]
+    state = reserved(read_report_digest=READ_DIGEST, ci_verified_sha=HEAD)
+    result = run(state, operation=done(state), **evidence)
+    assert result.next_phase == P.ESCALATED
+    assert result.reason.startswith("read_validation_invalid")
+
+
+def test_required_read_validation_survives_ci_and_terminal_recheck() -> None:
+    state = reserved(read_report_digest=READ_DIGEST)
+    decision = run(state, operation=done(state), **read_evidence())
+    assert decision.next_phase == P.CI_VERIFICATION
+    assert decision.next_state.reviewed_read_report_digest == READ_DIGEST
+    passed = run(decision.next_state, ci=CI_OK, **read_evidence())
+    assert passed.next_phase == P.PASSED
+    assert_hold(passed.next_state, "terminal_passed", **read_evidence())
+    missing = run(passed.next_state, **read_evidence(read_validation=None))
+    assert missing.next_phase == P.ESCALATED
+
+
+def test_required_read_validation_is_rechecked_before_ci_pass() -> None:
+    state = active(
+        P.CI_VERIFICATION,
+        read_report_digest=READ_DIGEST,
+        reviewed_read_report_digest=READ_DIGEST,
+        reviewed_sha=HEAD,
+        judgment_digest=PASS.digest,
+    )
+    result = run(state, ci=CI_OK, **read_evidence(read_validation=None))
+    assert result.next_phase == P.ESCALATED
+
+
+@pytest.mark.parametrize(
+    "phase", [P.REVIEW_PENDING, P.PASSED, P.FAST_PATH_PASSED, P.SKIPPED_BY_HUMAN]
+)
+def test_changed_report_clears_pass_and_requires_existing_restart(
+    phase: SemanticReviewPhase,
+) -> None:
+    state = active(
+        phase,
+        read_report_digest=READ_DIGEST,
+        reviewed_read_report_digest=READ_DIGEST,
+        reviewed_sha=HEAD,
+        ci_verified_sha=HEAD,
+    )
+    changed = run(state, **read_evidence(read_report_digest=NEW_READ_DIGEST))
+    assert changed.next_phase == P.ESCALATED and changed.reason == "read_report_changed"
+    nxt = changed.next_state
+    assert (
+        nxt.reviewed_read_report_digest
+        is nxt.reviewed_sha
+        is nxt.ci_verified_sha
+        is None
+    )
+    assert nxt.read_report_digest == NEW_READ_DIGEST
+    restarted = run(
+        nxt,
+        **read_evidence(
+            read_report_digest=NEW_READ_DIGEST, retry_request=retry_req(kind="restart")
+        ),
+    )
+    assert restarted.next_phase == P.REVIEW_PENDING
+    assert restarted.next_round == 2 and restarted.next_state.restart_count == 1
+
+
+def test_read_binding_cannot_be_bypassed_by_legacy_pass_or_human_skip() -> None:
+    legacy = run(active(P.PASSED), **read_evidence())
+    assert legacy.next_phase == P.ESCALATED
+    state = active(P.REVIEW_PENDING, read_report_digest=READ_DIGEST)
+    override = SemanticReviewHumanOverrideV1(IDENTITY.attempt_id, HEAD, "skip")
+    assert (
+        run(state, **read_evidence(override=override)).next_phase != P.SKIPPED_BY_HUMAN
+    )
+    off = run(state, **read_evidence(mode=SemanticReviewMode.OFF))
+    assert off.next_phase == P.ESCALATED
+
+
+def test_fix_promotion_clears_old_digest_and_requires_new_round() -> None:
+    state = reserved(
+        read_report_digest=READ_DIGEST, reviewed_read_report_digest=READ_DIGEST
+    )
+    evidence = read_evidence(
+        read_report_digest=NEW_READ_DIGEST, observed_head_sha=FIXED
+    )
+    promoted = run(state, operation=done(state, FIXED), **evidence)
+    assert promoted.next_phase == P.CI_VERIFICATION
+    nxt = promoted.next_state
+    assert nxt.read_report_digest == NEW_READ_DIGEST
+    assert nxt.reviewed_read_report_digest is None
+    green = SemanticCiObservation(FIXED, SemanticCiConclusion.SUCCESS)
+    review = run(nxt, ci=green, **evidence)
+    assert review.next_phase == P.REVIEW_PENDING and review.next_round == 2
+    job = run(review.next_state, **{**evidence, "reviewed_sha": FIXED}).next_state
+    stale = run(
+        job,
+        operation=done(job, FIXED),
+        **{**evidence, "reviewed_sha": FIXED, "judgments": replace(PASS, round=2)},
+    )
+    assert stale.next_phase == P.ESCALATED
+    validation = replace(
+        evidence["read_validation"],
+        round_number=2,
+        head_sha=FIXED,
+        report_digest=NEW_READ_DIGEST,
+    )
+    passed = run(
+        job,
+        operation=done(job, FIXED),
+        **{
+            **evidence,
+            "reviewed_sha": FIXED,
+            "judgments": replace(PASS, round=2),
+            "read_validation": validation,
+        },
+    )
+    assert passed.next_phase == P.PASSED
+    assert passed.next_state.reviewed_read_report_digest == NEW_READ_DIGEST
+
+
+@pytest.mark.parametrize("mode", [SemanticReviewMode.ADVISORY, SemanticReviewMode.OFF])
+def test_read_binding_defaults_preserve_advisory_off(mode: SemanticReviewMode) -> None:
+    state = active(P.PASSED, read_report_digest=READ_DIGEST)
+    assert_hold(state, "terminal_passed", mode=mode, read_report_digest=NEW_READ_DIGEST)

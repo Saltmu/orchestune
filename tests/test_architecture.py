@@ -1060,11 +1060,17 @@ def test_shared_targets_have_no_workflow_imports() -> None:
 
 def test_review_core_depends_only_on_itself() -> None:
     """Round, snapshot and offline evaluation stay pure: no Forge, workflow or I/O."""
+    pure_read_contracts = {
+        "read_dependencies.contracts",
+        "read_dependencies.validation",
+    }
     for module, dependencies in _import_graph().items():
         if module == "review" or module.startswith("review."):
             outside = {
                 dependency
                 for dependency in dependencies
-                if dependency != "review" and not dependency.startswith("review.")
+                if dependency != "review"
+                and not dependency.startswith("review.")
+                and dependency not in pure_read_contracts
             }
             assert not outside, (module, outside)

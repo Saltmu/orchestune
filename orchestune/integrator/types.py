@@ -11,6 +11,10 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, TypedDict
 
+from orchestune.config_schema import (
+    VALID_STALE_READ_GATE_MODES,
+    stale_read_gate_conflict,
+)
 from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
 from orchestune.forge import Forge, GitHubForge
 from orchestune.infra.managed_process import ProcessRunner
@@ -35,6 +39,7 @@ from orchestune.integrator.timeout_policy import (
 )
 from orchestune.models import Task
 from orchestune.outcome_record import VALID_CHILD_REVIEW_GATE_MODES
+from orchestune.read_dependencies.contracts import ReadGateDecision, StaleReadReportV1
 from orchestune.review.semantic_gate import (
     VALID_SEMANTIC_REVIEW_MODES,
     IntegrationAttemptIdentity,
@@ -87,6 +92,7 @@ class IntegrationReport(TypedDict, total=False):
     blocked_reasons: dict[str, str]
     integration_pr_number: int | None
     semantic_review_dispatched: bool
+    read_gate: dict[str, Any]
     semantic_review_phase: str
     attempt_id: str
     deferred_tasks: list[str]
@@ -116,6 +122,7 @@ class IntegratorConfig:
     apply: bool = False
     enable_semantic_review: bool = True
     semantic_review_mode: str = "required"
+    stale_read_gate: str = "advisory"
     force_integration_review: bool = False
     coordinator: IntegrationCoordinator | None = None
     forge: Forge | None = None
@@ -157,6 +164,7 @@ class IntegratorConfig:
                 "semantic_review_mode must be 'required', 'advisory', or 'off', "
                 f"got {self.semantic_review_mode!r}"
             )
+        self._validate_stale_read_gate()
         self.build_execution_policy()  # validate the explicit settings
         self.base_branch = f"origin/parent/issue-{self.parent_issue_number}"
         self.temp_branch = (
@@ -165,6 +173,20 @@ class IntegratorConfig:
         )
         if self.forge is None:
             self.forge = GitHubForge()
+
+    def _validate_stale_read_gate(self) -> None:
+        if self.stale_read_gate not in VALID_STALE_READ_GATE_MODES:
+            raise ValueError(
+                "stale_read_gate must be 'advisory', 'required', or 'off', "
+                f"got {self.stale_read_gate!r}"
+            )
+        message = stale_read_gate_conflict(
+            self.stale_read_gate,
+            self.semantic_review_mode,
+            review_enabled=self.enable_semantic_review,
+        )
+        if message is not None:
+            raise ValueError(message)
 
     @property
     def execution_policy(self) -> IntegrationExecutionPolicy:
@@ -198,6 +220,9 @@ class IntegrationContext:
     attempt_identity: IntegrationAttemptIdentity | None = None
     semantic_review_state: SemanticReviewStateV1 | None = None
     semantic_review_override: SemanticReviewHumanOverrideV1 | None = None
+    read_report: StaleReadReportV1 | None = None
+    read_gate_decision: ReadGateDecision | None = None
+    read_gate_error: str | None = None
     reuse_existing_temp_branch: bool = False
     deferred_tasks: list[str] = field(default_factory=list)
     attempt_base_sha: str = ""
