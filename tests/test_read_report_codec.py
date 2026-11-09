@@ -174,3 +174,21 @@ def test_null_for_required_enum_field_raises_value_error() -> None:
     payload["coverage"] = None
     with pytest.raises(ValueError, match="coverage must not be null"):
         parse_report(json.dumps(payload))
+
+
+def test_null_or_non_string_detail_raises_value_error() -> None:
+    payload = json.loads(serialize_report(sample_report()))
+    payload["unknowns"][0]["detail"] = None
+    with pytest.raises(ValueError, match="unknown detail must be a string"):
+        parse_report(json.dumps(payload))
+
+    payload = json.loads(serialize_report(sample_report()))
+    payload["exclusions"] = [
+        {
+            "reason": "reader_own_write",
+            "identity": payload["candidates"][0]["identity"],
+            "detail": None,
+        }
+    ]
+    with pytest.raises(ValueError, match="exclusion detail must be a string"):
+        parse_report(json.dumps(payload))

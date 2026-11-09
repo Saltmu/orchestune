@@ -133,7 +133,7 @@ def _construct(cls: type[_T], value: object, name: str, **nested: Any) -> _T:
     data.update(nested)
     try:
         return cls(**data)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, AttributeError) as exc:
         raise ValueError(f"invalid {name}: {exc}") from exc
 
 
@@ -196,6 +196,8 @@ def _candidate(value: object) -> StaleCandidate:
 def _exclusion(value: object) -> StaleExclusion:
     data = _object(value, "exclusion")
     _keys(data, {"identity", "reason", "detail"}, "exclusion")
+    if not isinstance(data.get("detail"), str):
+        raise ValueError("exclusion detail must be a string")
     return _construct(
         StaleExclusion,
         data,
@@ -205,7 +207,10 @@ def _exclusion(value: object) -> StaleExclusion:
 
 
 def _unknown(value: object) -> StaleUnknown:
-    return _construct(StaleUnknown, value, "unknown")
+    data = _object(value, "unknown")
+    if not isinstance(data.get("detail"), str):
+        raise ValueError("unknown detail must be a string")
+    return _construct(StaleUnknown, data, "unknown")
 
 
 def _pairs_no_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
