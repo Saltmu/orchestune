@@ -143,6 +143,8 @@ def full_state() -> SemanticReviewStateV1:
         restart_count=2,
         last_retry_request_id="req-0",
         limits_reset_reason="config fixed",
+        read_report_digest="a" * 64,
+        reviewed_read_report_digest="b" * 64,
     )
 
 
@@ -195,6 +197,9 @@ def test_malformed_state_markers_raise(body: str) -> None:
         ("claim_holder", 5),
         ("child_sources", "x"),
         ("surprise", 1),
+        ("read_report_digest", 7),
+        ("read_report_digest", "x"),
+        ("reviewed_read_report_digest", "A" * 64),
     ],
 )
 def test_state_fields_are_strictly_typed(key: str, value: Any) -> None:
@@ -211,6 +216,13 @@ def test_state_requires_core_fields_and_a_mapping() -> None:
         SemanticReviewStateV1.from_dict(data)
     with pytest.raises(ValueError):
         SemanticReviewStateV1.from_dict([])  # type: ignore[arg-type]
+
+
+def test_legacy_state_without_read_digests_remains_readable() -> None:
+    data = full_state().to_dict()
+    del data["read_report_digest"], data["reviewed_read_report_digest"]
+    state = SemanticReviewStateV1.from_dict(data)
+    assert state.read_report_digest is state.reviewed_read_report_digest is None
 
 
 def test_restore_returns_latest_matching_attempt() -> None:
