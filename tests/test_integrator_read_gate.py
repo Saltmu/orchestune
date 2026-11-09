@@ -601,3 +601,89 @@ def test_update_parent_branch_advisory_retains_publication_error_without_escalat
         "error": "semantic claim conflict",
         "auto_merged": False,
     }
+
+
+def test_make_default_read_context_builder_wires_recomputation(tmp_path: Path):
+    from unittest.mock import MagicMock
+
+    from orchestune.claim.read_checkpoint import checkpoint_marker
+    from orchestune.infra.git_cli import run_git
+    from orchestune.integrator.proofs import TaskIntegrationProof
+    from orchestune.integrator.read_gate import make_default_read_context_builder
+    from orchestune.outcome_record import OutcomeRecord, ReviewSummary
+    from orchestune.read_dependencies.contracts import (
+        CheckpointAvailability,
+        ReadCheckpointV1,
+        ReadCoverage,
+        ReadEvidenceV1,
+        ReadSource,
+        seal_evidence,
+    )
+    from orchestune.review.semantic_gate import SemanticReviewStateV1
+    from tests.read_dependency_test_support import observation
+
+    repo = tmp_path / "repo"
+    run_git(["init", "-b", "main", str(repo)], cwd=tmp_path)
+    run_git(["config", "user.name", "Tester"], cwd=repo)
+    run_git(["config", "user.email", "tester@example.com"], cwd=repo)
+    (repo / "file.txt").write_text("initial\n")
+    run_git(["add", "."], cwd=repo)
+    run_git(["commit", "-m", "initial"], cwd=repo)
+    base_sha = run_git(["rev-parse", "HEAD"], cwd=repo).stdout.strip()
+
+    (repo / "file.txt").write_text("updated\n")
+    run_git(["commit", "-am", "new head"], cwd=repo)
+    new_head = run_git(["rev-parse", "HEAD"], cwd=repo).stdout.strip()
+
+    ev = seal_evidence(
+        ReadEvidenceV1(
+            repository="owner/repo",
+            issue_number=10,
+            claim_id="claim-10",
+            input_base_sha=base_sha,
+            head_sha=base_sha,
+            declared_reads=("file.txt",),
+            observations=(observation("file.txt", "deadbeef" * 5, snapshot=base_sha),),
+            source=ReadSource.ADAPTER_OBSERVED,
+            coverage=ReadCoverage.COMPLETE,
+        )
+    )
+
+    outcome = OutcomeRecord(
+        result="done",
+        issue=10,
+        claim_id="claim-10",
+        completion_id="comp-10",
+        head_sha=base_sha,
+        review=ReviewSummary(reviewed_head_sha=base_sha),
+        read_evidence=ev,
+    )
+
+    chk = ReadCheckpointV1(
+        repository="owner/repo",
+        issue_number=10,
+        claim_id="claim-10",
+        availability=CheckpointAvailability.RECORDED,
+        input_base_sha=base_sha,
+    )
+
+    forge = MagicMock()
+    forge.get_repository_slug.return_value = "owner/repo"
+    forge.get_authenticated_user.return_value = "bot"
+    forge.list_all_issue_comments.return_value = [
+        {"user": {"login": "bot"}, "body": checkpoint_marker(chk)},
+        {"user": {"login": "bot"}, "body": outcome.render()},
+    ]
+    forge.find_issues_by_parent_metadata.return_value = []
+    forge.list_sub_issues.return_value = []
+
+    state = MagicMock(spec=SemanticReviewStateV1)
+    state.parent_issue_number = 1230
+    state.base_sha = base_sha
+    state.child_sources = (TaskIntegrationProof(10, "task-10", base_sha, base_sha),)
+
+    builder = make_default_read_context_builder(forge, repo)
+    result = builder(state, new_head)
+    assert result.inputs is not None
+    assert result.inputs.candidate_head_sha == new_head
+    assert result.coverage == ReadCoverage.COMPLETE

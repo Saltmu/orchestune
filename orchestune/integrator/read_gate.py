@@ -7,8 +7,15 @@ children. Rebase never rewrites reads. Unknown inputs fail closed when required.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, cast
+from pathlib import Path
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    from orchestune.integrator.read_context import ReadContextResult
+    from orchestune.review.semantic_gate import SemanticReviewStateV1
 
 from orchestune.claim.read_checkpoint import restore_read_checkpoint
 from orchestune.infra.git_cli import run_git
@@ -288,8 +295,7 @@ def _known_writers(
     return writers
 
 
-def build_integration_read_report(ctx: Any, head_sha: str) -> StaleReadReportV1:
-    """Recompute both directions from frozen sources, including closed readers."""
+def _build_context_result(ctx: Any, head_sha: str) -> ReadContextResult:
     identity = ctx.attempt_identity
     if identity is None:
         raise ValueError("read attempt identity is missing")
@@ -305,7 +311,7 @@ def build_integration_read_report(ctx: Any, head_sha: str) -> StaleReadReportV1:
         complete=True,
         empty_verified=not historical,
     )
-    built = build_read_context(
+    return build_read_context(
         ReadContextRequest(
             repository=repository,
             parent_issue_number=identity.parent_issue_number,
@@ -316,9 +322,35 @@ def build_integration_read_report(ctx: Any, head_sha: str) -> StaleReadReportV1:
         ),
         _HistorySource(history),
     )
+
+
+def build_integration_read_report(ctx: Any, head_sha: str) -> StaleReadReportV1:
+    """Recompute both directions from frozen sources, including closed readers."""
+    built = _build_context_result(ctx, head_sha)
     if built.inputs is None or built.unknowns:
         raise ValueError("read context is incomplete")
     return detect_stale_reads(built.inputs)
+
+
+def make_default_read_context_builder(
+    forge: Any, repository_root: Path
+) -> Callable[[SemanticReviewStateV1, str], ReadContextResult]:
+    """Supply frozen-input read context builder for the production review runner."""
+
+    def _builder(state: SemanticReviewStateV1, head_sha: str) -> ReadContextResult:
+        identity = SimpleNamespace(
+            parent_issue_number=state.parent_issue_number,
+            base_sha=state.base_sha,
+            child_sources=state.child_sources,
+        )
+        pseudo_ctx = SimpleNamespace(
+            forge=forge,
+            repository_root=repository_root,
+            attempt_identity=identity,
+        )
+        return _build_context_result(pseudo_ctx, head_sha)
+
+    return _builder
 
 
 def prepare_read_gate(ctx: Any, head_sha: str) -> ReadGateDecision:
