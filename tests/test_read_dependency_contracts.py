@@ -62,7 +62,6 @@ from orchestune.read_dependencies.contracts import (
 
 _SCAFFOLDS = (
     "orchestune/read_dependencies/__init__.py",
-    "orchestune/complete/read_evidence.py",
     "orchestune/integrator/read_gate.py",
     "orchestune/integrator/read_publish.py",
 )
