@@ -11,6 +11,7 @@ import pytest
 
 from orchestune.forge import Forge
 from orchestune.infra.git_cli import GitResult
+from orchestune.integrator import attempt as attempt_module
 from orchestune.integrator.attempt import (
     OpenAttempt,
     PublishStatus,
@@ -230,6 +231,58 @@ def test_select_attempt_children_freezes_existing_set_and_defers_new_child():
     assert selection.deferred == (CHILD_B,)
     assert selection.invalidated == ()
     assert selection.fail_closed is False
+
+
+@pytest.mark.parametrize(
+    "phase", [SemanticReviewPhase.PASSED, SemanticReviewPhase.REVIEW_PENDING]
+)
+def test_published_head_restores_only_a_passed_attempt(phase):
+    existing = replace(_attempt(CHILD_A), state=_state(CHILD_A, phase=phase))
+    selection = select_attempt_children(
+        [existing], HEAD, [CHILD_A], recover_published=True
+    )
+    if phase is SemanticReviewPhase.PASSED:
+        assert selection.reusable is existing
+        assert not selection.invalidated
+    else:
+        assert selection.reusable is None
+        assert selection.invalidated == (existing,)
+
+
+def test_legacy_selection_does_not_adopt_published_head():
+    existing = replace(
+        _attempt(CHILD_A), state=_state(CHILD_A, phase=SemanticReviewPhase.PASSED)
+    )
+    assert select_attempt_children([existing], HEAD, [CHILD_A]).reusable is None
+
+
+def test_prepare_restores_published_attempt_without_starting_new_review():
+    existing = replace(
+        _attempt(CHILD_A), state=_state(CHILD_A, phase=SemanticReviewPhase.PASSED)
+    )
+    ctx = SimpleNamespace(
+        config=SimpleNamespace(
+            apply=True, parent_issue_number=100, stale_read_gate="required"
+        ),
+        forge=MagicMock(spec=Forge),
+        repository_root=Path("."),
+    )
+    with (
+        patch.object(attempt_module, "find_open_attempts", return_value=[existing]),
+        patch.object(
+            attempt_module,
+            "_discover_child_sources",
+            return_value=([CHILD_A], {}),
+        ),
+        patch.object(attempt_module, "_base_sha", return_value=HEAD),
+        patch.object(
+            attempt_module,
+            "_restore_attempt_context",
+            return_value="success",
+        ) as restore,
+    ):
+        assert prepare_attempt_context(ctx, object()) == ("success", None)
+    assert restore.call_args.args[1].reusable is existing
 
 
 @pytest.mark.parametrize(
@@ -619,7 +672,8 @@ def test_finalization_context_requires_live_pr_head_and_matching_ci():
         assert "live integration PR" in validate_finalization_context(ctx)
 
 
-def test_parent_update_is_atomic_under_the_attempt_claim():
+@pytest.mark.parametrize("mode", ["advisory", "off"])
+def test_parent_update_is_atomic_under_the_attempt_claim(mode):
     from orchestune.integrator.semantic_claim import (
         ClaimResult,
         ClaimStatus,
@@ -629,6 +683,7 @@ def test_parent_update_is_atomic_under_the_attempt_claim():
     )
 
     ctx = _finalization_context()
+    ctx.config.stale_read_gate = mode
     claim = SemanticClaim(
         100,
         ctx.attempt_identity.attempt_id,

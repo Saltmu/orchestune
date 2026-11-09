@@ -60,10 +60,7 @@ from orchestune.read_dependencies.contracts import (
     seal_evidence,
 )
 
-_SCAFFOLDS = (
-    "orchestune/read_dependencies/__init__.py",
-    "orchestune/integrator/read_publish.py",
-)
+_SCAFFOLDS = ("orchestune/read_dependencies/__init__.py",)
 
 
 def test_unspecified_declaration_is_distinct_from_empty() -> None:

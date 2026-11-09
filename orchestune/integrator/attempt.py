@@ -19,6 +19,10 @@ from orchestune.integrator.read_gate import (
     prepare_read_gate,
     validate_read_finalization,
 )
+from orchestune.integrator.read_publish import (
+    prepare_parent_read_publication,
+    reconcile_parent_read_publication,
+)
 from orchestune.integrator.semantic_claim import (
     ClaimStatus,
     RefUpdate,
@@ -250,13 +254,21 @@ def find_open_attempts(forge: Forge, parent_issue_number: int) -> list[OpenAttem
 
 
 def _attempt_matches(
-    attempt: OpenAttempt, base_sha: str, children: tuple[ChildSourceRef, ...]
+    attempt: OpenAttempt,
+    base_sha: str,
+    children: tuple[ChildSourceRef, ...],
+    recover_published: bool,
 ) -> bool:
     state = attempt.state
     if state is None or state.phase is SemanticReviewPhase.INVALIDATED:
         return False
     available = {child.key() for child in children}
-    return state.base_sha == base_sha and all(
+    matching_base = state.base_sha == base_sha or (
+        recover_published
+        and state.phase in TERMINAL_PASSED_PHASES
+        and state.head_sha == base_sha
+    )
+    return matching_base and all(
         child.key() in available for child in state.child_sources
     )
 
@@ -265,6 +277,8 @@ def select_attempt_children(
     open_attempts: Sequence[OpenAttempt],
     base_sha: str,
     done_children: Sequence[ChildSourceRef],
+    *,
+    recover_published: bool = False,
 ) -> AttemptSelection:
     """Freeze the children of one matching attempt and defer later arrivals."""
     children = normalize_child_sources(done_children)
@@ -274,7 +288,7 @@ def select_attempt_children(
     matches = tuple(
         attempt
         for attempt in open_attempts
-        if _attempt_matches(attempt, base_sha, children)
+        if _attempt_matches(attempt, base_sha, children, recover_published)
     )
     if len(matches) > 1:
         return AttemptSelection(children, fail_closed=True)
@@ -394,7 +408,13 @@ def prepare_attempt_context(ctx: Any, merger: Any) -> tuple[str | None, str | No
             "existing attempt child sources could not be verified",
         )
     children, proofs = discovered
-    selection = select_attempt_children(attempts, _base_sha(ctx), children)
+    selection = select_attempt_children(
+        attempts,
+        _base_sha(ctx),
+        children,
+        recover_published=getattr(ctx.config, "stale_read_gate", "advisory")
+        == "required",
+    )
     if selection.fail_closed or selection.invalidated:
         # #1362 owns the durable INVALIDATED transition. Until that trusted
         # marker exists, publishing a replacement attempt would race its runner.
@@ -581,7 +601,10 @@ def publish_parent_under_claim(ctx: Any) -> ParentPublishResult:
     """Atomically advance the parent ref and the semantic claim."""
     state, identity = ctx.semantic_review_state, ctx.attempt_identity
     if state is None or identity is None:
-        return ParentPublishResult(False, False)
+        required = getattr(ctx.config, "stale_read_gate", "advisory") == "required"
+        return ParentPublishResult(
+            required, False, "read publication identity is missing"
+        )
     holder = ctx.forge.get_authenticated_user() or "orchestune-integrator"
     now = datetime.now(UTC)
     acquired = acquire_semantic_claim(
@@ -603,13 +626,40 @@ def publish_parent_under_claim(ctx: Any) -> ParentPublishResult:
     )
     if read_error is not None:
         return ParentPublishResult(True, False, read_error)
+    return _publish_parent_refs(ctx, acquired.claim)
+
+
+def _publish_parent_refs(ctx: Any, claim: Any) -> ParentPublishResult:
+    state, identity = ctx.semantic_review_state, ctx.attempt_identity
     parent_ref = f"refs/heads/parent/issue-{identity.parent_issue_number}"
-    result = push_refs_under_claim(
-        ctx.repository_root,
-        acquired.claim,
-        [RefUpdate(parent_ref, state.head_sha, state.base_sha)],
-        now=now,
-    )
+    updates = [RefUpdate(parent_ref, state.head_sha, state.base_sha)]
+    write = None
+    try:
+        if getattr(ctx.config, "stale_read_gate", "advisory") == "required":
+            prepared = prepare_parent_read_publication(ctx)
+            if prepared.recovered:
+                return ParentPublishResult(
+                    True, True, "recovered published parent/snapshot"
+                )
+            write = prepared.write
+            if write is None:
+                raise ValueError("required snapshot update is missing")
+            updates.append(
+                RefUpdate(write.ref, write.new_commit_oid, write.expected_oid)
+            )
+        result = push_refs_under_claim(
+            ctx.repository_root,
+            claim,
+            updates,
+            now=datetime.now(UTC),
+        )
+        if write is not None:
+            recovered = reconcile_parent_read_publication(ctx, write)
+            return ParentPublishResult(
+                True, recovered, result.detail or result.status.value
+            )
+    except (ValueError, OSError, subprocess.SubprocessError) as error:
+        return ParentPublishResult(True, False, str(error))
     return ParentPublishResult(
         True,
         result.status is ClaimPushStatus.PUSHED,
