@@ -15,6 +15,10 @@ from orchestune.forge import Forge
 from orchestune.infra.git_cli import run_git
 from orchestune.integrator.pr import list_open_attempt_prs
 from orchestune.integrator.proofs import TaskIntegrationProof
+from orchestune.integrator.read_gate import (
+    prepare_read_gate,
+    validate_read_finalization,
+)
 from orchestune.integrator.semantic_claim import (
     ClaimStatus,
     RefUpdate,
@@ -454,7 +458,8 @@ def start_required_review(ctx: Any, fetch_outcome: Callable[[Forge, int], Any]) 
         run_git(["rev-parse", "HEAD"], cwd=ctx.repository_root).stdout.strip() or "HEAD"
     )
     phase = SemanticReviewPhase.NOT_STARTED
-    if len(identity.child_sources) == 1:
+    read_gate = prepare_read_gate(ctx, head)
+    if len(identity.child_sources) == 1 and read_gate.allow_fast_path:
         try:
             decision = _single_fast_path(ctx, identity, fetch_outcome)
             phase = decision.phase
@@ -473,6 +478,12 @@ def start_required_review(ctx: Any, fetch_outcome: Callable[[Forge, int], Any]) 
         identity.base_sha,
         identity.child_sources,
         ci_verified_sha=head,
+        read_report_digest=read_gate.report_digest,
+        reviewed_read_report_digest=(
+            read_gate.report_digest
+            if phase is SemanticReviewPhase.FAST_PATH_PASSED
+            else None
+        ),
     )
     ctx.forge.add_comment(
         ctx.integration_pr_number, format_semantic_review_state_marker(state)
@@ -559,7 +570,7 @@ def validate_finalization_context(ctx: Any) -> str | None:
     ]
     if len(matching) != 1 or matching[0].head_sha != state.head_sha:
         return "live integration PR does not match the passed semantic review head"
-    return _reject_skipped_review(ctx, state)
+    return _reject_skipped_review(ctx, state) or validate_read_finalization(ctx)
 
 
 def _semantic_finalization_exempt(ctx: Any) -> bool:
@@ -585,6 +596,13 @@ def publish_parent_under_claim(ctx: Any) -> ParentPublishResult:
         return ParentPublishResult(
             True, False, acquired.detail or acquired.status.value
         )
+    read_error = (
+        validate_finalization_context(ctx)
+        if getattr(ctx.config, "stale_read_gate", "advisory") == "required"
+        else validate_read_finalization(ctx)
+    )
+    if read_error is not None:
+        return ParentPublishResult(True, False, read_error)
     parent_ref = f"refs/heads/parent/issue-{identity.parent_issue_number}"
     result = push_refs_under_claim(
         ctx.repository_root,

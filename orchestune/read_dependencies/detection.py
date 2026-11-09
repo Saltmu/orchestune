@@ -179,7 +179,8 @@ def _direction(
     if reader.validations or reader.integrated:
         return ReadDirection.REVERSE
     if any(
-        is_reader_own_write(item.identity, writer.issue_number, writer.claim_id)
+        not item.integrated
+        and is_reader_own_write(item.identity, writer.issue_number, writer.claim_id)
         for item in inputs.readers
     ):
         return ReadDirection.SAME_ATTEMPT

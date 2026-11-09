@@ -66,6 +66,7 @@ from orchestune.integrator.attempt import (
     find_open_attempts,
 )
 from orchestune.integrator.attempt_cleanup import RemoteRefPorts
+from orchestune.integrator.read_gate import make_default_read_context_builder
 from orchestune.integrator.semantic_claim import (
     DETAIL_FIX_NOT_DESCENDANT,
     PushStatus,
@@ -255,8 +256,11 @@ class SemanticReviewCycleRunner:
             lambda name: remote_branch_sha(repository_root, name)
         )
         self._mode = SemanticReviewMode(config.semantic_review_mode)
+        builder = self._ops.read_context_builder
+        if builder is None and config.stale_read_gate != "off":
+            builder = make_default_read_context_builder(self._forge, self._root)
         self._read_context = SemanticReadContext(
-            self._forge, config.stale_read_gate, self._ops.read_context_builder
+            self._forge, config.stale_read_gate, builder
         )
         self._lease = SemanticReviewLease(
             forge=self._forge,
