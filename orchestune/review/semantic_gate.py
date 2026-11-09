@@ -11,12 +11,15 @@ validates.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, fields, replace
 from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
+from orchestune.read_dependencies.contracts import ReadValidationV1
+from orchestune.read_dependencies.validation import validate_read_validation
 from orchestune.review.judgment import (
     judgment_digest,
     parse_judgments,
@@ -305,6 +308,11 @@ class SemanticTransitionObservation:
     judgments: SemanticJudgmentDecision | None = None
     ci: SemanticCiObservation | None = None
     operation: SemanticOperationObservation | None = None
+    #: Enabled by the runner only for stale_read_gate=required.
+    read_validation_required: bool = False
+    read_report_digest: str | None = None
+    read_candidate_ids: tuple[str, ...] = ()
+    read_validation: ReadValidationV1 | None = None
 
 
 @dataclass(frozen=True)
@@ -327,6 +335,7 @@ _EVIDENCE_CLEARED: Mapping[str, Any] = {
     "review_source_digest": None,
     "judgment_digest": None,
     "ci_verified_sha": None,
+    "reviewed_read_report_digest": None,
 }
 _FRESH_REVIEW: Mapping[str, Any] = {
     **_EVIDENCE_CLEARED,
@@ -463,11 +472,15 @@ def evaluate_semantic_review_transition(
     changed = _input_change(step)
     if changed is not None:
         return step.move(_P.INVALIDATED, changed)
+    read_change = _read_report_change(step)
+    if read_change is not None:
+        return read_change
     if state.phase in TERMINAL_PASSED_PHASES:
         return step.hold("terminal_passed")
     override = observation.override
     if (
         override is not None
+        and not observation.read_validation_required
         and override.attempt_id == state.attempt_id
         and override.head_sha == observation.observed_head_sha
     ):
@@ -495,6 +508,57 @@ def _input_change(step: _Step) -> str | None:
     if output is not None:
         allowed.add(output)
     return None if obs.observed_head_sha in allowed else "head_changed"
+
+
+def _read_report_change(step: _Step) -> SemanticTransitionDecision | None:
+    """Fail closed on report replacement; reuse explicit restart generations."""
+    s, obs = step.state, step.obs
+    if not obs.read_validation_required:
+        return None
+    if obs.mode != SemanticReviewMode.REQUIRED:
+        return step.escalate("read_validation_requires_semantic_review")
+    digest = obs.read_report_digest
+    if digest is None or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+        if s.phase == _P.ESCALATED:
+            return step.hold("read_report_missing")
+        return step.escalate("read_report_missing")
+    promoted = (
+        _completed_output(step) == obs.observed_head_sha
+        and obs.observed_head_sha != s.head_sha
+    )
+    if s.phase != _P.NOT_STARTED and s.read_report_digest != digest and not promoted:
+        return step.move(
+            _P.ESCALATED,
+            "read_report_changed",
+            read_report_digest=digest,
+            **_EVIDENCE_CLEARED,
+        )
+    if s.phase in TERMINAL_PASSED_PHASES:
+        error = _read_validation_error(step)
+        if error is None and s.reviewed_read_report_digest != digest:
+            error = "read_validation_invalid: reviewed report mismatch"
+        if error is not None:
+            return step.escalate(error)
+    return None
+
+
+def _read_validation_error(step: _Step) -> str | None:
+    if not step.obs.read_validation_required:
+        return None
+    validation, digest = step.obs.read_validation, step.obs.read_report_digest
+    if validation is None or digest is None:
+        return "read_validation_invalid: missing validation/report"
+    try:
+        validate_read_validation(
+            validation,
+            round_number=step.state.round,
+            head_sha=step.state.head_sha,
+            report_digest=digest,
+            candidate_ids=step.obs.read_candidate_ids,
+        )
+    except ValueError as error:
+        return f"read_validation_invalid: {error}"
+    return None
 
 
 def _current_operation(step: _Step) -> SemanticOperationObservation | None:
@@ -607,6 +671,7 @@ def _on_not_started(step: _Step) -> SemanticTransitionDecision:
         "review_requested",
         round=1,
         attempt_started_at=step.state.attempt_started_at or step.now,
+        read_report_digest=step.obs.read_report_digest,
     )
 
 
@@ -650,6 +715,7 @@ def _on_fix(step: _Step) -> SemanticTransitionDecision:
         operation_status=SemanticOperationStatus.COMPLETED,
         fix_output_sha=op.output_sha,
         fix_completed=True,
+        read_report_digest=step.obs.read_report_digest,
         **_EVIDENCE_CLEARED,
     )
 
@@ -669,10 +735,16 @@ def _route_judgments(step: _Step) -> SemanticTransitionDecision:
         return step.retry("unresolved_after_fix", "fix_retry_limit")
     if not verdict.passable:
         return step.escalate(verdict.reason)
+    error = _read_validation_error(step)
+    if error is not None:
+        return step.escalate(error)
     evidence = {
         "reviewed_sha": s.head_sha,
         "judgment_digest": verdict.digest,
         "operation_status": SemanticOperationStatus.COMPLETED,
+        "reviewed_read_report_digest": (
+            step.obs.read_report_digest if step.obs.read_validation_required else None
+        ),
     }
     if s.ci_verified_sha == s.head_sha:
         return step.move(_P.PASSED, "passed", **evidence)
@@ -696,6 +768,14 @@ def _on_ci_verification(step: _Step) -> SemanticTransitionDecision:
             ci_verified_sha=s.head_sha,
         )
     verdict = obs.judgments
+    error = _read_validation_error(step)
+    if error is not None:
+        return step.escalate(error)
+    if (
+        obs.read_validation_required
+        and s.reviewed_read_report_digest != obs.read_report_digest
+    ):
+        return step.escalate("read_validation_invalid: reviewed report mismatch")
     if (
         s.reviewed_sha == s.head_sha
         and _review_evidence(step)
