@@ -239,6 +239,9 @@ def parse_report(payload: str | bytes) -> StaleReadReportV1:
     data = _object(raw, "stale-read report")
     if data.get("schema") != _SCHEMA:
         raise ValueError("unsupported stale-read report schema")
+    version = data.get("version")
+    if isinstance(version, bool) or not isinstance(version, int) or version != 1:
+        raise ValueError("unsupported stale-read report version")
     report_keys = {field.name for field in fields(StaleReadReportV1)}
     _keys(data, report_keys | {"schema"}, "stale-read report")
     if not isinstance(data["readers"], list):

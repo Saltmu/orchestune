@@ -150,7 +150,13 @@ def _decode_chunks(
             base64.b64decode(data, validate=True) for _, _, data in sorted(matched)
         )
         report = parse_report(raw)
-    except (ValueError, binascii.Error, UnicodeDecodeError) as exc:
+    except (
+        ValueError,
+        binascii.Error,
+        UnicodeDecodeError,
+        TypeError,
+        AttributeError,
+    ) as exc:
         return _result("unknown", f"report chunks failed validation: {exc}")
     if report.digest != digest or report.candidate_head_sha != target_head_sha:
         return _result(

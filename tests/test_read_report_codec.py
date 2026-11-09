@@ -192,3 +192,15 @@ def test_null_or_non_string_detail_raises_value_error() -> None:
     ]
     with pytest.raises(ValueError, match="exclusion detail must be a string"):
         parse_report(json.dumps(payload))
+
+
+def test_non_integer_schema_version_raises_value_error() -> None:
+    payload = json.loads(serialize_report(sample_report()))
+    payload["version"] = True
+    with pytest.raises(ValueError, match="unsupported stale-read report version"):
+        parse_report(json.dumps(payload))
+
+    payload = json.loads(serialize_report(sample_report()))
+    payload["version"] = 1.0
+    with pytest.raises(ValueError, match="unsupported stale-read report version"):
+        parse_report(json.dumps(payload))
