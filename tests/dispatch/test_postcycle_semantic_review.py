@@ -39,6 +39,7 @@ from orchestune.dispatch.semantic_review.postcycle import (
     advance_pending_semantic_reviews,
     verify_semantic_ci,
 )
+from orchestune.dispatch.semantic_review.read_context import ReadContextBuilder
 from orchestune.integrator.semantic_claim import (
     ClaimResult,
     ClaimStatus,
@@ -125,6 +126,7 @@ class World:
         self.ci_result: SemanticCiObservation | None | str = "success"
         self.ops_overrides: dict[str, Any] = {}
         self.claim_overrides: dict[str, Any] = {}
+        self.read_context_builder: ReadContextBuilder | None = None
         self.config = DispatcherConfig(
             parent_issue_number=PARENT,
             forge=self.forge(),
@@ -304,6 +306,7 @@ class World:
             cleanup_fix_worktree=self.ops_overrides.get(
                 "cleanup_fix_worktree", cleanup_worktree
             ),
+            read_context_builder=self.read_context_builder,
         )
 
     def verify_ci(self, branch: str, sha: str) -> SemanticCiObservation | None:

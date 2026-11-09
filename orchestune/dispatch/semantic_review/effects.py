@@ -12,6 +12,7 @@ from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.gc.git import evaluate_worktree_removal
 from orchestune.dispatch.local_semantic_fix import cleanup_semantic_fix_worktree
 from orchestune.dispatch.semantic_review.adapters import (
+    SemanticFixLaunchContext,
     SemanticOperationResult,
     dispatch_semantic_fix_agent,
     escalate_semantic_review_to_human,
@@ -25,6 +26,7 @@ from orchestune.dispatch.semantic_review.evidence import (
     _Stop,
 )
 from orchestune.dispatch.semantic_review.lease import SemanticReviewLease
+from orchestune.dispatch.semantic_review.read_context import ReadContextBuilder
 from orchestune.dispatch.semantic_review.triggers import (
     round_trigger,
     round_triggers,
@@ -55,6 +57,7 @@ class SemanticReviewOperations:
     poll: Callable[..., SemanticOperationResult] = poll_semantic_operation
     escalate: Callable[..., None] = escalate_semantic_review_to_human
     cleanup_fix_worktree: Callable[..., bool] = cleanup_semantic_fix_worktree
+    read_context_builder: ReadContextBuilder | None = None
 
 
 def _escalation_notice_kind(attempt_id: str, reason: str) -> str:
@@ -102,9 +105,17 @@ class SemanticReviewEffects:
         since = normalize_timestamp(ctx.state.updated_at)
         if ctx.state.phase != _P.ESCALATED or nxt.round != ctx.state.round or not since:
             return False
-        if not any(
-            t.created_at >= since for t in round_triggers(triggers, nxt, fresh=True)
+        resumed = [
+            t
+            for t in round_triggers(triggers, nxt, fresh=True)
+            if t.created_at >= since
+        ]
+        if any(
+            ctx.read_context and not ctx.read_context.matches_trigger(t.body, nxt)
+            for t in resumed
         ):
+            raise _Stop("read_context_invalid", error="resumed trigger report mismatch")
+        if not resumed:
             self._lease.revalidate(ctx)
             self._forge.create_issue_comment(
                 ctx.pr.pr_number, self.trigger_body(ctx, nxt)
@@ -117,7 +128,14 @@ class SemanticReviewEffects:
         triggers = self._evidence.trusted_triggers(ctx)
         if self.resumed_trigger(ctx, nxt, triggers):
             return
-        if round_trigger(triggers, nxt, fresh=True) is not None:
+        existing = round_trigger(triggers, nxt, fresh=True)
+        if existing is not None:
+            if ctx.read_context and not ctx.read_context.matches_trigger(
+                existing.body, nxt
+            ):
+                raise _Stop(
+                    "read_context_invalid", error="existing trigger report mismatch"
+                )
             return  # posted by an earlier, interrupted run of this transition
         self._lease.revalidate(ctx)
         if round_trigger(triggers, nxt, fresh=False) is not None:
@@ -154,8 +172,13 @@ class SemanticReviewEffects:
             temp_branch=ctx.pr.temp_branch,
             expected_head_sha=reserved.head_sha,
             round_number=reserved.round,
-            worktree_root=(self._root / self._config.worktree_root).resolve(),
-            repo_root=self._root,
+            launch_context=SemanticFixLaunchContext(
+                worktree_root=(self._root / self._config.worktree_root).resolve(),
+                repo_root=self._root,
+            ),
+            read_context=ctx.read_context.fix_instructions(reserved)
+            if ctx.read_context
+            else "",
         )
         launched = replace(
             reserved,
