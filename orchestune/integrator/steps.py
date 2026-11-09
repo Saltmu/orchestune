@@ -608,7 +608,11 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
             return gate_blocked
         semantic_error = validate_finalization_context(ctx)
         if semantic_error is not None:
-            if ctx.read_gate_error:
+            if (
+                getattr(ctx.config, "stale_read_gate", "advisory") == "required"
+                and ctx.read_gate_error
+                and semantic_error == ctx.read_gate_error
+            ):
                 return self.handle_read_gate_block(ctx, semantic_error)
             return {
                 "status": IntegrationStatus.REVIEW_GATE_BLOCKED,
@@ -741,7 +745,11 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
             if claimed.handled:
                 if claimed.pushed:
                     return None
-                if ctx.read_gate_error:
+                if (
+                    getattr(ctx.config, "stale_read_gate", "advisory") == "required"
+                    and ctx.read_gate_error
+                    and claimed.detail == ctx.read_gate_error
+                ):
                     return self.handle_read_gate_block(ctx, ctx.read_gate_error)
                 return {
                     "status": IntegrationStatus.PARENT_BRANCH_ADVANCED,

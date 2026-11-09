@@ -515,3 +515,89 @@ def test_final_parent_push_revalidates_after_acquiring_the_claim():
     assert result.detail == "report changed"
     validate.assert_called_once_with(ctx)
     push.assert_not_called()
+
+
+def test_writers_includes_observation_snapshots(tmp_path: Path):
+    from orchestune.infra.git_cli import run_git
+    from orchestune.integrator.proofs import TaskIntegrationProof
+    from orchestune.integrator.read_context import ReaderSourceProof
+    from orchestune.integrator.read_gate import _writers
+    from orchestune.outcome_record import OutcomeRecord
+    from tests.read_dependency_test_support import evidence, observation
+
+    repo = tmp_path / "repo"
+    run_git(["init", "-b", "main", str(repo)], cwd=tmp_path)
+    (repo / "doc.txt").write_text("v1\n")
+    run_git(["add", "."], cwd=repo)
+    run_git(["commit", "-m", "v1"], cwd=repo)
+    c1 = run_git(["rev-parse", "HEAD"], cwd=repo).stdout.strip()
+
+    (repo / "doc.txt").write_text("v2\n")
+    run_git(["commit", "-am", "v2"], cwd=repo)
+    c2 = run_git(["rev-parse", "HEAD"], cwd=repo).stdout.strip()
+
+    # Revert back to v1 at HEAD
+    (repo / "doc.txt").write_text("v1\n")
+    run_git(["commit", "-am", "revert to v1"], cwd=repo)
+    head = run_git(["rev-parse", "HEAD"], cwd=repo).stdout.strip()
+
+    # c1 and head have identical doc.txt ("v1\n"), but observation was at c2 ("v2\n")
+    source = ReaderSourceProof(
+        proof=TaskIntegrationProof(1, "t1", c1, "parent"),
+        claim_id="c1",
+        completion_id="m1",
+        checkpoint=None,
+        outcome=OutcomeRecord(
+            result="done",
+            issue=1,
+            claim_id="c1",
+            completion_id="m1",
+            head_sha=c1,
+            read_evidence=evidence(
+                declared=(),
+                observations=(observation("doc.txt", "deadbeef" * 5, snapshot=c2),),
+            ),
+        ),
+    )
+    ctx = SimpleNamespace(
+        repository_root=repo,
+        attempt_identity=SimpleNamespace(base_sha=c1, child_sources=()),
+    )
+    writers = _writers(ctx, [source], head)
+    assert any(
+        any(c.path == "doc.txt" for c in w.changes) for w in writers
+    ), "change between c2 and head must be detected"
+
+
+def test_update_parent_branch_advisory_retains_publication_error_without_escalation():
+    from orchestune.integrator import steps as steps_module
+    from orchestune.integrator.attempt import ParentPublishResult
+    from orchestune.integrator.steps import AutoMergeChildIntegrationStep
+    from orchestune.integrator.types import IntegrationStatus
+
+    ctx = context()
+    ctx.config.stale_read_gate = "advisory"
+    ctx.integration_pr_number = 123
+    ctx.read_gate_error = "advisory read evidence missing"
+    step = AutoMergeChildIntegrationStep()
+
+    with (
+        patch.object(step, "handle_read_gate_block") as escalation,
+        patch.object(
+            steps_module,
+            "validate_read_finalization",
+            return_value=None,
+        ),
+        patch.object(
+            steps_module,
+            "publish_parent_under_claim",
+            return_value=ParentPublishResult(True, False, "semantic claim conflict"),
+        ),
+    ):
+        result = step._update_parent_branch(ctx)
+    escalation.assert_not_called()
+    assert result == {
+        "status": IntegrationStatus.PARENT_BRANCH_ADVANCED,
+        "error": "semantic claim conflict",
+        "auto_merged": False,
+    }

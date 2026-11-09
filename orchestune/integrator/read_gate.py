@@ -219,11 +219,15 @@ def _writers(
     known = _known_writers(ctx, sources, paths)
     writers: list[WriterChanges] = []
     bases = {ctx.attempt_identity.base_sha}
-    bases.update(
-        s.outcome.read_evidence.input_base_sha
-        for s in sources
-        if s.outcome and s.outcome.read_evidence
-    )
+    for s in sources:
+        if s.outcome and s.outcome.read_evidence:
+            if s.outcome.read_evidence.input_base_sha:
+                bases.add(s.outcome.read_evidence.input_base_sha)
+            bases.update(
+                o.snapshot_commit
+                for o in s.outcome.read_evidence.observations
+                if getattr(o, "snapshot_commit", None)
+            )
     for base in sorted(bases):
         for change in observe_changed_resources(
             base, head, paths, cwd=ctx.repository_root
