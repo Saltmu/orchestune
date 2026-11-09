@@ -39,6 +39,7 @@ from orchestune.integrator.timeout_policy import (
 )
 from orchestune.models import Task
 from orchestune.outcome_record import VALID_CHILD_REVIEW_GATE_MODES
+from orchestune.read_dependencies.contracts import ReadGateDecision, StaleReadReportV1
 from orchestune.review.semantic_gate import (
     VALID_SEMANTIC_REVIEW_MODES,
     IntegrationAttemptIdentity,
@@ -91,6 +92,7 @@ class IntegrationReport(TypedDict, total=False):
     blocked_reasons: dict[str, str]
     integration_pr_number: int | None
     semantic_review_dispatched: bool
+    read_gate: dict[str, Any]
     semantic_review_phase: str
     attempt_id: str
     deferred_tasks: list[str]
@@ -218,6 +220,9 @@ class IntegrationContext:
     attempt_identity: IntegrationAttemptIdentity | None = None
     semantic_review_state: SemanticReviewStateV1 | None = None
     semantic_review_override: SemanticReviewHumanOverrideV1 | None = None
+    read_report: StaleReadReportV1 | None = None
+    read_gate_decision: ReadGateDecision | None = None
+    read_gate_error: str | None = None
     reuse_existing_temp_branch: bool = False
     deferred_tasks: list[str] = field(default_factory=list)
     attempt_base_sha: str = ""

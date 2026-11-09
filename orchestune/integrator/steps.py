@@ -49,11 +49,17 @@ from orchestune.integrator.finalization_retry import (
 from orchestune.integrator.git_ops import IntegrationMerger
 from orchestune.integrator.pr import ensure_integration_pr
 from orchestune.integrator.proofs import TaskIntegrationProof
+from orchestune.integrator.read_gate import (
+    prepare_read_gate,
+    read_gate_diagnostics,
+    validate_read_finalization,
+)
 from orchestune.integrator.review_gate import (
     REASON_INTEGRATION_EVIDENCE_MISSING,
     ChildReviewGateDecision,
     ChildReviewGateFailure,
     ChildReviewGateInput,
+    compute_review_gate_digest,
     decide_child_review_gate,
     fetch_child_review_gate_outcome,
     format_child_review_gate_escalation_comment,
@@ -405,18 +411,29 @@ class SemanticReviewStep(IntegrationComponent):
             return {"status": IntegrationStatus.REVIEW_GATE_BLOCKED}
 
         if ctx.semantic_review_state is not None:
+            error = validate_read_finalization(ctx)
+            if error:
+                return AutoMergeChildIntegrationStep().handle_read_gate_block(
+                    ctx, error
+                )
             return {"status": IntegrationStatus.SUCCESS}
 
+        if ctx.config.semantic_review_mode != "required":
+            prepare_read_gate(
+                ctx,
+                run_git(["rev-parse", "HEAD"], cwd=ctx.repository_root).stdout.strip(),
+            )
         handled, dispatched = handle_non_required_review(ctx)
         if handled:
             return {
                 "status": IntegrationStatus.SUCCESS,
                 "semantic_review_dispatched": dispatched,
+                "read_gate": read_gate_diagnostics(ctx),
             }
+        status = start_required_review(ctx, fetch_child_review_gate_outcome)
         return {
-            "status": IntegrationStatus(
-                start_required_review(ctx, fetch_child_review_gate_outcome)
-            )
+            "status": IntegrationStatus(status),
+            "read_gate": read_gate_diagnostics(ctx),
         }
 
 
@@ -591,6 +608,8 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
             return gate_blocked
         semantic_error = validate_finalization_context(ctx)
         if semantic_error is not None:
+            if ctx.read_gate_error:
+                return self.handle_read_gate_block(ctx, semantic_error)
             return {
                 "status": IntegrationStatus.REVIEW_GATE_BLOCKED,
                 "error": semantic_error,
@@ -715,10 +734,15 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                 None if self._verify_already_integrated(ctx) else {"status": ctx.status}
             )
         try:
+            read_error = validate_read_finalization(ctx)
+            if read_error:
+                return self.handle_read_gate_block(ctx, read_error)
             claimed = publish_parent_under_claim(ctx)
             if claimed.handled:
                 if claimed.pushed:
                     return None
+                if ctx.read_gate_error:
+                    return self.handle_read_gate_block(ctx, ctx.read_gate_error)
                 return {
                     "status": IntegrationStatus.PARENT_BRANCH_ADVANCED,
                     "error": claimed.detail,
@@ -745,6 +769,24 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
                 "error": str(error),
                 "auto_merged": False,
             }
+
+    def handle_read_gate_block(
+        self, ctx: IntegrationContext, error: str
+    ) -> IntegrationReport:
+        failures = (
+            ChildReviewGateFailure(
+                issue_number=None, reason=f"stale_read_gate: {error}"
+            ),
+        )
+        decision = ChildReviewGateDecision(
+            False, failures, compute_review_gate_digest(failures)
+        )
+        self.handle_review_gate_block(ctx, decision)
+        return {
+            "status": IntegrationStatus.REVIEW_GATE_BLOCKED,
+            "error": error,
+            "auto_merged": False,
+        }
 
     def _finalize_single_child_task(
         self, ctx: IntegrationContext, task: Task, proof: TaskIntegrationProof
