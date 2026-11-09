@@ -679,7 +679,12 @@ def test_make_default_read_context_builder_wires_recomputation(tmp_path: Path):
 
     state = MagicMock(spec=SemanticReviewStateV1)
     state.parent_issue_number = 1230
+    state.pr_number = 1813
     state.base_sha = base_sha
+    state.head_sha = base_sha
+    state.attempt_id = "attempt-1230-1"
+    state.operation_id = "attempt-1230-1-fix"
+    state.fix_output_sha = new_head
     state.child_sources = (TaskIntegrationProof(10, "task-10", base_sha, base_sha),)
 
     builder = make_default_read_context_builder(forge, repo)
@@ -687,3 +692,141 @@ def test_make_default_read_context_builder_wires_recomputation(tmp_path: Path):
     assert result.inputs is not None
     assert result.inputs.candidate_head_sha == new_head
     assert result.coverage == ReadCoverage.COMPLETE
+
+    from orchestune.read_dependencies.detection import detect_stale_reads
+
+    report = detect_stale_reads(result.inputs)
+    assert report.coverage == ReadCoverage.COMPLETE
+    assert not report.unknowns
+    assert len(report.candidates) == 1
+    assert report.candidates[0].identity.writer_issue_number == 1230
+    assert report.candidates[0].identity.writer_claim_id == "attempt-1230-1"
+
+    # Verify that SemanticReadContext restores an intact report for the fix head
+    from orchestune.dispatch.semantic_review.read_context import SemanticReadContext
+    from orchestune.read_dependencies.contracts import StaleReadGate
+
+    read_ctx = SemanticReadContext(forge, StaleReadGate.REQUIRED, builder=builder)
+    restored = read_ctx.restore(state, new_head)
+    assert restored.required is True
+    assert restored.digest is not None
+    assert restored.report is not None
+    assert restored.report.coverage == ReadCoverage.COMPLETE
+    assert not restored.error
+
+
+def test_semantic_review_runner_wires_default_builder_and_restores_fix_writes(
+    tmp_path: Path,
+):
+    from datetime import UTC, datetime
+    from unittest.mock import MagicMock
+
+    from orchestune.claim.read_checkpoint import checkpoint_marker
+    from orchestune.dispatch.config.model import DispatcherConfig
+    from orchestune.dispatch.semantic_review.effects import SemanticReviewOperations
+    from orchestune.dispatch.semantic_review.postcycle import (
+        SemanticReviewCycleRunner,
+        SemanticReviewPorts,
+    )
+    from orchestune.infra.git_cli import run_git
+    from orchestune.integrator.proofs import TaskIntegrationProof
+    from orchestune.outcome_record import OutcomeRecord, ReviewSummary
+    from orchestune.read_dependencies.contracts import (
+        CheckpointAvailability,
+        ReadCheckpointV1,
+        ReadCoverage,
+        ReadEvidenceV1,
+        ReadSource,
+        seal_evidence,
+    )
+    from orchestune.review.semantic_gate import SemanticReviewStateV1
+    from tests.read_dependency_test_support import observation
+
+    repo = tmp_path / "repo"
+    run_git(["init", "-b", "main", str(repo)], cwd=tmp_path)
+    run_git(["config", "user.name", "Tester"], cwd=repo)
+    run_git(["config", "user.email", "tester@example.com"], cwd=repo)
+    (repo / "file.txt").write_text("initial\n")
+    run_git(["add", "."], cwd=repo)
+    run_git(["commit", "-m", "initial"], cwd=repo)
+    base_sha = run_git(["rev-parse", "HEAD"], cwd=repo).stdout.strip()
+
+    (repo / "file.txt").write_text("fixed\n")
+    run_git(["commit", "-am", "fix write"], cwd=repo)
+    fix_head = run_git(["rev-parse", "HEAD"], cwd=repo).stdout.strip()
+
+    ev = seal_evidence(
+        ReadEvidenceV1(
+            repository="owner/repo",
+            issue_number=10,
+            claim_id="claim-10",
+            input_base_sha=base_sha,
+            head_sha=base_sha,
+            declared_reads=("file.txt",),
+            observations=(observation("file.txt", "deadbeef" * 5, snapshot=base_sha),),
+            source=ReadSource.ADAPTER_OBSERVED,
+            coverage=ReadCoverage.COMPLETE,
+        )
+    )
+    outcome = OutcomeRecord(
+        result="done",
+        issue=10,
+        claim_id="claim-10",
+        completion_id="comp-10",
+        head_sha=base_sha,
+        review=ReviewSummary(reviewed_head_sha=base_sha),
+        read_evidence=ev,
+    )
+    chk = ReadCheckpointV1(
+        repository="owner/repo",
+        issue_number=10,
+        claim_id="claim-10",
+        availability=CheckpointAvailability.RECORDED,
+        input_base_sha=base_sha,
+    )
+    forge = MagicMock()
+    forge.get_repository_slug.return_value = "owner/repo"
+    forge.get_authenticated_user.return_value = "bot"
+    forge.list_all_issue_comments.return_value = [
+        {"user": {"login": "bot"}, "body": checkpoint_marker(chk)},
+        {"user": {"login": "bot"}, "body": outcome.render()},
+    ]
+    forge.find_issues_by_parent_metadata.return_value = []
+    forge.list_sub_issues.return_value = []
+
+    config = MagicMock(spec=DispatcherConfig)
+    config.semantic_review_mode = "required"
+    config.stale_read_gate = "required"
+    config.parent_issue_number = 1230
+
+    runner = SemanticReviewCycleRunner(
+        config,
+        ports=SemanticReviewPorts(
+            forge=forge,
+            verify_ci_fn=MagicMock(),
+            operations=SemanticReviewOperations(),
+        ),
+        repository_root=repo,
+        now=datetime.now(UTC),
+        worker_id="test-worker",
+    )
+    assert runner._read_context._builder is not None
+
+    state = MagicMock(spec=SemanticReviewStateV1)
+    state.parent_issue_number = 1230
+    state.pr_number = 1813
+    state.base_sha = base_sha
+    state.head_sha = base_sha
+    state.attempt_id = "attempt-1230-1"
+    state.operation_id = "attempt-1230-1-fix"
+    state.fix_output_sha = fix_head
+    state.child_sources = (TaskIntegrationProof(10, "task-10", base_sha, base_sha),)
+
+    read_ctx = runner._read_context.restore(state, fix_head)
+    assert read_ctx.required is True
+    assert read_ctx.digest is not None
+    assert not read_ctx.error
+    assert read_ctx.report is not None
+    assert read_ctx.report.coverage == ReadCoverage.COMPLETE
+    assert len(read_ctx.report.candidates) == 1
+    assert read_ctx.report.candidates[0].identity.writer_issue_number == 1230
