@@ -167,3 +167,10 @@ def test_candidate_or_exclusion_missing_identity_raises_value_error() -> None:
     payload["exclusions"] = [{"reason": "unrelated", "detail": "test"}]
     with pytest.raises(ValueError, match="exclusion has invalid fields"):
         parse_report(json.dumps(payload))
+
+
+def test_null_for_required_enum_field_raises_value_error() -> None:
+    payload = json.loads(serialize_report(sample_report()))
+    payload["coverage"] = None
+    with pytest.raises(ValueError, match="coverage must not be null"):
+        parse_report(json.dumps(payload))

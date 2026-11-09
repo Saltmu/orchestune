@@ -121,10 +121,13 @@ def _construct(cls: type[_T], value: object, name: str, **nested: Any) -> _T:
     for nested_name in nested:
         data.pop(nested_name, None)
     for field_name, enum_type in _ENUM_FIELDS.get(cls, {}).items():
-        if data.get(field_name) is None:
-            continue
+        val = data.get(field_name)
+        if val is None:
+            if (cls, field_name) == (ChangedResource, "unknown_reason"):
+                continue
+            raise ValueError(f"{name} {field_name} must not be null")
         try:
-            data[field_name] = enum_type(data[field_name])
+            data[field_name] = enum_type(val)
         except (TypeError, ValueError) as exc:
             raise ValueError(f"invalid {name} {field_name}: {exc}") from exc
     data.update(nested)
