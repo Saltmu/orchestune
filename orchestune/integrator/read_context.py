@@ -146,7 +146,7 @@ def build_read_context(
         snapshot, readers = _existing_readers(request, source)
         entries = list(snapshot.readers)
         for item in request.current_sources:
-            entry, reader = _source_reader(item, request.repository)
+            entry, reader = _source_reader(item, request.repository, integrated=False)
             _add_reader(entries, readers, entry, reader)
         return ReadContextResult(
             inputs=ReadContextInputs(
@@ -189,7 +189,10 @@ def _existing_readers(
         except Exception as error:  # noqa: BLE001 - boundary: retained data lookup cannot turn failure into empty reads
             raise _UnknownContext(UnknownReason.OBJECT_MISSING) from error
         _add_reader(
-            entries, readers, entry, _reader(entry, evidence, request.repository)
+            entries,
+            readers,
+            entry,
+            _reader(entry, evidence, request.repository, integrated=True),
         )
     return snapshot, readers
 
@@ -211,7 +214,7 @@ def _bootstrap(
     entries: list[ReaderSnapshotEntry] = []
     readers: list[ReaderInput] = []
     for item in history.readers:
-        entry, reader = _source_reader(item, request.repository)
+        entry, reader = _source_reader(item, request.repository, integrated=True)
         _add_reader(entries, readers, entry, reader)
     return (
         seal_snapshot(
@@ -227,7 +230,7 @@ def _bootstrap(
 
 
 def _source_reader(
-    item: ReaderSourceProof, repository: str
+    item: ReaderSourceProof, repository: str, *, integrated: bool = False
 ) -> tuple[ReaderSnapshotEntry, ReaderInput]:
     proof, outcome, checkpoint = item.proof, item.outcome, item.checkpoint
     if (
@@ -256,11 +259,17 @@ def _source_reader(
         evidence_digest=outcome.read_evidence.digest or "",
         validations=item.validations,
     )
-    return entry, _reader(entry, outcome.read_evidence, repository)
+    return entry, _reader(
+        entry, outcome.read_evidence, repository, integrated=integrated
+    )
 
 
 def _reader(
-    entry: ReaderSnapshotEntry, evidence: ReadEvidenceV1 | None, repository: str
+    entry: ReaderSnapshotEntry,
+    evidence: ReadEvidenceV1 | None,
+    repository: str,
+    *,
+    integrated: bool = False,
 ) -> ReaderInput:
     if (
         evidence is None
@@ -277,6 +286,7 @@ def _reader(
         ),
         evidence=evidence,
         validations=entry.validations,
+        integrated=integrated,
     )
 
 

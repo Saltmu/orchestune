@@ -176,7 +176,7 @@ def _unknown(
 def _direction(
     inputs: ReadContextInputs, reader: ReaderInput, writer: WriterChanges
 ) -> ReadDirection:
-    if reader.validations:
+    if reader.validations or reader.integrated:
         return ReadDirection.REVERSE
     if any(
         is_reader_own_write(item.identity, writer.issue_number, writer.claim_id)

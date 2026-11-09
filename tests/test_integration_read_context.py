@@ -350,3 +350,20 @@ def test_invalid_parent_identity_returns_unknown_before_reading_history() -> Non
     result = build_read_context(request(parent_sha="invalid"), source)
     assert result.inputs is None
     assert not source.mock_calls
+
+
+def test_historical_integrated_reader_produces_reverse_candidates_without_validations() -> (
+    None
+):
+    historical_source = replace(SOURCE, validations=())
+    backend_mock = backend(historical_source)
+    req = request()
+    result = build_read_context(req, backend_mock)
+    assert result.inputs is not None
+    assert len(result.inputs.readers) == 1
+    reader = result.inputs.readers[0]
+    assert reader.integrated is True
+    assert reader.validations == ()
+    report = detect_stale_reads(result.inputs)
+    assert report.candidates
+    assert all(c.identity.direction == ReadDirection.REVERSE for c in report.candidates)
