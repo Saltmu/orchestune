@@ -89,6 +89,10 @@ uv run pytest
 テストは開発者のグローバルなgit設定を読みません。autouseのfixtureが
 `GIT_CONFIG_GLOBAL`をテスト専用のファイル（コミット署名は無効）に向けます。
 インストールされたgitのシステム設定は、そのまま適用されます。
+さらに、OS間でモードのステージング挙動を揃えるため、fixtureはcommandスコープで
+`core.filemode = false`を強制します。テスト用リポジトリで実行権をステージする場合は、
+`os.chmod()`だけに頼らず、`git update-index --chmod=+x` / `--chmod=-x`または
+`git add --chmod=+x` / `--chmod=-x`を使ってください。
 テストで子プロセスの環境変数を組み立てるときは、`GIT_*`をまとめて消すと
 この隔離まで消えるので、`get_clean_git_env()`を基にしてください。
 
