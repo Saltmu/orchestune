@@ -5,11 +5,120 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+from collections.abc import Iterable, Mapping, Sequence
 from urllib.parse import quote
 
 from orchestune.validation import validate_ref_name
 
 from .graphql_fallback import GhRunner
+from .graphql_fallback import error_detail as _error_detail
+from .issues_rest import is_graphql_unavailable
+
+_BRANCH_PRESENCE_CHUNK = 50
+
+
+def _partition_branch_names(
+    names: Iterable[str],
+) -> tuple[list[str], dict[str, bool | None]]:
+    valid: list[str] = []
+    invalid: dict[str, bool | None] = {}
+    seen: set[str] = set()
+    for name in names:
+        if not isinstance(name, str) or name in seen:
+            continue
+        seen.add(name)
+        try:
+            validate_ref_name(name)
+        except ValueError:
+            invalid[name] = None
+        else:
+            valid.append(name)
+    return valid, invalid
+
+
+def _chunks(names: Sequence[str], size: int) -> Iterable[Sequence[str]]:
+    for start in range(0, len(names), size):
+        yield names[start : start + size]
+
+
+def _branch_presence_query(count: int) -> str:
+    variables = ", ".join(f"$q{index}: String!" for index in range(count))
+    fields = "\n".join(
+        f"    b{index}: ref(qualifiedName: $q{index}) {{ name prefix }}"
+        for index in range(count)
+    )
+    return (
+        f"query($owner: String!, $name: String!, {variables}) {{\n"
+        "  repository(owner: $owner, name: $name) {\n"
+        f"{fields}\n"
+        "  }\n"
+        "}"
+    )
+
+
+def _branch_presence_args(names: Sequence[str]) -> list[str]:
+    args = [
+        "gh",
+        "api",
+        "graphql",
+        "-F",
+        "owner={owner}",
+        "-F",
+        "name={repo}",
+        "-f",
+        f"query={_branch_presence_query(len(names))}",
+    ]
+    for index, name in enumerate(names):
+        args.extend(["-f", f"q{index}=refs/heads/{name}"])
+    return args
+
+
+def _confirmed_ref(ref: object, name: str) -> bool:
+    return (
+        isinstance(ref, Mapping)
+        and ref.get("name") == name
+        and ref.get("prefix") == "refs/heads/"
+    )
+
+
+def _parse_branch_presence(
+    payload: str, names: Sequence[str]
+) -> dict[str, bool | None] | None:
+    try:
+        parsed = json.loads(payload)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, dict) or parsed.get("errors"):
+        return None
+    data = parsed.get("data")
+    repository = data.get("repository") if isinstance(data, dict) else None
+    if not isinstance(repository, dict):
+        return None
+    result: dict[str, bool | None] = {}
+    for index, name in enumerate(names):
+        alias = f"b{index}"
+        if alias not in repository:
+            return None
+        ref = repository[alias]
+        if ref is None:
+            result[name] = False
+        elif _confirmed_ref(ref, name):
+            result[name] = True
+        else:
+            return None
+    return result
+
+
+def _rest_branch_presence(
+    forge: GitHubPullRequestMergeStateMixin, names: Sequence[str]
+) -> dict[str, bool | None]:
+    found: dict[str, bool | None] = {}
+    for name in names:
+        try:
+            found[name] = forge.branch_exists(name)
+        except Exception:  # noqa: BLE001 - boundary: one REST miss stays indeterminate
+            found[name] = None
+    return found
 
 
 class GitHubPullRequestMergeStateMixin:
@@ -79,6 +188,52 @@ class GitHubPullRequestMergeStateMixin:
                 return False
             raise
         return True
+
+    def _query_branch_chunk(
+        self, names: Sequence[str]
+    ) -> tuple[str, dict[str, bool | None]]:
+        try:
+            stdout = self._run(_branch_presence_args(names))
+        except subprocess.CalledProcessError as exc:
+            if is_graphql_unavailable(_error_detail(exc)):
+                return "down", {}
+            return "unknown", {}
+        except Exception:  # noqa: BLE001 - boundary: one chunk stays indeterminate
+            return "unknown", {}
+        parsed = _parse_branch_presence(stdout, names)
+        if parsed is None:
+            return "unknown", {}
+        return "ok", parsed
+
+    def _record_branch_chunk(
+        self,
+        result: dict[str, bool | None],
+        names: Sequence[str],
+        *,
+        graphql_down: bool,
+    ) -> bool:
+        if graphql_down:
+            result.update(_rest_branch_presence(self, names))
+            return True
+        status, parsed = self._query_branch_chunk(names)
+        if status == "down":
+            result.update(_rest_branch_presence(self, names))
+            return True
+        if status != "ok":
+            result.update(dict.fromkeys(names, None))
+            return False
+        result.update(parsed)
+        return False
+
+    def branches_present(self, names: Iterable[str]) -> dict[str, bool | None]:
+        """Return presence for each branch name. ``None`` means indeterminate."""
+        valid, result = _partition_branch_names(names)
+        graphql_down = False
+        for chunk in _chunks(valid, _BRANCH_PRESENCE_CHUNK):
+            graphql_down = self._record_branch_chunk(
+                result, chunk, graphql_down=graphql_down
+            )
+        return result
 
     def is_current_branch_tip_merged_into(self, head: str, base: str) -> bool:
         return self.get_current_branch_tip_sha_if_merged_into(head, base) is not None

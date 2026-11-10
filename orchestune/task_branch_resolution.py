@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TypeGuard
@@ -45,6 +45,41 @@ def probe_canonical_state(
         )
     except Exception:  # noqa: BLE001 - boundary: failed branch lookup is indeterminate, never absent
         return CanonicalBranchState.INDETERMINATE
+
+
+def _state_from_presence(value: object) -> CanonicalBranchState:
+    if value is True:
+        return CanonicalBranchState.PRESENT
+    if value is False:
+        return CanonicalBranchState.ABSENT
+    return CanonicalBranchState.INDETERMINATE
+
+
+def _states_from_batch(
+    names: Sequence[str],
+    batch: Callable[[Sequence[str]], Mapping[str, bool | None]],
+) -> dict[str, CanonicalBranchState]:
+    try:
+        raw = batch(names)
+    except Exception:  # noqa: BLE001 - boundary: a failed batch probe is indeterminate, never absent
+        raw = None
+    if not isinstance(raw, Mapping):
+        return dict.fromkeys(names, CanonicalBranchState.INDETERMINATE)
+    return {name: _state_from_presence(raw.get(name)) for name in names}
+
+
+def probe_canonical_states(
+    branches: Iterable[str],
+    lookup: Callable[[str], bool] | None = None,
+    batch: Callable[[Sequence[str]], Mapping[str, bool | None]] | None = None,
+) -> dict[str, CanonicalBranchState]:
+    """Resolve many canonical branches without treating uncertainty as absence."""
+    names = list(dict.fromkeys(branches))
+    if batch is not None:
+        return _states_from_batch(names, batch)
+    if lookup is None:
+        return dict.fromkeys(names, CanonicalBranchState.INDETERMINATE)
+    return {name: probe_canonical_state(name, lookup) for name in names}
 
 
 class BranchCapability(StrEnum):
@@ -223,4 +258,5 @@ __all__ = [
     "TaskMergeReceipt",
     "is_commit_oid",
     "probe_canonical_state",
+    "probe_canonical_states",
 ]

@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from orchestune.branch_naming import build_task_branch_name
 from orchestune.dependencies.assessment import (
     DependencyAssessment,
     assess_dependencies,
@@ -20,7 +21,11 @@ from orchestune.dependencies.resolution import (
     resolve_all_dependencies,
 )
 from orchestune.dispatch.config.model import DispatcherConfig
-from orchestune.dispatch.cycle.context import _build_pr_mappings, _build_task_mappings
+from orchestune.dispatch.cycle.context import (
+    _build_pr_mappings,
+    _build_task_mappings,
+    _explicit_branches_present,
+)
 from orchestune.dispatch.launch.service import _is_task_stack_eligible
 from orchestune.dispatch.phase.reconciliation import _MAIN_ACTIVE_WORKTREE_RULES
 from orchestune.dispatch.rebase import _decide_rebase_target
@@ -397,3 +402,128 @@ def test_pr_mapping_without_canonical_probe_fails_closed() -> None:
     assert changes_requested == set()
     assert resolutions[42].canonical_state is CanonicalBranchState.INDETERMINATE
     assert not resolutions[42].allows(BranchCapability.FETCH_MERGE)
+
+
+def _verified_pair():
+    issues = [
+        _issue(1, "task-a", labels=("status:in-progress",)),
+        _issue(2, "task-b", labels=("status:in-progress",)),
+    ]
+    tasks, _, _ = _build_task_mappings(issues)
+    prs = [
+        make_pr(
+            10,
+            head_ref=build_task_branch_name(1, "task-a"),
+            closes_issue_numbers=(1,),
+            is_cross_repository=False,
+            is_ci_passing=True,
+        ),
+        make_pr(
+            11,
+            head_ref="feat/issue-2-task-b",
+            closes_issue_numbers=(2,),
+            is_cross_repository=False,
+            is_ci_passing=True,
+        ),
+    ]
+    return tasks, prs
+
+
+def test_batch_probe_runs_once_per_context_for_distinct_candidates() -> None:
+    tasks, prs = _verified_pair()
+    seen: list[tuple[str, ...]] = []
+
+    def batch(names):
+        seen.append(tuple(names))
+        return {name: True for name in names}
+
+    first = _build_pr_mappings(
+        tasks, prs, canonical_state=lambda _name: False, branches_present=batch
+    )
+    second = _build_pr_mappings(
+        tasks, prs, canonical_state=lambda _name: False, branches_present=batch
+    )
+
+    assert len(seen) == 2
+    assert len(set(seen[0])) == 2
+    assert seen[0] == seen[1]
+    assert first[3][2].source is ResolutionSource.CANONICAL
+    assert second[3][2].canonical_state is CanonicalBranchState.PRESENT
+
+
+def test_no_verified_candidate_skips_branch_probes() -> None:
+    tasks, _, _ = _build_task_mappings(
+        [_issue(42, "task-a", labels=("status:in-progress",))]
+    )
+    calls = {"batch": 0, "single": 0}
+
+    def batch(_names):
+        calls["batch"] += 1
+        return {}
+
+    def single(_name: str) -> bool:
+        calls["single"] += 1
+        return True
+
+    _build_pr_mappings(tasks, [], canonical_state=single, branches_present=batch)
+
+    assert calls == {"batch": 0, "single": 0}
+
+
+def test_single_shot_forge_probes_each_verified_candidate() -> None:
+    tasks, prs = _verified_pair()
+    seen: list[str] = []
+
+    def single(name: str) -> bool:
+        seen.append(name)
+        return False
+
+    _, _, branches, resolutions = _build_pr_mappings(tasks, prs, canonical_state=single)
+
+    assert seen == [
+        build_task_branch_name(1, "task-a"),
+        build_task_branch_name(2, "task-b"),
+    ]
+    assert branches[2] == "feat/issue-2-task-b"
+    assert resolutions[2].source is ResolutionSource.PR_FALLBACK
+
+
+def test_missing_batch_key_does_not_use_pr_fallback() -> None:
+    tasks, prs = _verified_pair()
+
+    def batch(_names):
+        return {}
+
+    _, _, branches, resolutions = _build_pr_mappings(
+        tasks, prs, canonical_state=lambda _name: False, branches_present=batch
+    )
+
+    assert branches[2] == build_task_branch_name(2, "task-b")
+    assert resolutions[2].canonical_state is CanonicalBranchState.INDETERMINATE
+    assert not resolutions[2].allows(BranchCapability.FETCH_MERGE)
+
+
+def test_batch_failure_is_indeterminate() -> None:
+    tasks, prs = _verified_pair()
+
+    def batch(_names):
+        raise RuntimeError("down")
+
+    _, _, _branches, resolutions = _build_pr_mappings(
+        tasks, prs, branches_present=batch
+    )
+
+    assert resolutions[2].canonical_state is CanonicalBranchState.INDETERMINATE
+
+
+def test_magicmock_does_not_count_as_an_explicit_batch_probe() -> None:
+    forge = MagicMock()
+    forge.branches_present.return_value = {}
+
+    assert _explicit_branches_present(forge) is None
+
+    class _BatchForge:
+        def branches_present(self, _names):
+            return {}
+
+    assert _explicit_branches_present(_BatchForge()) is not None

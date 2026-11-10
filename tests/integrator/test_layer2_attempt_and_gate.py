@@ -101,6 +101,7 @@ def test_list_open_attempt_prs_requires_upstream_head_prefix_and_parent_base():
     ]
 
     assert [pr.number for pr in list_open_attempt_prs(forge, 100)] == [1]
+    forge.list_open_prs.assert_called_once_with(include_files=False)
 
 
 def test_find_open_attempts_uses_only_trusted_state_and_human_override():

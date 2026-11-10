@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from orchestune.branch_naming import build_task_branch_name
@@ -27,7 +27,7 @@ from orchestune.task_branch_resolution import (
     CanonicalBranchState,
     TaskBranchResolution,
     TaskBranchResolver,
-    probe_canonical_state,
+    probe_canonical_states,
 )
 
 
@@ -271,11 +271,50 @@ def _build_task_mappings(
     return tasks_by_issue, issue_number_by_subtask_id, done_issue_numbers
 
 
+def _explicit_branches_present(
+    forge: object,
+) -> Callable[[Sequence[str]], Mapping[str, bool | None]] | None:
+    """Use a batch probe only when the concrete type defines one."""
+    for cls in type(forge).__mro__:
+        method = cls.__dict__.get("branches_present")
+        if not callable(method):
+            continue
+        bound = getattr(forge, "branches_present", None)
+        return bound if callable(bound) else None
+    return None
+
+
+def _verified_canonical_names(
+    tasks_by_issue: dict, resolver: TaskBranchResolver
+) -> list[str]:
+    names: list[str] = []
+    for task in tasks_by_issue.values():
+        if not task.subtask_id:
+            continue
+        if resolver.has_verified_candidate(task.issue_number, task.subtask_id):
+            names.append(build_task_branch_name(task.issue_number, task.subtask_id))
+    return names
+
+
+def _probed_canonical_states(
+    tasks_by_issue: dict,
+    resolver: TaskBranchResolver,
+    canonical_state: Callable[[str], bool] | None,
+    branches_present: Callable[[Sequence[str]], Mapping[str, bool | None]] | None,
+) -> dict[str, CanonicalBranchState]:
+    names = _verified_canonical_names(tasks_by_issue, resolver)
+    if not names or (canonical_state is None and branches_present is None):
+        return {}
+    return probe_canonical_states(names, lookup=canonical_state, batch=branches_present)
+
+
 def _build_pr_mappings(
     tasks_by_issue: dict,
     prs: list,
     *,
     canonical_state: Callable[[str], bool] | None = None,
+    branches_present: Callable[[Sequence[str]], Mapping[str, bool | None]]
+    | None = None,
 ) -> tuple[
     set[int],
     set[int],
@@ -287,6 +326,9 @@ def _build_pr_mappings(
     branch_by_issue_number: dict[int, str] = {}
     resolutions: dict[int, TaskBranchResolution] = {}
     resolver = TaskBranchResolver(prs)
+    probed = _probed_canonical_states(
+        tasks_by_issue, resolver, canonical_state, branches_present
+    )
 
     for task in tasks_by_issue.values():
         if not task.subtask_id:
@@ -296,8 +338,8 @@ def _build_pr_mappings(
             task.issue_number, task.subtask_id
         )
         state = CanonicalBranchState.INDETERMINATE
-        if has_candidate and canonical_state is not None:
-            state = probe_canonical_state(canonical, canonical_state)
+        if has_candidate and probed:
+            state = probed.get(canonical, CanonicalBranchState.INDETERMINATE)
         resolution = resolver.resolve(task.issue_number, task.subtask_id, state)
         resolutions[task.issue_number] = resolution
         branch_by_issue_number[task.issue_number] = resolution.branch_name
@@ -341,6 +383,7 @@ def _build_cycle_context(
         tasks_by_issue,
         prs,
         canonical_state=config.resolved_forge.branch_exists,
+        branches_present=_explicit_branches_present(config.resolved_forge),
     )
 
     return CycleContext(

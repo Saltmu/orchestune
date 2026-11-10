@@ -121,6 +121,7 @@ class TestEnsureIntegrationPrIdentity(_FakeForgeTest):
 
         assert pr_number == 77
         self.forge.create_pull_request.assert_not_called()
+        self.forge.list_open_prs.assert_called_once_with(include_files=False)
 
     def test_reused_pr_is_updated_with_current_merged_tasks(self):
         # #375: 複数サイクルにまたがって同じPRへタスクが追加統合される場合、
@@ -577,6 +578,15 @@ class TestMarkParentFinalPrPending(_FakeForgeTest):
 
         self.forge.update_pull_request.assert_not_called()
         self.forge.create_pull_request.assert_not_called()
+        self.forge.list_open_prs.assert_called_once_with(include_files=False)
+
+    def test_supplied_empty_list_is_not_fetched(self):
+        self.forge.list_open_prs.side_effect = AssertionError("must reuse the list")
+
+        assert (
+            mark_parent_final_pr_pending(100, self._children(), self.forge, open_prs=())
+            is None
+        )
 
     def test_does_nothing_without_open_children(self):
         self.forge.list_open_prs.return_value = [self._final_pr()]
