@@ -551,14 +551,20 @@ class TestDocsExistenceVerificationConsistency:
 
     @pytest.mark.parametrize("lang", sorted(USAGE_DOCS))
     def test_key_checks_section_notes_multiple_warning_types_can_coexist(self, lang):
-        """複数種類のwarningが同一の`Warnings:`出力に混在しうることの明示。
+        """1回の実行で契約見出しと実在見出しが同時に出得ることの明示。
 
         既存の"File/Symbol Conflict"文言に'multiple'/'複数'という語が偶然
         含まれるため、それらと衝突しないより具体的なマーカーで判定する。
         """
         section = _section(lang, 3)
         marker = "同時に" if lang == "ja" else "at once"
+        heading = (
+            "未存在の footprint / symbols"
+            if lang == "ja"
+            else "missing footprint / symbols"
+        )
         assert marker in section
+        assert heading in section
 
 
 class TestDocsExecutionProfilesConsistency:
