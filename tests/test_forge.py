@@ -870,6 +870,25 @@ class TestBranchesPresent:
         assert all(result[name] is None for name in names[:50])
         assert result[names[50]] is True
 
+    def test_own_timeout_keeps_earlier_chunks(self, monkeypatch):
+        calls = {"n": 0}
+
+        def fake_run(args, **_kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return subprocess.CompletedProcess(
+                    args, 0, stdout=_present_payload(args), stderr=""
+                )
+            raise subprocess.TimeoutExpired(args, 1)
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        names = [f"branch-{index}" for index in range(51)]
+        result = GitHubForge(timeout_seconds=1).branches_present(names)
+
+        assert calls["n"] == 2
+        assert all(result[name] is True for name in names[:50])
+        assert result[names[50]] is None
+
     def test_bad_ref_invalid_json_and_errors_are_not_absence(self):
         payloads = [
             json.dumps(
@@ -922,8 +941,16 @@ class TestBranchesPresent:
         assert result["branch-0"] is True
 
     def test_interrupt_propagates(self):
+        from orchestune.infra.execution_deadline import ExecutionInterrupt
+
         def run(_args, input_text=None):
             raise KeyboardInterrupt
 
         with pytest.raises(KeyboardInterrupt):
             self._forge(run).branches_present(["present"])
+
+        def interrupt(_args, input_text=None):
+            raise ExecutionInterrupt
+
+        with pytest.raises(ExecutionInterrupt):
+            self._forge(interrupt).branches_present(["present"])

@@ -198,6 +198,8 @@ class GitHubPullRequestMergeStateMixin:
             if is_graphql_unavailable(_error_detail(exc)):
                 return "down", {}
             return "unknown", {}
+        except Exception:  # noqa: BLE001 - boundary: one chunk stays indeterminate
+            return "unknown", {}
         parsed = _parse_branch_presence(stdout, names)
         if parsed is None:
             return "unknown", {}
