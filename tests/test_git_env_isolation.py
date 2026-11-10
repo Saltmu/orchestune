@@ -227,3 +227,43 @@ def test_clean_git_env_keeps_the_config_isolation():
     clean = get_clean_git_env()
 
     assert clean["GIT_CONFIG_GLOBAL"] == os.environ["GIT_CONFIG_GLOBAL"]
+    assert clean["GIT_CONFIG_COUNT"] == "1"
+    assert clean["GIT_CONFIG_KEY_0"] == "core.filemode"
+    assert clean["GIT_CONFIG_VALUE_0"] == "false"
+
+
+def test_run_git_keeps_core_filemode_command_override(tmp_path: Path):
+    from orchestune.infra.git_cli import run_git
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    run_git(["init", "-q"], cwd=repo)
+
+    shown = run_git(["config", "--show-scope", "--get", "core.filemode"], cwd=repo)
+
+    assert shown.stdout.strip().split("\t") == ["command", "false"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX chmod is unavailable on Windows")
+def test_chmod_does_not_stage_executable_mode_without_explicit_git_option(
+    tmp_path: Path,
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    assert _git(["init", "-q"], repo).returncode == 0
+    assert _git(["config", "user.name", "test-bot"], repo).returncode == 0
+    assert (
+        _git(["config", "user.email", "test-bot@example.invalid"], repo).returncode == 0
+    )
+
+    script = repo / "mode.sh"
+    script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    assert _git(["add", "mode.sh"], repo).returncode == 0
+    assert _git(["commit", "-m", "Add script"], repo).returncode == 0
+
+    script.chmod(0o755)
+    assert _git(["add", "mode.sh"], repo).returncode == 0
+    assert _git(["ls-files", "--stage", "mode.sh"], repo).stdout.startswith("100644 ")
+
+    assert _git(["add", "--chmod=+x", "mode.sh"], repo).returncode == 0
+    assert _git(["ls-files", "--stage", "mode.sh"], repo).stdout.startswith("100755 ")

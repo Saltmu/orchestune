@@ -88,9 +88,14 @@ uv run pytest
 
 Tests do not read your global git configuration: an autouse fixture points
 `GIT_CONFIG_GLOBAL` at a test-only file (commit signing off). The system
-configuration of the installed git still applies. When a test builds a child
-process environment, start from `get_clean_git_env()` instead of dropping every
-`GIT_*` variable, which would also drop this isolation.
+configuration of the installed git still applies. The fixture also forces
+`core.filemode = false` at command scope so tests get the same mode-staging
+behavior on every OS. To stage an executable mode in a test repository, use
+`git update-index --chmod=+x` / `--chmod=-x` or `git add --chmod=+x` /
+`--chmod=-x`; changing filesystem permissions with `os.chmod()` alone is not
+enough. When a test builds a child process environment, start from
+`get_clean_git_env()` instead of dropping every `GIT_*` variable, which would
+also drop this isolation.
 
 The six real symlink tests for config loading and installer payload/migration
 skip only when Windows reports missing creation privilege (`WinError 1314`).

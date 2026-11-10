@@ -212,6 +212,10 @@ class ReconciliationMachine(RuleBasedStateMachine):
             ":status.transition-label:" in i.operation for i in pending
         ):
             return  # external deletion requires an add; transition Intent cannot resume it
+        if not lifecycle_labels(self.loop.labels()) and any(
+            ":status.remove-label:" in i.operation for i in pending
+        ):
+            return  # a pending removal cannot restore the retained label after external deletion
         labels = self.loop.labels()
         if len(lifecycle_labels(labels)) > 1 and any(
             ":status.add-label:" in i.operation for i in pending

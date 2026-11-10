@@ -260,7 +260,9 @@ class TestRelativeRepositoryRoot:
         path.write_text(content, encoding="utf-8")
         if executable:
             path.chmod(0o755)
-        cls._git(repo, "add", rel_path)
+            cls._git(repo, "add", "--chmod=+x", rel_path)
+        else:
+            cls._git(repo, "add", rel_path)
         cls._git(repo, "commit", "-m", msg)
 
     def _build_repo(self, workspace: Path) -> Path:

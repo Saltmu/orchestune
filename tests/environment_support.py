@@ -53,10 +53,14 @@ def _isolated_gitconfig(tmp_path_factory: pytest.TempPathFactory) -> Path:
 @pytest.fixture(autouse=True)
 def _isolate_git_env(monkeypatch: pytest.MonkeyPatch, _isolated_gitconfig: Path):
     """Ensure tests run in an isolated Git environment where GIT_* variables are stripped
-    and the developer's global git config is not read (#1335)."""
+    and the developer's global git config is not read (#1335). Keep filemode
+    detection disabled so Git mode staging behaves the same across operating systems (#1823)."""
     for var in DANGEROUS_GIT_ENV_VARS:
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(_isolated_gitconfig))
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "core.filemode")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "false")
     yield
 
 

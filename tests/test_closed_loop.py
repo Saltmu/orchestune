@@ -118,7 +118,7 @@ class DummyGitRepo:
         if executable:
             p.chmod(0o755)
         self.run_git(
-            ["add", rel_path],
+            ["add", "--chmod=+x", rel_path] if executable else ["add", rel_path],
             cwd=self.local_path,
             check=True,
         )
