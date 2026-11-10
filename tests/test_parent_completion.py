@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import subprocess
+from typing import cast
 from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
 import orchestune.integrator.parent_completion as parent_completion
+from orchestune.forge import Forge
 from orchestune.infra.git_cli import MergeProbeResult, MergeProbeStatus
 from orchestune.integrator.parent_branch_state import is_current_parent_branch_merged
 from orchestune.integrator.parent_completion import process_parent_completion
@@ -172,7 +174,7 @@ class TestProcessParentCompletion:
         "orchestune.integrator.parent_completion.ensure_parent_final_pr", autospec=True
     )
     @patch(
-        "orchestune.integrator.parent_completion.migrate_open_parent_final_pr",
+        "orchestune.integrator.parent_completion.load_and_migrate_parent_final_pr",
         autospec=True,
     )
     def test_migrates_legacy_final_pr_before_waiting_on_new_open_child(
@@ -184,7 +186,7 @@ class TestProcessParentCompletion:
             _issue(101, "CLOSED"),
             _issue(102, "OPEN"),
         ]
-        mock_migrate_legacy_pr.return_value = 321
+        mock_migrate_legacy_pr.return_value = (None, False)
 
         res = process_parent_completion(100, apply=True, forge=fake_forge)
 
@@ -195,7 +197,7 @@ class TestProcessParentCompletion:
         )
 
     @patch(
-        "orchestune.integrator.parent_completion.migrate_open_parent_final_pr",
+        "orchestune.integrator.parent_completion.load_and_migrate_parent_final_pr",
         autospec=True,
     )
     def test_reports_unsafe_legacy_pr_before_waiting_on_open_child(
@@ -532,7 +534,7 @@ class TestPendingFinalPr:
         autospec=True,
     )
     @patch(
-        "orchestune.integrator.parent_completion.migrate_open_parent_final_pr",
+        "orchestune.integrator.parent_completion.load_and_migrate_parent_final_pr",
         autospec=True,
     )
     def test_unsafe_legacy_pr_is_not_marked_pending(
@@ -867,3 +869,97 @@ def test_prepare_final_pr_unknown_warns_and_proceeds(
     captured = capsys.readouterr()
     assert "Warning" in captured.err
     assert "unknown" in captured.err
+
+
+class _ParentPrForge:
+    def __init__(self, pr: PrRecord | None, children: list[IssueRecord]) -> None:
+        self.prs = [] if pr is None else [pr]
+        self.children = children
+        self.events: list[str] = []
+        self.updates: list[str] = []
+
+    def list_open_prs(self, **kwargs: object) -> list[PrRecord]:
+        self.events.append(f"list:{kwargs.get('include_files')}")
+        return list(self.prs)
+
+    def update_pull_request(self, number: int, title: str, body: str) -> None:
+        self.events.append("update")
+        self.updates.append(body)
+        self.prs = [
+            PrRecord(
+                number=pr.number,
+                head_ref=pr.head_ref,
+                changed_files=pr.changed_files,
+                base_ref=pr.base_ref,
+                is_cross_repository=pr.is_cross_repository,
+                title=title,
+                body=body,
+            )
+            if pr.number == number
+            else pr
+            for pr in self.prs
+        ]
+
+    def list_sub_issues(self, _parent: int) -> list[IssueRecord]:
+        self.events.append("children")
+        return list(self.children)
+
+    def find_issues_by_parent_metadata(self, _parent: int) -> list[IssueRecord]:
+        self.events.append("metadata")
+        return []
+
+    def list_prs(self, **_kwargs: object) -> list[PrRecord]:
+        self.events.append("summaries")
+        raise RuntimeError("summary down")
+
+
+def test_open_child_without_migration_lists_open_prs_once() -> None:
+    forge = _ParentPrForge(_final_pr(), [_issue(101, "OPEN")])
+
+    res = process_parent_completion(100, apply=True, forge=cast(Forge, forge))
+
+    assert res["status"] == "waiting_on_children"
+    assert forge.events == ["list:False", "children", "metadata", "summaries"]
+    assert forge.updates == []
+
+
+def test_missing_final_pr_does_not_list_again_or_write() -> None:
+    forge = _ParentPrForge(None, [_issue(101, "OPEN")])
+
+    res = process_parent_completion(100, apply=True, forge=cast(Forge, forge))
+
+    assert res["status"] == "waiting_on_children"
+    assert forge.events == ["list:False", "children", "metadata"]
+    assert forge.updates == []
+
+
+def test_migration_precedes_children_and_rereads_before_pending() -> None:
+    forge = _ParentPrForge(_final_pr("Closes #100\nkept\n"), [_issue(101, "OPEN")])
+
+    res = process_parent_completion(100, apply=True, forge=cast(Forge, forge))
+
+    assert res["status"] == "waiting_on_children"
+    assert forge.events == [
+        "list:False",
+        "update",
+        "children",
+        "metadata",
+        "list:False",
+        "summaries",
+    ]
+    assert forge.updates == ["Parent issue: #100\nkept\n"]
+    assert forge.prs[0].body == "Parent issue: #100\nkept\n"
+
+
+def test_migration_failure_skips_child_discovery_and_pending() -> None:
+    forge = _ParentPrForge(_final_pr("Closes #100\n"), [_issue(101, "OPEN")])
+
+    def _fail(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("transient API failure")
+
+    forge.update_pull_request = _fail  # type: ignore[method-assign]
+
+    res = process_parent_completion(100, apply=True, forge=cast(Forge, forge))
+
+    assert res["status"] == "unsafe_final_pr"
+    assert forge.events == ["list:False"]

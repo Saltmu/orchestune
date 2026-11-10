@@ -63,4 +63,14 @@ During candidate selection in the scheduling cycle (`_filter_candidates_for_forc
 
 Excluded tasks remain in `status:queued` for the next cycle (recorded as `forced-serial` in skip records) and are dispatched safely once the preceding reservation is released upon task completion. This prevents unneeded `status:blocked` transitions from `CLAIM_CONFLICT` at claim time when active tasks widen their reservations via `--amend-footprint`. Consistent with claim conflict rules, overlaps with interactive reservations do not cause exclusion.
 
+## 8. GitHub reads inside one dispatch (#1836)
+
+In apply mode, the pre-integration cycle and the scheduling cycle each rebuild context with `_build_cycle_context`: child Issues, the open PR list including files, and candidate branch presence. The integration boundary releases `run_state_lock`, so scheduling does not reuse the pre-integration reads.
+
+Candidate branches are the canonical names that have a verified candidate in that context. They are checked together, at most 50 per GraphQL call. A Forge without the batch operation still calls `branch_exists` once per candidate. Recovery and the Integrator's single-ref checks stay one branch at a time. An indeterminate candidate is not treated as absent and does not fall back to a PR branch.
+
+External-lock checks use the open PR list that includes files. Attempt lookup, reusable integration-PR matching, and the resolver list in integration preparation use a lightweight list without files. Attempt finalization reads the list again immediately before it reconciles.
+
+Parent completion decides legacy final-PR migration before it discovers child Issues. When that migration does not write, the pending marker receives the candidate already read. When the body is rewritten, the pending marker reads the lightweight list again. A failed migration returns `unsafe_final_pr` and does not mark the PR pending. Standalone pending, migration, and integration-PR calls that omit the list still fetch it themselves when they need it.
+
 

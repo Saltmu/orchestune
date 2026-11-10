@@ -79,6 +79,44 @@ def test_prepare_dependency_states_are_passed_to_merger(tmp_path, monkeypatch):
     )
 
 
+def test_prepare_tasks_lists_resolver_prs_without_files(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from orchestune.integrator import steps, types
+    from orchestune.models import Task
+
+    task = Task(
+        issue_number=1,
+        subtask_id="task-1",
+        footprint=(),
+        symbols=(),
+        risk=False,
+        priority="medium",
+        progress_partial=False,
+        status_labels=("status:done",),
+        created_at="2026-01-01T00:00:00Z",
+    )
+    states = SimpleNamespace(integrated=frozenset(), not_integrated={})
+    monkeypatch.setattr(
+        steps,
+        "load_integration_tasks",
+        lambda *args, **kwargs: ([task], [], states),
+    )
+    forge = MagicMock()
+    forge.list_open_prs.return_value = []
+    ctx = types.IntegrationContext(
+        config=types.IntegratorConfig(parent_issue_number=100, apply=True, forge=forge),
+        repository_root=tmp_path,
+        original_root=tmp_path,
+        base_branch="main",
+        temp_branch="integration-temp",
+    )
+
+    steps.PrepareTasksStep().execute(ctx)
+
+    forge.list_open_prs.assert_called_once_with(include_files=False)
+
+
 class TestMergeFailure:
     def test_merge_conflict_requeues_the_task(self, integrator_env: IntegratorEnv):
         integrator_env.set_done_issues(make_done_issue(1, subtask_id="task-1"))

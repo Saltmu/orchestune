@@ -83,14 +83,15 @@ def _integration_pr_content(base: str, merged_tasks: list[str]) -> tuple[str, st
 
 
 def _find_reusable_integration_pr(
-    forge: Forge, head: str, base: str
+    forge: Forge,
+    head: str,
+    base: str,
+    *,
+    open_prs: Sequence[PrRecord] | None = None,
 ) -> PrRecord | None:
+    records = forge.list_open_prs(include_files=False) if open_prs is None else open_prs
     return next(
-        (
-            pr
-            for pr in forge.list_open_prs()
-            if _is_reusable_integration_pr(pr, head, base)
-        ),
+        (pr for pr in records if _is_reusable_integration_pr(pr, head, base)),
         None,
     )
 
@@ -101,7 +102,7 @@ def list_open_attempt_prs(forge: Forge, parent_issue_number: int) -> list[PrReco
     base = f"parent/issue-{parent_issue_number}"
     return [
         pr
-        for pr in forge.list_open_prs()
+        for pr in forge.list_open_prs(include_files=False)
         if pr.head_ref.startswith(prefix)
         and pr.base_ref == base
         and pr.is_cross_repository is False
@@ -147,6 +148,30 @@ def _migrate_legacy_parent_final_pr(
     return True
 
 
+def load_and_migrate_parent_final_pr(
+    parent_issue_number: int,
+    base_branch: str = "main",
+    forge: Forge | None = None,
+    *,
+    open_prs: Sequence[PrRecord] | None = None,
+) -> tuple[PrRecord | None, bool]:
+    """Select the open final PR from a lightweight list and migrate it.
+
+    The returned record is the one that was selected. The bool is whether the
+    body was written. Callers that reuse the list must not treat a written body
+    as current until they read the PR again.
+    """
+    forge = forge or GitHubForge()
+    head = f"parent/issue-{parent_issue_number}"
+    existing = _find_reusable_integration_pr(
+        forge, head, base_branch, open_prs=open_prs
+    )
+    if existing is None:
+        return None, False
+    wrote = _migrate_legacy_parent_final_pr(forge, existing, parent_issue_number)
+    return existing, wrote
+
+
 def migrate_open_parent_final_pr(
     parent_issue_number: int,
     base_branch: str = "main",
@@ -159,13 +184,10 @@ def migrate_open_parent_final_pr(
     その競合を防ぐため、この関数はPRを新規作成せず、正規の既存PRを見つけた場合
     だけ安全な参照へ移行する。
     """
-    forge = forge or GitHubForge()
-    head = f"parent/issue-{parent_issue_number}"
-    existing = _find_reusable_integration_pr(forge, head, base_branch)
-    if existing is None:
-        return None
-    _migrate_legacy_parent_final_pr(forge, existing, parent_issue_number)
-    return existing.number
+    existing, _wrote = load_and_migrate_parent_final_pr(
+        parent_issue_number, base_branch, forge
+    )
+    return None if existing is None else existing.number
 
 
 def ensure_parent_final_pr(
@@ -233,6 +255,8 @@ def mark_parent_final_pr_pending(
     children: Sequence[IssueRecord],
     forge: Forge,
     base_branch: str = "main",
+    *,
+    open_prs: Sequence[PrRecord] | None = None,
 ) -> int | None:
     """#814: 未完了の子Issueがある間、openな最終統合PRの本文を保留表示にする。
 
@@ -252,7 +276,9 @@ def mark_parent_final_pr_pending(
         return None
     try:
         head = f"parent/issue-{parent_issue_number}"
-        existing = _find_reusable_integration_pr(forge, head, base_branch)
+        existing = _find_reusable_integration_pr(
+            forge, head, base_branch, open_prs=open_prs
+        )
         if existing is None:
             return None
         summaries = collect_child_summaries(

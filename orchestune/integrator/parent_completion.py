@@ -22,12 +22,12 @@ from orchestune.integrator.parent_branch_state import is_current_parent_branch_m
 from orchestune.integrator.pr import (
     ParentFinalPrMigrationError,
     ensure_parent_final_pr,
+    load_and_migrate_parent_final_pr,
     mark_parent_final_pr_pending,
-    migrate_open_parent_final_pr,
 )
 from orchestune.issue_notice import post_notice_if_changed
 from orchestune.issue_parsing import find_children_by_parent
-from orchestune.models import IssueRecord
+from orchestune.models import IssueRecord, PrRecord
 
 NOTICE_KIND_FINAL_PR_BASE_CONFLICT = "final-pr-base-conflict"
 
@@ -68,13 +68,21 @@ def _unsafe_parent_final_pr_result(
 
 def _migrate_legacy_final_pr_before_completion(
     parent_issue_number: int, forge: Forge
-) -> dict | None:
-    # Even pending PRs must lose legacy closing references before a human merge.
+) -> tuple[dict | None, tuple[PrRecord, ...] | None]:
+    """Migrate before child discovery.
+
+    The tuple is the selected PR to reuse when nothing was written. ``None``
+    tells the pending marker to read the list again after a successful write.
+    """
     try:
-        migrate_open_parent_final_pr(parent_issue_number, forge=forge)
+        selected, wrote = load_and_migrate_parent_final_pr(
+            parent_issue_number, forge=forge
+        )
     except ParentFinalPrMigrationError as error:
-        return _unsafe_parent_final_pr_result(parent_issue_number, error)
-    return None
+        return _unsafe_parent_final_pr_result(parent_issue_number, error), None
+    if wrote or selected is None:
+        return None, None if wrote else ()
+    return None, (selected,)
 
 
 def process_parent_completion(
@@ -109,7 +117,8 @@ def process_parent_completion(
 def _process_parent_completion(
     parent: int, forge: Forge, mode: str, reviewer: str | None
 ) -> dict:
-    if unsafe_result := _migrate_legacy_final_pr_before_completion(parent, forge):
+    unsafe_result, open_prs = _migrate_legacy_final_pr_before_completion(parent, forge)
+    if unsafe_result is not None:
         return unsafe_result
     discovered = find_children_by_parent(forge, parent).issues
     children = sorted(
@@ -121,7 +130,7 @@ def _process_parent_completion(
     # Reopened/added children take precedence over historical merged-PR records.
     open_children = [child.number for child in children if child.state != "CLOSED"]
     if open_children:
-        mark_parent_final_pr_pending(parent, children, forge)
+        mark_parent_final_pr_pending(parent, children, forge, open_prs=open_prs)
         return {"status": "waiting_on_children", "open_children": open_children}
     if is_current_parent_branch_merged(f"parent/issue-{parent}", parent, forge):
         return _close_merged_parent(parent, forge)

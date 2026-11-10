@@ -240,7 +240,10 @@ class DummyGitHub(EventCommentForgeMixin):
         ]
 
     def list_open_prs(
-        self, limit: int = 1000, paginate_files: bool = False
+        self,
+        limit: int = 1000,
+        paginate_files: bool = False,
+        include_files: bool = True,
     ) -> list[PrRecord]:
         return list(self.prs.values())
 

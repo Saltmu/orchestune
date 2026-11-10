@@ -417,6 +417,9 @@ class TestForgeProtocols:
             "is_branch_merged_into",
             "get_merged_pr_timestamp",
             "branch_exists",
+            "branches_present",
+            "_query_branch_chunk",
+            "_record_branch_chunk",
             "is_current_branch_tip_merged_into",
             "get_current_branch_tip_sha_if_merged_into",
             "is_merge_commit_reachable_from",
@@ -776,3 +779,151 @@ class TestAdminMethodsAreBoundedToo:
                 GitHubForge().ensure_labels((self._label(),))
             except Exception:  # noqa: BLE001 - boundary: prove the scoped timeout is not swallowed
                 pytest.fail("the scoped timeout was swallowed by `except Exception`")
+
+
+def _graphql_fields(args: list[str]) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for flag, value in zip(args, args[1:], strict=False):
+        if flag in {"-f", "-F"} and "=" in value:
+            key, _, raw = value.partition("=")
+            fields[key] = raw
+    return fields
+
+
+def _present_payload(args: list[str], absent: set[str] | None = None) -> str:
+    fields = _graphql_fields(args)
+    repository = {}
+    index = 0
+    while f"q{index}" in fields:
+        name = fields[f"q{index}"].removeprefix("refs/heads/")
+        repository[f"b{index}"] = (
+            None
+            if absent and name in absent
+            else {"name": name, "prefix": "refs/heads/"}
+        )
+        index += 1
+    return json.dumps({"data": {"repository": repository}})
+
+
+class TestBranchesPresent:
+    def _forge(self, run):
+        forge = GitHubForge()
+        forge._run = run
+        return forge
+
+    def test_empty_and_invalid_names_do_not_call_graphql(self):
+        def run(_args, input_text=None):
+            raise AssertionError("graphql should not run")
+
+        forge = self._forge(run)
+        assert forge.branches_present([]) == {}
+        assert forge.branches_present(["bad name", "bad name"]) == {"bad name": None}
+
+    def test_two_names_use_one_query_and_null_is_absent(self):
+        calls: list[list[str]] = []
+
+        def run(args, input_text=None):
+            calls.append(args)
+            return _present_payload(args, absent={"missing"})
+
+        result = self._forge(run).branches_present(["present", "missing", "present"])
+
+        assert len(calls) == 1
+        assert calls[0][:3] == ["gh", "api", "graphql"]
+        assert result == {"present": True, "missing": False}
+
+    def test_fifty_one_names_use_two_queries(self):
+        calls: list[list[str]] = []
+
+        def run(args, input_text=None):
+            calls.append(args)
+            return _present_payload(args)
+
+        names = [f"branch-{index}" for index in range(51)]
+        result = self._forge(run).branches_present(names)
+        counts = [
+            len(
+                [
+                    key
+                    for key in _graphql_fields(args)
+                    if key.startswith("q") and key[1:].isdigit()
+                ]
+            )
+            for args in calls
+        ]
+
+        assert counts == [50, 1]
+        assert result == {name: True for name in names}
+
+    def test_failed_chunk_keeps_a_later_success(self):
+        calls = {"n": 0}
+
+        def run(args, input_text=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise subprocess.CalledProcessError(1, args, stderr="HTTP 500")
+            return _present_payload(args)
+
+        names = [f"branch-{index}" for index in range(51)]
+        result = self._forge(run).branches_present(names)
+
+        assert all(result[name] is None for name in names[:50])
+        assert result[names[50]] is True
+
+    def test_bad_ref_invalid_json_and_errors_are_not_absence(self):
+        payloads = [
+            json.dumps(
+                {
+                    "data": {
+                        "repository": {"b0": {"name": "other", "prefix": "refs/heads/"}}
+                    }
+                }
+            ),
+            "{",
+            json.dumps(
+                {
+                    "errors": [{"message": "nope"}],
+                    "data": {"repository": {"b0": None}},
+                }
+            ),
+        ]
+
+        def run(_args, input_text=None):
+            return payloads.pop(0)
+
+        forge = self._forge(run)
+        assert forge.branches_present(["one"]) == {"one": None}
+        assert forge.branches_present(["two"]) == {"two": None}
+        assert forge.branches_present(["three"]) == {"three": None}
+
+    def test_graphql_unavailable_falls_back_per_name(self):
+        calls = {"graphql": 0}
+
+        def run(args, input_text=None):
+            calls["graphql"] += 1
+            raise subprocess.CalledProcessError(
+                1, args, stderr="HTTP 403 https://api.github.com/graphql"
+            )
+
+        forge = self._forge(run)
+
+        def exists(name: str) -> bool:
+            if name == "boom":
+                raise subprocess.CalledProcessError(1, ["gh"], stderr="HTTP 500")
+            return name != "absent"
+
+        forge.branch_exists = exists
+        names = [f"branch-{index}" for index in range(50)] + ["absent", "boom"]
+        result = forge.branches_present(names)
+
+        assert calls["graphql"] == 1
+        assert result["absent"] is False
+        assert result["boom"] is None
+        assert result["branch-0"] is True
+
+    def test_interrupt_propagates(self):
+        def run(_args, input_text=None):
+            raise KeyboardInterrupt
+
+        with pytest.raises(KeyboardInterrupt):
+            self._forge(run).branches_present(["present"])

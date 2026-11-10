@@ -141,7 +141,9 @@ class PrepareTasksStep(IntegrationComponent):
             return {"status": IntegrationStatus.NO_DONE_TASKS}
 
         if ctx.config.apply:
-            ctx.task_branch_resolver = TaskBranchResolver(ctx.forge.list_open_prs())
+            ctx.task_branch_resolver = TaskBranchResolver(
+                ctx.forge.list_open_prs(include_files=False)
+            )
 
         return {"status": IntegrationStatus.SUCCESS}
 

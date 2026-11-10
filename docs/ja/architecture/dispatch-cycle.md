@@ -63,4 +63,14 @@ scheduling cycle のタスク候補選定（`_filter_candidates_for_forced_seria
 
 除外されたタスクは `status:queued` のまま次サイクルへ回され（スキップ記録に `forced-serial` として記録）、先行タスクの完了・予約解放後に安全に起動されます。これにより、実行中タスクが `--amend-footprint` 等で予約を拡張した場合でも、起動時の `CLAIM_CONFLICT` による意図しない `status:blocked` への遷移を防ぎます。なお、claim の衝突規則と同様に、interactive 予約との重複では除外されません。
 
+## 8. サイクル内の GitHub 読み取り (#1836)
+
+apply の統合前サイクルと scheduling サイクルは、それぞれ `_build_cycle_context` で子 Issue、ファイル付きのオープン PR、候補ブランチの存在を取り直します。統合境界では `run_state_lock` を外すため、統合前の読み取りを scheduling へ持ち越しません。
+
+候補ブランチは、その context で検証済み候補がある正規名だけをまとめ、GraphQL で最大 50 件ずつ確認します。一括確認を持たない Forge は候補ごとに `branch_exists` を使います。回復経路と Integrator の単発確認はまとめません。未確定の候補は不在として扱わず、PR フォールバックへ進みません。
+
+外部ロック判定はファイル付きのオープン PR 一覧を使います。attempt の探索、統合 PR の再利用照合、統合準備の `TaskBranchResolver` はファイル一覧の無い軽量取得を使います。attempt の最終化は、その直前に一覧を取り直します。
+
+親完了は、子 Issue の発見より先に最終 PR の legacy 移行を判定します。移行の書き込みが無ければ、その候補を保留表示へ渡します。本文を書き換えた場合は、保留表示が移行後の軽量一覧を読み直します。移行に失敗したときは `unsafe_final_pr` で止まり、保留表示へ進みません。一覧を省略した単独の保留表示・移行・統合 PR 作成は、必要になったときだけ自前で取得します。
+
 
