@@ -462,6 +462,86 @@ def test_changes_outside_the_new_footprint_are_listed_and_refused(
     )
 
 
+def _integrate_parent_update(retained: Retained, integration: str) -> str:
+    # Preserve the retained work within its declared footprint as a commit so
+    # the worktree can integrate the parent's new commit.
+    _git(retained.worktree, "add", "README.md", "notes.txt")
+    _git(retained.worktree, "commit", "-m", "retain footprint work")
+    parent = _git(retained.repo, "rev-parse", "HEAD").strip()
+    parent_worktree = retained.repo / "parent-worktree"
+    _git(retained.repo, "worktree", "add", str(parent_worktree), parent)
+    (parent_worktree / "parent-only.txt").write_text(
+        "parent update\n", encoding="utf-8"
+    )
+    _git(parent_worktree, "add", "parent-only.txt")
+    _git(parent_worktree, "commit", "-m", "parent footprint-external update")
+    parent_tip = _git(parent_worktree, "rev-parse", "HEAD").strip()
+    _git(retained.repo, "update-ref", "refs/remotes/origin/main", parent_tip)
+    if integration == "rebase":
+        _git(retained.worktree, "rebase", parent_tip)
+    else:
+        _git(retained.worktree, "merge", "--no-edit", parent_tip)
+    return parent_tip
+
+
+@pytest.mark.parametrize("integration", ["rebase", "merge"])
+def test_parent_changes_outside_footprint_do_not_block_reclaim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, integration: str
+) -> None:
+    retained = _release_dirty_blocked(tmp_path, monkeypatch)
+    _integrate_parent_update(retained, integration)
+    outcome = _claim(retained)
+
+    assert outcome.success
+    assert _marker_claim(retained.worktree) != OLD_CLAIM
+    marker = read_claim_marker(retained.worktree)
+    assert marker is not None
+    assert marker["base_sha"] == retained.base_sha
+
+
+@pytest.mark.parametrize("integration", ["rebase", "merge"])
+def test_untracked_external_change_after_parent_integration_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, integration: str
+) -> None:
+    retained = _release_dirty_blocked(tmp_path, monkeypatch)
+    _integrate_parent_update(retained, integration)
+    (retained.worktree / "secret.txt").write_text("local secret\n", encoding="utf-8")
+
+    outcome = _claim(retained)
+
+    assert not outcome.success
+    assert outcome.failure is not None
+    assert "secret.txt" in outcome.failure.message
+    assert "parent-only.txt" not in outcome.failure.message
+
+
+@pytest.mark.parametrize("integration", ["rebase", "merge"])
+def test_committed_external_change_is_refused_after_restore_to_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, integration: str
+) -> None:
+    retained = _release_dirty_blocked(tmp_path, monkeypatch)
+    parent_tip = _integrate_parent_update(retained, integration)
+    (retained.worktree / "secret.txt").write_text("local secret\n", encoding="utf-8")
+    _git(retained.worktree, "add", "secret.txt")
+    _git(retained.worktree, "commit", "-m", "commit external secret")
+    _git(
+        retained.worktree,
+        "restore",
+        f"--source={parent_tip}",
+        "--staged",
+        "--worktree",
+        "--",
+        "secret.txt",
+    )
+
+    outcome = _claim(retained)
+
+    assert not outcome.success
+    assert outcome.failure is not None
+    assert "secret.txt" in outcome.failure.message
+    assert "parent-only.txt" not in outcome.failure.message
+
+
 def test_marker_of_a_third_generation_is_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

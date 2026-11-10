@@ -26,7 +26,7 @@ from orchestune.claim.local_identity import (
     validate_claim_worktree,
 )
 from orchestune.claim.workspace import ClaimWorkspace
-from orchestune.infra.git_cli import run_git
+from orchestune.infra.git_cli import resolve_local_or_remote_branch, run_git
 from orchestune.infra.process_utils import is_process_alive
 from orchestune.ledger.completion_records import InvalidLedgerRecord
 from orchestune.ledger.completion_reservations import completion_handoff_matches_active
@@ -38,6 +38,7 @@ from orchestune.ledger.recovery_receipts import (
 )
 from orchestune.ledger.run_state import GC_RELEASE_OPERATION, ActiveWorktree, RunState
 from orchestune.ownership_contracts import ClaimStage, ReservationKind
+from orchestune.validation import validate_ref_name
 from orchestune.worktree_ops.claim_marker import read_claim_marker
 from orchestune.worktree_ops.preparation import MarkerTakeover, resolve_worktree_path
 
@@ -337,13 +338,18 @@ def _changes_outside_footprint(
         raise ValueError("the released claim has no recorded base commit")
     if reservation.claim.reservation_kind == ReservationKind.REPOSITORY.value:
         return []
+    comparison_base = _retained_comparison_base(
+        path,
+        base_sha,
+        reservation.claim.base_ref or reservation.core.base_branch,
+    )
     changed: set[str] = set()
     for args in (
         # commits, the index and the working tree are compared with the base
         # separately: each can hide a change the others restored to the base
-        ["diff", "--name-only", "--no-renames", "-z", base_sha, "HEAD"],
-        ["diff", "--cached", "--name-only", "--no-renames", "-z", base_sha],
-        ["diff", "--name-only", "--no-renames", "-z", base_sha],
+        ["diff", "--name-only", "--no-renames", "-z", comparison_base, "HEAD"],
+        ["diff", "--cached", "--name-only", "--no-renames", "-z", comparison_base],
+        ["diff", "--name-only", "--no-renames", "-z", comparison_base],
         ["ls-files", "--others", "--exclude-standard", "-z"],
     ):
         result = run_git(args, cwd=path, check=False)
@@ -353,3 +359,22 @@ def _changes_outside_footprint(
             )
         changed.update(name for name in result.stdout.split("\0") if name)
     return sorted(changed - set(reservation.core.declared_footprint))
+
+
+def _retained_comparison_base(path: Path, base_sha: str, parent_ref: str) -> str:
+    """Use the retained worktree's merge-base with its current parent when safe."""
+    try:
+        validate_ref_name(parent_ref)
+        resolved = resolve_local_or_remote_branch(
+            path, parent_ref, prefer_remote=parent_ref.startswith("parent/")
+        )
+        candidate = run_git(["merge-base", "HEAD", resolved], cwd=path, check=False)
+        if candidate.returncode != 0 or not candidate.stdout.strip():
+            return base_sha
+        merge_base = candidate.stdout.strip()
+        ancestor = run_git(
+            ["merge-base", "--is-ancestor", base_sha, merge_base], cwd=path, check=False
+        )
+        return merge_base if ancestor.returncode == 0 else base_sha
+    except (OSError, ValueError):
+        return base_sha
