@@ -70,10 +70,10 @@ stale-read-gate = "advisory" # advisory / required / off
 
 ## 1. インストール方法
 
-OrchestuneはPython 3.12以上、uv、およびGitHub CLI（`gh auth status` で認証済みであること）が必要です。
+既存プロジェクトへ GitHub 連携を入れる場合、OrchestuneはPython 3.12以上、uv、およびGitHub CLI（`gh auth status` で認証済みであること）が必要です。`orchestune trial` のローカル試用では GitHub CLI と認証を使いません。試用の前提と手順は[ローカル初回体験のセットアップ](#ローカル初回体験のセットアップ)にあります。
 
 ### GitHub認証とトークン要件
-Orchestuneの実行には、GitHub CLI（`gh auth login`）または個人用アクセストークン（PAT）による認証が必要です。
+既存プロジェクトで GitHub の Issue、PR、ラベルを操作する場合は、GitHub CLI（`gh auth login`）または個人用アクセストークン（PAT）による認証が必要です。
 
 - **推奨構成（PAT / ユーザー認証）**:
   Orchestuneは、PRリンク通知（PR作成時・マージ完了時）の投稿者が信頼できるかを判定するために、GitHub API（`GET /user`）を用いて実行者自身の identity を取得・検証します（[Issue #686](https://github.com/Saltmu/orchestune/issues/686)）。そのため、`gh auth login` による個人アカウント認証、または個人用アクセストークン（PAT）による構成を強く推奨します。
@@ -403,6 +403,19 @@ orchestune doctor --execution-mode local --online
 | `dispatch.external_ownership` | 別マシン・別clone・Actions外入口は常にnot_checked |
 | `dispatch.state.continuity` | 永続状態・worktree／PIDの引継ぎは常にnot_checked（6.3の表を確認） |
 
+### 診断コードから手順を引く
+
+導入先リポジトリで次を確認します。warning だけのとき doctor の終了コードは 0 です。行の status を読んでください。出力に資格情報の値は含めません。
+
+| 確認したい項目 | コマンド・出力 | 対応 |
+| --- | --- | --- |
+| 設定読込と導入準備 | `orchestune doctor --execution-mode local` の `dispatch.config.readable` と `dispatch.readiness.*` | その行の evidence と remediation に従い、設定ファイル、CI、実行先、レビュー担当を確認する |
+| GitHub 認証 | `orchestune doctor --execution-mode local --online` の `dispatch.readiness.auth` | `gh` の有無、認証、認証ユーザーを確認する。不足時はこの節の前にあるインストールと GitHub 認証へ進む |
+| 対象リポジトリ | `git remote -v` と `gh repo view --json nameWithOwner` | remote と解決された `owner/repo` が導入先か確認する。異なる場合は clone か remote を直す。書き込み権限は導入先で別に確認する |
+| Actions の静的構成 | `orchestune doctor --execution-mode actions --workflow .github/workflows/orchestune-dispatch.yml` の `dispatch.workflow.readable`、`dispatch.actions.*`、`dispatch.repository.*` | workflow のパス、単一実行、直接の `orchestune dispatch --apply`、外部 target、`env:` を §6.3 と [workflow 例](../examples/dispatch-single-executor.yml) と照合する |
+
+Actions の target は、引数、設定、Actions 既定値の順で決まります。credentials が不足すると、evidence に `missing:` と名前が出ます。その名前を、workflow、job、step の順で見える `env:` と照合します。`cloud-routine` は `ORCHESTUNE_ROUTINE_TOKEN` が必要です。`routine_id` が未設定なら `ORCHESTUNE_ROUTINE_ID` も必要です。`codex-cloud` は `codex_cloud_env` が未設定なら `ORCHESTUNE_CODEX_CLOUD_ENV` が必要です。式を解決したあとの secret の値、実際の権限、他の実行者との競合は、この静的診断では分かりません。`dispatch.actions.target` と `dispatch.actions.credentials` の remediation は、この §6.3「GitHub Actionsでの構成要件」を指します。
+
 直接dispatch入口として検出するのは、`orchestune dispatch`、`orchestune-dispatch`、`python -m orchestune.dispatch.dispatcher` です（`--apply` を指定した入口が制御実行者に数えられます）。コマンド名の変数展開、分割できない行、`uses:` のactionやreusable workflowの内部、呼び出し先のscriptは検出できないため、`not_checked` になります。その場合は実行入口と後処理までの保護区間を手動で確認してください。
 
 なお、本リポジトリ自身は現時点でOrchestuneのdispatchをGitHub Actionsのスケジュール実行では回しておらず（Cloud RoutineまたはローカルCLIへのディスパッチが前提）、上記は導入先リポジトリ向けの設定です。本リポジトリで実際にcron定期実行を有効化する際は、上記のconcurrency設定を含むworkflowファイルを別途`.github/workflows/`へ追加してください。
@@ -413,26 +426,163 @@ not-needed の新規完了・旧 journal から補填した世代は `not-needed
 
 ## ローカル初回体験のセットアップ
 
-GitHub設定不要で、単一タスクの自律試行をローカル実行（`orchestune trial`）するためのセットアップ手順です。
+新規の使い捨てディレクトリで、サンプルの計画を承認し、検証済みの差分を見て、保持するか採用するかを決めます。サンプルは既存プロジェクトの規律を継承しません。GitHub の認証、`gh`、remote、ラベル、dispatch 用の設定は使いません。
 
-### 必須環境・前提条件
-1. **ローカルGitリポジトリ**:
-   - 初期化（`git init`）され、初期コミットが1件以上存在すること。
-   - ローカルのGit設定（`user.name` および `user.email`）が設定されていること:
-     ```bash
-     git config user.name "Your Name"
-     git config user.email "you@example.com"
-     ```
-   - リモートリポジトリ（GitHub origin）は任意（完全ローカルで動作）。
-2. **AIアシスタントCLI**:
-   - Claude Code (`claude`) または Codex CLI (`codex`) が `PATH` 上に存在し、認証済みであること。
-   - バージョン確認コマンドが成功すること: `claude --version` または `codex --version`。
-3. **GitHub設定は不要**:
-   - `gh auth login`、リポジトリ書き込み権限、GitHub Issueラベル等の設定は一切不要です。
-   - ただし、モデル通信自体は各CLIを通じてオンラインで実行されます（モデル通信のオフライン化には対応していません）。
+### 必須環境
 
-### 品質とレビュー方式
-- ローカル試行では、同一CLIの別セッション・別worktreeを用いて実装とレビューを実行します。
-- 同一製品によるセルフレビューは独立ベンダー間レビューに比べ品質チェックの限界がありますが、計画・承認・実装・CI・レビュー・採用までの一連のサイクルを体験できます。
-- 具体的な操作方法・構文は[利用手引き § 10](usage.md#10-ローカル自律試行-orchestune-trial)を参照してください。
+- Orchestune、Git、`python` として実行できる対応 Python
+- PATH 上の認証済み Codex CLI (`codex`) または Claude Code (`claude`)。`codex --version` または `claude --version` が成功すること
+- モデル通信はオンラインです。モデル通信のオフライン実行には対応していません
+- 試用元はブランチ上の clean な checkout です。開始前に `git status --porcelain` と `git remote -v` の出力が空で、初期 CI が通ることを確認します
+
+レビューは同一製品の別セッション・別 worktree で行います。コマンドの詳細は[利用手引き § 10](usage.md#10-ローカル自律試行-orchestune-trial)にあります。
+
+### サンプルを作る
+
+最初のコミットに `calc.py` の `add(a, b)`、`test_calc.py` の標準ライブラリ `unittest` による加算テスト、検証コマンドを書いた `AGENTS.md`、`.gitignore` を入れます。`.gitignore` には `__pycache__/`、`*.pyc`、`/.serena/` を含めます。Serena が有効なエージェントは `.serena/` を作り、未追跡のままだと試用が `worktree_dirty` で止まります。trial の `.orchestune/` は、試用開始時に Git の `info/exclude` へ `/.orchestune/` として追加されます。サンプルのコミットには含めません。
+
+POSIX shell:
+
+```bash
+mkdir trial-sample
+cd trial-sample
+git init -b main
+git config user.name "Trial User"
+git config user.email "trial@example.com"
+cat > calc.py <<'EOF'
+def add(a, b):
+    return a + b
+EOF
+cat > test_calc.py <<'EOF'
+import unittest
+
+from calc import add
+
+
+class CalcTest(unittest.TestCase):
+    def test_add(self):
+        self.assertEqual(add(1, 2), 3)
+
+
+if __name__ == "__main__":
+    unittest.main()
+EOF
+cat > AGENTS.md <<'EOF'
+# Agents
+
+Verification command: `python -m unittest test_calc.py`
+EOF
+cat > .gitignore <<'EOF'
+__pycache__/
+*.pyc
+/.serena/
+EOF
+git add calc.py test_calc.py AGENTS.md .gitignore
+git commit -m "Add the trial sample"
+test -z "$(git status --porcelain)"
+test -z "$(git remote -v)"
+python -m unittest test_calc.py
+printf '%s\n' 'calc.py に subtract(a: int, b: int) -> int を追加して a - b を返し、test_calc.py に減算のテストを追加する。' > ../trial-request.txt
+```
+
+PowerShell:
+
+```powershell
+New-Item -ItemType Directory -Name trial-sample | Out-Null
+Set-Location trial-sample
+git init -b main
+git config user.name "Trial User"
+git config user.email "trial@example.com"
+function Write-Sample([string]$Name, [string]$Body) {
+    [System.IO.File]::WriteAllText((Join-Path (Get-Location) $Name), $Body)
+}
+Write-Sample calc.py @"
+def add(a, b):
+    return a + b
+
+"@
+Write-Sample test_calc.py @"
+import unittest
+
+from calc import add
+
+
+class CalcTest(unittest.TestCase):
+    def test_add(self):
+        self.assertEqual(add(1, 2), 3)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+"@
+Write-Sample AGENTS.md @"
+# Agents
+
+Verification command: ``python -m unittest test_calc.py``
+
+"@
+Write-Sample .gitignore @"
+__pycache__/
+*.pyc
+/.serena/
+
+"@
+git add calc.py test_calc.py AGENTS.md .gitignore
+git commit -m "Add the trial sample"
+if (git status --porcelain) { throw "checkout is not clean" }
+if (git remote -v) { throw "a remote is configured" }
+python -m unittest test_calc.py
+[System.IO.File]::WriteAllText((Join-Path (Split-Path (Get-Location) -Parent) "trial-request.txt"), "calc.py に subtract(a: int, b: int) -> int を追加して a - b を返し、test_calc.py に減算のテストを追加する。`n")
+```
+
+依頼ファイルはリポジトリの外に置きます。変更予定は `calc.py` と `test_calc.py` です。`user.name` と `user.email` は、このリポジトリだけに設定します。
+
+### 計画を承認する
+
+サンプルのルートで実行します。Codex CLI の場合:
+
+```bash
+orchestune trial start --repo . --request-file ../trial-request.txt --agent codex --ci-command "python -m unittest test_calc.py"
+```
+
+Claude Code の場合は `--agent claude` にします。標準入力と標準出力の両方が TTY のとき、計画の表示のあと `この計画で開始しますか? (yes/no) [no]:` と聞かれます。表示された `trial_id`、`goal`、`write_paths`、`ci_argv`、`plan_digest` を確認し、同意した時点で `yes` を入力します。計画が更新された場合は、最新の表示を確認してからその版を承認します。
+
+TTY がない場合は、同じ start の標準出力をリポジトリ外へリダイレクトします。
+
+```bash
+orchestune trial start --repo . --request-file ../trial-request.txt --agent codex --ci-command "python -m unittest test_calc.py" > ../trial-start.txt
+```
+
+`effective_phase: planned` と `reason: approval_required` を確認し、表示された実 ID と digest で再開します。
+
+```bash
+orchestune trial resume "$trial_id" --repo . --approve-plan "$digest"
+```
+
+### 結果を見て判断する
+
+```bash
+orchestune trial status "$trial_id" --repo .
+orchestune trial result "$trial_id" --repo .
+```
+
+`effective_phase: ready`、`approved_plan_digest`、同じ `head_sha` の CI と別セッションレビューの pass、`result` の `diff:` を確認します。現在の候補であるとき、テキストの phase 行は `effective_phase: ready (ローカルの採用候補)` です。`orchestune trial result "$trial_id" --repo . --json` の `ready_is_current` と、表示された base と head を使う `git diff "$base_sha" "$head_sha"` でも照合できます。`status` と `result` の終了コード 0 は表示できたことを表します。`start` と `resume` の終了コード 0 は、承認待ちの `planned` か、現在の `ready` です。採用するかどうかは、終了コードではなく phase と証跡で判断します。
+
+止まったときは、表示された reason に従います。開始前から dirty だったものと、計画や CI が作った未追跡ファイルを分けます。想定外の生成物は、内容を確認してから対処します。
+
+保持する場合:
+
+```bash
+orchestune trial result "$trial_id" --repo . --decision keep
+```
+
+採用する場合は、試用元が clean で、開始時のブランチと base SHA にあることを確認します。実 ID の `trial/<ID>` を fast-forward で取り込み、そのあと採用を記録します。
+
+```bash
+git merge --ff-only "trial/$trial_id"
+orchestune trial result "$trial_id" --repo . --decision adopted
+```
+
+`effective_phase: closed` と、選んだ decision を確認します。採用の記録は、元のブランチが trial の head を含んでいることを確認します。
 

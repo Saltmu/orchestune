@@ -70,10 +70,10 @@ New parents record claim checkpoints and reader snapshots. Before switching an e
 
 ## 1. Installation
 
-Orchestune requires Python 3.12+, uv, and the GitHub CLI (`gh auth status` must be authenticated).
+Adding GitHub integration to an existing project requires Python 3.12+, uv, and the GitHub CLI (`gh auth status` must be authenticated). A local trial with `orchestune trial` does not use the GitHub CLI or that authentication. The trial prerequisites and steps are in [Local Trial Setup](#local-trial-setup).
 
 ### GitHub Authentication and Token Requirements
-Running Orchestune requires authentication via the GitHub CLI (`gh auth login`) or a Personal Access Token (PAT).
+GitHub Issue, pull request, and label operations on an existing project require authentication via the GitHub CLI (`gh auth login`) or a Personal Access Token (PAT).
 
 - **Recommended Setup (PAT / User Authentication)**:
   To verify that PR link notices (on PR creation and merge) originate from trusted actors, Orchestune checks the runner's self identity using the GitHub API (`GET /user`) and repository collaborators ([Issue #686](https://github.com/Saltmu/orchestune/issues/686)). We strongly recommend authenticating as a user via `gh auth login` or a PAT.
@@ -403,6 +403,19 @@ orchestune doctor --execution-mode local --online
 | `dispatch.external_ownership` | Other machines, other clones, and entrypoints outside Actions are always not_checked |
 | `dispatch.state.continuity` | Continuity of persistent state and worktrees/PIDs is always not_checked (see the table in 6.3) |
 
+### From a diagnostic code to a procedure
+
+On the repository you are adopting, check the following. When the only statuses are warning or not_checked, `orchestune doctor` exits 0. Read each row's status. The output does not include credential values.
+
+| What to check | Command and output | What to do |
+| --- | --- | --- |
+| Config load and readiness | `dispatch.config.readable` and `dispatch.readiness.*` from `orchestune doctor --execution-mode local` | Follow that row's evidence and remediation for the config file, CI, execution target, and reviewer |
+| GitHub authentication | `dispatch.readiness.auth` from `orchestune doctor --execution-mode local --online` | Check that `gh` is installed, authenticated, and shows the expected user. If it is missing, use the installation and GitHub authentication sections above |
+| Target repository | `git remote -v` and `gh repo view --json nameWithOwner` | Confirm the remote and the resolved `owner/repo` are the repository you mean to adopt. If they differ, fix the clone or the remote. Confirm write permission on that repository separately |
+| Actions static configuration | `dispatch.workflow.readable`, `dispatch.actions.*`, and `dispatch.repository.*` from `orchestune doctor --execution-mode actions --workflow .github/workflows/orchestune-dispatch.yml` | Compare the workflow path, single-executor layout, direct `orchestune dispatch --apply`, external target, and `env:` with §6.3 and the [workflow example](../examples/dispatch-single-executor.yml) |
+
+An Actions target is resolved from the argument, then the config, then the Actions default. When credentials are missing, the evidence lists each name after `missing:`. Compare those names with the `env:` visible from workflow, then job, then step. `cloud-routine` needs `ORCHESTUNE_ROUTINE_TOKEN`, and also `ORCHESTUNE_ROUTINE_ID` when `routine_id` is unset. `codex-cloud` needs `ORCHESTUNE_CODEX_CLOUD_ENV` when `codex_cloud_env` is unset. This static check does not resolve secret values, actual permissions, or conflicts with other runners. The remediation for `dispatch.actions.target` and `dispatch.actions.credentials` points at this §6.3, "Requirements for GitHub Actions".
+
 The direct dispatch entrypoints detected are `orchestune dispatch`, `orchestune-dispatch`, and `python -m orchestune.dispatch.dispatcher` (only applied entrypoints count as control executors). Variable expansion of the command name, lines that cannot be split, the inside of `uses:` actions or reusable workflows, and called scripts cannot be detected and therefore yield `not_checked`. In that case, manually confirm the execution entrypoint and the protected section through post-processing.
 
 Note that this repository does not currently run its own `orchestune dispatch` on a GitHub Actions schedule (dispatch here goes through the Cloud Routine or a local CLI), so the above is a configuration for adopting repositories. If you enable a real scheduled run here, add a workflow file under `.github/workflows/` that includes the concurrency settings above.
@@ -413,26 +426,165 @@ New not-needed completions and backfilled journal generations preserve dependenc
 
 ## Local Trial Setup
 
-To run a single autonomous task locally with `orchestune trial` without GitHub setup:
+Prepare a new disposable directory, approve the sample plan, read the verified diff, and decide whether to keep or adopt it. The sample does not inherit an existing project's rules. GitHub authentication, `gh`, a remote, labels, and dispatch settings are not used.
 
 ### Prerequisites
-1. **Local Git Repository**:
-   - Must be initialized (`git init`) and contain at least one initial commit.
-   - Local Git user name and email configured:
-     ```bash
-     git config user.name "Your Name"
-     git config user.email "you@example.com"
-     ```
-   - Remote repository (GitHub origin) is optional.
-2. **AI Assistant CLI**:
-   - Claude Code (`claude`) or Codex CLI (`codex`) installed in `PATH` and authenticated.
-   - Version check must succeed: `claude --version` or `codex --version`.
-3. **No GitHub Authentication Required**:
-   - `gh auth login`, repository push access, and GitHub issue labels are not needed.
-   - Note that model communication itself is live online (offline model communication is not supported).
 
-### Quality and Review Model
-- In local trial, implementation and semantic review run in isolated worktrees using separate sessions of the same CLI tool.
-- Single-vendor self-review has inherent limitations compared to multi-vendor independent review, but validates the complete lifecycle (plan -> approve -> implement -> CI -> review -> adopt).
-- For usage and command syntax, see [Usage Reference § 10](usage.md#10-local-autonomous-trial-orchestune-trial).
+- Orchestune, Git, and a supported Python that runs as `python`
+- An authenticated Codex CLI (`codex`) or Claude Code (`claude`) on `PATH`. `codex --version` or `claude --version` succeeds
+- Model calls stay online. Offline model calls are not supported
+- The trial checkout is clean and on a branch. Before start, `git status --porcelain` and `git remote -v` print nothing, and the initial CI passes
+
+Review runs in another session and another worktree of the same product. Command details are in [Usage Reference § 10](usage.md#10-local-autonomous-trial-orchestune-trial).
+
+### Create the sample
+
+The first commit contains `add(a, b)` in `calc.py`, a standard-library `unittest` addition test in `test_calc.py`, an `AGENTS.md` that names the verification command, and a `.gitignore`. The ignore file lists `__pycache__/`, `*.pyc`, and `/.serena/`. An agent with Serena enabled creates `.serena/`, and an untracked copy stops the trial with `worktree_dirty`. The trial adds `/.orchestune/` to Git `info/exclude` when it starts. That path is not part of the sample commit.
+
+POSIX shell:
+
+```bash
+mkdir trial-sample
+cd trial-sample
+git init -b main
+git config user.name "Trial User"
+git config user.email "trial@example.com"
+cat > calc.py <<'EOF'
+def add(a, b):
+    return a + b
+EOF
+cat > test_calc.py <<'EOF'
+import unittest
+
+from calc import add
+
+
+class CalcTest(unittest.TestCase):
+    def test_add(self):
+        self.assertEqual(add(1, 2), 3)
+
+
+if __name__ == "__main__":
+    unittest.main()
+EOF
+cat > AGENTS.md <<'EOF'
+# Agents
+
+Verification command: `python -m unittest test_calc.py`
+EOF
+cat > .gitignore <<'EOF'
+__pycache__/
+*.pyc
+/.serena/
+EOF
+git add calc.py test_calc.py AGENTS.md .gitignore
+git commit -m "Add the trial sample"
+test -z "$(git status --porcelain)"
+test -z "$(git remote -v)"
+python -m unittest test_calc.py
+printf '%s\n' 'calc.py に subtract(a: int, b: int) -> int を追加して a - b を返し、test_calc.py に減算のテストを追加する。' > ../trial-request.txt
+```
+
+The request text asks to add `subtract(a: int, b: int) -> int` to `calc.py`, returning `a - b`, and to add a subtraction test to `test_calc.py`.
+
+PowerShell:
+
+```powershell
+New-Item -ItemType Directory -Name trial-sample | Out-Null
+Set-Location trial-sample
+git init -b main
+git config user.name "Trial User"
+git config user.email "trial@example.com"
+function Write-Sample([string]$Name, [string]$Body) {
+    [System.IO.File]::WriteAllText((Join-Path (Get-Location) $Name), $Body)
+}
+Write-Sample calc.py @"
+def add(a, b):
+    return a + b
+
+"@
+Write-Sample test_calc.py @"
+import unittest
+
+from calc import add
+
+
+class CalcTest(unittest.TestCase):
+    def test_add(self):
+        self.assertEqual(add(1, 2), 3)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+"@
+Write-Sample AGENTS.md @"
+# Agents
+
+Verification command: ``python -m unittest test_calc.py``
+
+"@
+Write-Sample .gitignore @"
+__pycache__/
+*.pyc
+/.serena/
+
+"@
+git add calc.py test_calc.py AGENTS.md .gitignore
+git commit -m "Add the trial sample"
+if (git status --porcelain) { throw "checkout is not clean" }
+if (git remote -v) { throw "a remote is configured" }
+python -m unittest test_calc.py
+[System.IO.File]::WriteAllText((Join-Path (Split-Path (Get-Location) -Parent) "trial-request.txt"), "calc.py に subtract(a: int, b: int) -> int を追加して a - b を返し、test_calc.py に減算のテストを追加する。`n")
+```
+
+Keep the request file outside the repository. The intended change is limited to `calc.py` and `test_calc.py`. `user.name` and `user.email` are set for this repository only.
+
+### Approve the plan
+
+Run from the sample root. For Codex CLI:
+
+```bash
+orchestune trial start --repo . --request-file ../trial-request.txt --agent codex --ci-command "python -m unittest test_calc.py"
+```
+
+For Claude Code, pass `--agent claude`. When both standard input and standard output are TTYs, the plan is followed by `この計画で開始しますか? (yes/no) [no]:`. Check the displayed `trial_id`, `goal`, `write_paths`, `ci_argv`, and `plan_digest`, then type `yes` when you agree. If the plan is updated, approve the latest displayed digest.
+
+Without a TTY, redirect that same start command's standard output outside the repository.
+
+```bash
+orchestune trial start --repo . --request-file ../trial-request.txt --agent codex --ci-command "python -m unittest test_calc.py" > ../trial-start.txt
+```
+
+Confirm `effective_phase: planned` and `reason: approval_required`, then resume with the displayed id and digest.
+
+```bash
+orchestune trial resume "$trial_id" --repo . --approve-plan "$digest"
+```
+
+### Read the result and decide
+
+```bash
+orchestune trial status "$trial_id" --repo .
+orchestune trial result "$trial_id" --repo .
+```
+
+Confirm `effective_phase: ready`, `approved_plan_digest`, CI and the separate-session review passing on the same `head_sha`, and the `diff:` from `result`. When the candidate is current, the text phase line is `effective_phase: ready (ローカルの採用候補)`. `orchestune trial result "$trial_id" --repo . --json` reports `ready_is_current`. You can also compare with `git diff "$base_sha" "$head_sha"` using the printed SHAs. Exit code 0 from `status` and `result` means the view was printed. Exit code 0 from `start` and `resume` means the trial is waiting for approval (`planned`) or is currently `ready`. Use the phase and the evidence, not the exit code, to decide adoption.
+
+When the trial stops, follow the displayed reason. Separate a checkout that was dirty before start from untracked files created by the plan or CI. Read unexpected files before you act on them.
+
+To keep the result:
+
+```bash
+orchestune trial result "$trial_id" --repo . --decision keep
+```
+
+To adopt it, confirm the source checkout is clean and still on the starting branch at the starting base SHA. Fast-forward `trial/<ID>` for the real id, then record the decision.
+
+```bash
+git merge --ff-only "trial/$trial_id"
+orchestune trial result "$trial_id" --repo . --decision adopted
+```
+
+Confirm `effective_phase: closed` and the decision you chose. The adoption record checks that the original branch contains the trial head.
 
