@@ -140,17 +140,17 @@ def _assemble_dag(
     topological_order = _topological_sort(node_ids, edges)
     targets = {edge.target for edge in edges}
 
-    contract_warnings = list(
+    contract_warnings = tuple(
         find_unowned_shared_contract_hotspots(
             subtasks, edges, conflict_graph=conflict_graph
         )
     )
-    existence_warnings = (
+    existence_warnings = tuple(
         _footprint_and_symbol_warnings(subtasks, repo_root)
         if repo_root is not None
-        else []
+        else ()
     )
-    all_warnings = tuple(contract_warnings + existence_warnings)
+    all_warnings = contract_warnings + existence_warnings
 
     return DagResult(
         subtasks={subtask.id: subtask for subtask in subtasks},
@@ -160,6 +160,8 @@ def _assemble_dag(
         risky_subtask_ids=sorted(subtask.id for subtask in subtasks if subtask.risk),
         conflict_graph=conflict_graph,
         warnings=all_warnings,
+        contract_warnings=contract_warnings,
+        existence_warnings=existence_warnings,
     )
 
 

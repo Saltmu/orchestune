@@ -9,12 +9,14 @@ from collections.abc import Sequence
 from typing import Any
 
 from orchestune.config_contracts import ConfigError
-from orchestune.dag.graph import build_dag_from_plan
+from orchestune.dag.graph import build_dag
 from orchestune.dag.models import (
+    DagResult,
     compile_extra_ignore_patterns,
     extract_dag_ignore_patterns,
     extract_dag_similarity_threshold,
 )
+from orchestune.dag.parsing import parse_decomposition_plan
 from orchestune.dag.similarity import DEFAULT_SIMILARITY_THRESHOLD
 from orchestune.infra.cli_output import CliOutput, Level, make_output
 from orchestune.infra.repository_config import (
@@ -81,20 +83,37 @@ def _edge_rows(dag: dict[str, Any]) -> list[list[str]]:
     return rows
 
 
-def _print_text_result(dag: dict[str, Any], output: CliOutput) -> None:
+def _warning_sections(
+    dag: DagResult,
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Headings for the human display. JSON keeps the joined warnings list."""
+    sections: list[tuple[str, tuple[str, ...]]] = []
+    if dag.contract_warnings:
+        sections.append(("共有コントラクト", dag.contract_warnings))
+    if dag.existence_warnings:
+        sections.append(("未存在の footprint / symbols", dag.existence_warnings))
+    accounted = dag.contract_warnings + dag.existence_warnings
+    if dag.warnings[: len(accounted)] == accounted:
+        other = dag.warnings[len(accounted) :]
+        if other:
+            sections.append(("その他", other))
+    return tuple(sections)
+
+
+def _print_text_result(dag: DagResult, output: CliOutput) -> None:
+    payload = dag.to_dict()
     items = [
-        ("Topological order", " -> ".join(dag["topological_order"])),
-        ("Parallel leaves", ", ".join(dag["parallel_leaves"])),
+        ("Topological order", " -> ".join(payload["topological_order"])),
+        ("Parallel leaves", ", ".join(payload["parallel_leaves"])),
     ]
-    if dag["risky_subtask_ids"]:
-        items.append(("Risky subtasks", ", ".join(dag["risky_subtask_ids"])))
+    if payload["risky_subtask_ids"]:
+        items.append(("Risky subtasks", ", ".join(payload["risky_subtask_ids"])))
     output.summary(Level.SUCCESS, "DAG validation succeeded.", items)
-    rows = _edge_rows(dag)
+    rows = _edge_rows(payload)
     if rows:
         output.table(_EDGE_HEADERS, rows, title="Edges")
-    warnings = dag.get("warnings") or []
-    if warnings:
-        output.emit(output.text_block("Warnings:", multiline=False))
+    for title, warnings in _warning_sections(dag):
+        output.emit(output.text_block(f"{title}:", multiline=False))
         for warning in warnings:
             output.message(Level.WARNING, warning)
 
@@ -142,15 +161,15 @@ def main(argv: Sequence[str] | None = None) -> None:
         raise SystemExit(1) from error
 
     try:
-        dag = build_dag_from_plan(
-            args.plan,
+        dag = build_dag(
+            parse_decomposition_plan(args.plan),
             threshold=threshold,
             repo_root=repo_root,
             ignore_patterns=extra_ignore_patterns,
         )
         # --json is a machine payload: it never goes through Rich, even on a TTY.
         if args.json:
-            make_output(machine=True).payload(json.dumps(dag, indent=2))
+            make_output(machine=True).payload(json.dumps(dag.to_dict(), indent=2))
         else:
             _print_text_result(dag, make_output())
     except Exception as error:  # noqa: BLE001 - boundary: render unexpected DAG execution errors at the CLI edge

@@ -1,5 +1,7 @@
 """グリーンフィールド分解計画向け共有コントラクトゲート(#175)のテスト。"""
 
+import json
+import sys
 import textwrap
 
 import pytest
@@ -472,8 +474,166 @@ class TestDagCliWarnings:
             sys.argv = orig_argv
 
         captured = capsys.readouterr()
-        assert "Warnings:" in captured.out
+        assert "未存在の footprint / symbols:" in captured.out
+        assert "共有コントラクト:" not in captured.out
         assert "task-csv" in captured.out
+
+    def test_cli_text_puts_contract_warning_under_contract_heading(
+        self, tmp_path, capsys
+    ):
+        for relative in ("src/formats/registry.py", "src/formats/registration.py"):
+            path = tmp_path / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("x = 1\n", encoding="utf-8")
+        plan_path = tmp_path / "plan.md"
+        plan_path.write_text(
+            textwrap.dedent(
+                """\
+                ---
+                subtasks:
+                  - id: task-csv
+                    description: csv
+                    footprint: ["src/formats/registry.py"]
+                    shared_contract: format-registry
+                  - id: task-yaml
+                    description: yaml
+                    footprint: ["src/formats/registration.py"]
+                ---
+                """
+            ),
+            encoding="utf-8",
+        )
+
+        orig_argv = sys.argv
+        sys.argv = ["orchestune-dag", "--plan", str(plan_path)]
+        try:
+            from orchestune.dag.cli import main
+
+            with pytest.raises(SystemExit) as excinfo:
+                main()
+            assert excinfo.value.code == 0
+        finally:
+            sys.argv = orig_argv
+
+        captured = capsys.readouterr()
+        assert "共有コントラクト:" in captured.out
+        assert "未存在の footprint / symbols:" not in captured.out
+        assert "task-csv" in captured.out
+
+    def test_cli_json_keeps_joined_warnings_and_current_keys(self, tmp_path, capsys):
+        for relative in ("src/formats/registry.py", "src/formats/registration.py"):
+            path = tmp_path / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("x = 1\n", encoding="utf-8")
+        plan_path = tmp_path / "plan.md"
+        plan_path.write_text(
+            textwrap.dedent(
+                """\
+                ---
+                subtasks:
+                  - id: task-csv
+                    description: csv
+                    footprint: ["src/formats/registry.py"]
+                    shared_contract: format-registry
+                  - id: task-yaml
+                    description: yaml
+                    footprint: ["src/formats/registration.py", "brand/new/file.py"]
+                ---
+                """
+            ),
+            encoding="utf-8",
+        )
+
+        orig_argv = sys.argv
+        sys.argv = ["orchestune-dag", "--plan", str(plan_path), "--json"]
+        try:
+            from orchestune.dag.cli import main
+
+            with pytest.raises(SystemExit) as excinfo:
+                main()
+            assert excinfo.value.code == 0
+        finally:
+            sys.argv = orig_argv
+
+        data = json.loads(capsys.readouterr().out)
+        assert set(data) == {
+            "subtasks",
+            "edges",
+            "precedence_edges",
+            "conflict_edges",
+            "topological_order",
+            "parallel_leaves",
+            "risky_subtask_ids",
+            "warnings",
+        }
+        assert len(data["warnings"]) == 2
+        assert "共有拡張ポイント" in data["warnings"][0]
+        assert "brand/new/file.py" in data["warnings"][1]
+
+    def test_cli_text_shows_both_headings_and_residual_separately(
+        self, tmp_path, capsys
+    ):
+        for relative in ("src/formats/registry.py", "src/formats/registration.py"):
+            path = tmp_path / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("x = 1\n", encoding="utf-8")
+        plan_path = tmp_path / "plan.md"
+        plan_path.write_text(
+            textwrap.dedent(
+                """\
+                ---
+                subtasks:
+                  - id: task-csv
+                    description: csv
+                    footprint: ["src/formats/registry.py"]
+                    shared_contract: format-registry
+                  - id: task-yaml
+                    description: yaml
+                    footprint: ["src/formats/registration.py", "brand/new/file.py"]
+                ---
+                """
+            ),
+            encoding="utf-8",
+        )
+
+        orig_argv = sys.argv
+        sys.argv = ["orchestune-dag", "--plan", str(plan_path)]
+        try:
+            from orchestune.dag.cli import main
+
+            with pytest.raises(SystemExit) as excinfo:
+                main()
+            assert excinfo.value.code == 0
+        finally:
+            sys.argv = orig_argv
+
+        text = capsys.readouterr().out
+        contract_at = text.index("共有コントラクト:")
+        existence_at = text.index("未存在の footprint / symbols:")
+        assert contract_at < existence_at
+        assert "brand/new/file.py" not in text[:existence_at]
+        assert "brand/new/file.py" in text[existence_at:]
+
+    def test_residual_warning_uses_other_heading(self, capsys):
+        from orchestune.dag.cli import _print_text_result
+        from orchestune.dag.models import DagResult
+        from orchestune.infra.cli_output import make_output
+
+        dag = DagResult(
+            subtasks={},
+            edges=[],
+            topological_order=[],
+            parallel_leaves=[],
+            risky_subtask_ids=[],
+            warnings=("contract line", "missing file", "cycle note"),
+            contract_warnings=("contract line",),
+            existence_warnings=("missing file",),
+        )
+        _print_text_result(dag, make_output())
+        text = capsys.readouterr().out
+        other_at = text.index("その他:")
+        assert "cycle note" in text[other_at:]
+        assert "contract line" not in text[other_at:]
 
 
 class TestDocumentWriter:

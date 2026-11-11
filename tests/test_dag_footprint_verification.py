@@ -121,7 +121,8 @@ class TestCliSurfacesFootprintWarnings:
 
         captured = capsys.readouterr()
         assert "DAG validation succeeded" in captured.out
-        assert "Warnings:" in captured.out
+        assert "未存在の footprint / symbols:" in captured.out
+        assert "共有コントラクト:" not in captured.out
         assert "totally/made/up/path.py" in captured.out
 
     def test_cli_json_output_includes_warnings_array(
@@ -215,3 +216,5 @@ class TestCliSurfacesFootprintWarnings:
 
         captured = capsys.readouterr()
         assert "Warnings:" not in captured.out
+        assert "共有コントラクト:" not in captured.out
+        assert "未存在の footprint / symbols:" not in captured.out

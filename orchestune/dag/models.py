@@ -281,6 +281,8 @@ class DagResult:
     risky_subtask_ids: list[str]
     conflict_graph: ConflictGraph = field(default_factory=ConflictGraph)
     warnings: tuple[str, ...] = ()
+    contract_warnings: tuple[str, ...] = ()
+    existence_warnings: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         precedence_edges = [
