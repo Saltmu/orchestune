@@ -56,7 +56,7 @@ def _run_with_toml(tmp_path, toml_text=None):
             return_value=_empty_report(),
         ) as mock_run,
     ):
-        main(["--parent-issue", "100", "--no-apply"], cwd=tmp_path)
+        main(["--parent-issue", "100"], cwd=tmp_path)
     return mock_run.call_args.args[0]
 
 
@@ -109,5 +109,5 @@ def test_invalid_launch_control_values_are_rejected(tmp_path, line):
         ),
         pytest.raises(SystemExit) as excinfo,
     ):
-        main(["--parent-issue", "100", "--no-apply"], cwd=tmp_path)
+        main(["--parent-issue", "100"], cwd=tmp_path)
     assert excinfo.value.code == 2

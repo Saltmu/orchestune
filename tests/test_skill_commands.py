@@ -555,10 +555,12 @@ def test_worker_skills_document_all_outcome_record_patterns(skill_name: str):
     skill_md = skill_dir / "SKILL.md"
     skill_text = skill_md.read_text(encoding="utf-8")
 
-    assert "orchestune complete --issue <N> --result not-needed" in skill_text
-    assert "orchestune complete --issue <N> --pr <PR> --result done" in skill_text
+    assert "orchestune complete --apply --issue <N> --result not-needed" in skill_text
     assert (
-        "orchestune complete --issue <N> --result blocked --reason <REASON>"
+        "orchestune complete --apply --issue <N> --pr <PR> --result done" in skill_text
+    )
+    assert (
+        "orchestune complete --apply --issue <N> --result blocked --reason <REASON>"
         in skill_text
     )
     assert "Issue comments" in skill_text
@@ -586,7 +588,10 @@ def test_workflow_skills_document_isolated_worktree_operations(skill_name: str):
         assert "dispatcher-provisioned worktree" not in skill_content
     else:
         assert "orchestune claim" in worktree_content
-        assert "orchestune claim <issue_number> --resume <claim_id>" in worktree_content
+        assert (
+            "orchestune claim <issue_number> --apply --resume <claim_id>"
+            in worktree_content
+        )
         assert "<worktree_path>" in worktree_content
         assert "<INSTALL_COMMAND>" in worktree_content
 
@@ -1247,7 +1252,7 @@ def test_review_loop_defines_terminal_judgment_posting_contract(skill_name: str)
 
     # 4. done が主経路、blocked は HEAD 変化と下げた上限のフォールバック
     assert (
-        "orchestune complete --issue <N> --pr <PR> --result done --reviewer <bot> "
+        "orchestune complete --apply --issue <N> --pr <PR> --result done --reviewer <bot> "
         "--review-reply <session-dir>/review-reply.md" in section
     )
     assert "Fallback (blocked)" in section
@@ -1255,7 +1260,7 @@ def test_review_loop_defines_terminal_judgment_posting_contract(skill_name: str)
     assert "lowered with `--max-rounds`" in section
     assert "head mismatch" in section
     assert (
-        "orchestune complete --issue <N> --result blocked --reason review-round-limit"
+        "orchestune complete --apply --issue <N> --result blocked --reason review-round-limit"
         in section
     )
 

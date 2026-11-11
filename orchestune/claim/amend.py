@@ -94,7 +94,7 @@ def _find_held_reservation(
     raise _reject(
         ClaimFailureReason.INVALID_RESUME,
         f"No active claim is held for issue #{issue_number}.",
-        f"Run `orchestune claim {issue_number}` to claim the task first.",
+        f"Run `orchestune claim {issue_number} --apply` to claim the task first.",
     )
 
 

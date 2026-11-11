@@ -100,7 +100,7 @@ jobs:
           failed=0
           for parent in $parents; do
             echo "::group::dispatch parent #${parent}"
-            if ! orchestune dispatch -p "$parent" --dispatch-target cloud-routine; then
+            if ! orchestune dispatch -p "$parent" --apply --dispatch-target cloud-routine; then
               echo "::error::dispatch failed for parent #${parent}"; failed=1
             fi
             echo "::endgroup::"

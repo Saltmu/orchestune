@@ -31,7 +31,7 @@ The mapping below is a design baseline for the follow-up implementation. “Impl
 | Pre-claim footprint | Claim validates its own footprint/ownership conditions. The interactive reviewer-choice contract is not part of a standalone workflow check. | Reuse narrow read-only footprint validation; do not call the claim service. |
 | Enforcement against direct operations | GitHub CLI, Git operations, and MCP writes can bypass local guidance. The existing server workflow runs local CI for PR heads; no server workflow enforces plan approval or impact classification. | Decision boundary; see [Enforcement boundary](#enforcement-boundary). |
 
-The read-only check must not call a command merely because it has a `--no-apply` option. For example, the current claim path acquires a run-state lock even in validation mode. If an existing rule is only available behind a side-effecting service, add a narrow reader/adapter around the established rule or report that the check cannot verify it. A read-only workflow layer must not import the claim/complete service layer to gain access to that rule.
+The read-only check must not call a command merely because it has a preview mode. For example, the current claim path acquires a run-state lock even in validation mode. If an existing rule is only available behind a side-effecting service, add a narrow reader/adapter around the established rule or report that the check cannot verify it. A read-only workflow layer must not import the claim/complete service layer to gain access to that rule.
 
 ## Vocabulary
 
@@ -225,7 +225,7 @@ Each non-empty stage `gate` value must be unique across `stages.toml`, so a requ
 ## Lifecycle, interruption, and retry
 
 1. **Prepare.** Resolve interactive/auto mode, code/docs change kind, GitHub backend, reviewer policy, plan approval applicability, and initial Footprint before claim. Existing Issue Footprint is checked before claim. For an interactive reviewer choice, accepted values are `claude`, `codex`, and `skip`; a prompt that names the reviewer is the selection evidence.
-2. **Claim.** The user or dispatcher runs the established claim command. The workflow reader observes the active claim and its worktree; it does not call claim with `--no-apply` as a substitute for a reader.
+2. **Claim.** The user or dispatcher runs the established claim command. The workflow reader observes the active claim and its worktree; it does not call claim in preview mode as a substitute for a reader.
 3. **Scope.** In the claimed worktree, record a first-version impact table before production edits. Preserve it and its digest. After implementation, append `done`, `still out of scope`, or `unverified` reconciliation without rewriting the original decisions.
 4. **Implement and verify.** Apply the code or documentation path, collect the applicable baseline/reproducer evidence, and run local CI. CI evidence is valid only for all of its bound values and a clean task worktree.
 5. **Open PR.** Resolve the base using the existing stacked-dependency/parent-mode rules, prepare the required sections, and create the PR through the selected backend.

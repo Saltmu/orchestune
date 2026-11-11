@@ -13,7 +13,7 @@ Orchestune is designed around the assumption that an agent implements according 
 2. **(b) A quality gate (CI) thorough enough to be trusted with automatic merging**
    Orchestune has no human review gate at the child-task level. Alongside CI, the child review-evidence gate acts as an automated gate in the default `required` mode, verifying each child's passing review evidence (`verdict=pass`, matching the SHA to be merged) before updating the parent branch (see [Usage §4.5](usage.md#45-child-review-evidence-gate) and [Architecture & Design](architecture.md) for details). However, explicitly setting `child-review-gate = "off"` skips evidence verification, and even with the gate enabled, review judgments come from an LLM. Mechanically checking correctness therefore depends on CI; smoke-test-level CI alone cannot sufficiently guarantee the quality of code integrated automatically.
 3. **(c) `ci_command` must be set to your repository's own CI entrypoint**
-   Set `ci-command = "make ci"` (or `"npm run ci"`, for example) at the top level of `orchestune.toml`, or under `[tool.orchestune]` in `pyproject.toml`. There is no `--ci-command` CLI option. When unset, the platform default is used only if `scripts/local-ci.sh` (POSIX) or `scripts/local-ci.ps1` (Windows) exists. Otherwise apply dispatch exits with code 2 before reserving reports or changing task state; `--no-apply` remains available. `orchestune complete` reads the primary checkout's setting, executes it in the task worktree, and records successful, unchanged, clean-worktree CI evidence. `config init` suggests commands from local scripts, Makefile, package.json and pytest configuration without running them. When specifying paths for Windows environments, use forward slashes (e.g. `"./scripts/local-ci.ps1"`) or an array format (e.g. `["powershell", "-File", ".\\scripts\\local-ci.ps1"]`); backslash path separators in string commands are rejected early to prevent silent POSIX escape corruption.
+   Set `ci-command = "make ci"` (or `"npm run ci"`, for example) at the top level of `orchestune.toml`, or under `[tool.orchestune]` in `pyproject.toml`. There is no `--ci-command` CLI option. When unset, the platform default is used only if `scripts/local-ci.sh` (POSIX) or `scripts/local-ci.ps1` (Windows) exists. Otherwise apply dispatch exits with code 2 before reserving reports or changing task state; preview remains available. `orchestune complete` reads the primary checkout's setting, executes it in the task worktree, and records successful, unchanged, clean-worktree CI evidence. `config init` suggests commands from local scripts, Makefile, package.json and pytest configuration without running them. When specifying paths for Windows environments, use forward slashes (e.g. `"./scripts/local-ci.ps1"`) or an array format (e.g. `["powershell", "-File", ".\\scripts\\local-ci.ps1"]`); backslash path separators in string commands are rejected early to prevent silent POSIX escape corruption.
 
 Pre-adoption readiness ((a)–(c), execution target, reviewer, gitignore, and auth) can be checked in one go with `orchestune doctor --execution-mode local` (add `--online` to include GitHub authentication). If any item is missing, remediation guidance and examples are shown as warnings.
 
@@ -221,9 +221,9 @@ This command verifies that `.orchestune/tmp/` is present in `.gitignore`, preven
 
    ```bash
    export ORCHESTUNE_CODEX_CLOUD_ENV="<environment_id>"
-   orchestune dispatch --dispatch-target codex-cloud
+   orchestune dispatch --apply --dispatch-target codex-cloud
    # or
-   orchestune dispatch --dispatch-target codex-cloud --codex-cloud-env "<environment_id>"
+   orchestune dispatch --apply --dispatch-target codex-cloud --codex-cloud-env "<environment_id>"
    ```
 
 Before submission, Orchestune pushes the task branch to `origin`, then runs `codex cloud exec --env <environment_id> --branch <branch>` non-interactively. After submission, it tracks the actual Cloud task ID and URL, combining Cloud task status checks (early detection of failed / cancelled tasks) with branch PR / outcome record status to determine completion. If the environment ID is missing, Orchestune warns and safely falls back to the no-op target.
@@ -249,15 +249,15 @@ After installing, confirm the CLI is recognized with `claude --version`.
 To dispatch subtasks to a local `claude`, `agy` (Antigravity), `codex` (Codex CLI), or `grok` (Grok Build) session without hand-writing a `--local-cmd` template, use the built-in presets:
 
 ```bash
-orchestune dispatch --dispatch-target claude-cli
+orchestune dispatch --apply --dispatch-target claude-cli
 # or
-orchestune dispatch --dispatch-target agy-cli
+orchestune dispatch --apply --dispatch-target agy-cli
 # or
-orchestune dispatch --dispatch-target codex-cli
+orchestune dispatch --apply --dispatch-target codex-cli
 # or
-orchestune dispatch --dispatch-target grok-cli
+orchestune dispatch --apply --dispatch-target grok-cli
 # to auto-detect whichever CLI is installed, omit --dispatch-target or pass auto
-orchestune dispatch --dispatch-target auto
+orchestune dispatch --apply --dispatch-target auto
 ```
 
 These run `claude -p "..." --permission-mode bypassPermissions` / `agy -p "..." --add-dir . --dangerously-skip-permissions` / `codex exec "..." --dangerously-bypass-approvals-and-sandbox` / `grok -p "..." --always-approve --no-plan --no-auto-update --output-format streaming-json` (non-interactive print/exec mode) in each subtask's own worktree. All presets always pass a permission-bypass flag so an unattended run never blocks on an interactive prompt.
@@ -301,7 +301,7 @@ The standard supported configuration is **one control executor at a time per tar
 | run-state, intent journals, review state, worktrees, running PIDs | One operational owner manages them continuously and hands the state over on transfer | Stopping concurrent runs alone cannot restore lost local state or PIDs on another machine |
 
 - "Single executor" is a contract about control processing. The development agents of the selected child tasks may run in parallel. Ordinary `claim`/`complete` are not prohibited either (they follow their own existing ownership and state-lock contracts).
-- A periodically run `orchestune gc` (which applies reservation releases by default) must be placed in the same serialization scope as dispatch (the same group on Actions). One-off operations such as `orchestune recover --apply` must be performed only after confirming that the control executor has stopped.
+- A periodically run `orchestune gc --apply` must be placed in the same serialization scope as dispatch (the same group on Actions). One-off operations such as `orchestune recover --apply` must be performed only after confirming that the control executor has stopped.
 - In configurations outside the contract (concurrent runs with independent state), launch reservations may be overwritten and the same task may be selected twice.
 - The run-state lock covers only the cycle part of `execute_cycle`. It does not cover the subsequent not-needed review polling, Integrator (including Semantic Review), parent Issue completion, or reporting. Serialization of the whole CLI is guaranteed operationally, by a single owner or an Actions group. The local lock does not protect the whole CLI.
 
@@ -399,11 +399,11 @@ orchestune doctor --execution-mode local --online
 | `dispatch.readiness.auth` | Evaluated only when `--online`; ok if GitHub authentication is verified; warning otherwise |
 | `dispatch.local.serialization` | Always not_checked in local mode (confirm single ownership and serial execution of the whole CLI operationally) |
 | `dispatch.repository.other_entrypoints` | Direct dispatch in unspecified workflows. warning for the standard group; error for a missing or non-standard group (including leftover old workflows). In local mode, warning if any workflow contains a direct dispatch |
-| `dispatch.repository.other_control_entrypoints` | Detects `orchestune gc`/`orchestune recover --apply` in apply mode. ok for the standard group, warning otherwise |
+| `dispatch.repository.other_control_entrypoints` | Detects `orchestune gc --apply`/`orchestune recover --apply` in apply mode. ok for the standard group, warning otherwise |
 | `dispatch.external_ownership` | Other machines, other clones, and entrypoints outside Actions are always not_checked |
 | `dispatch.state.continuity` | Continuity of persistent state and worktrees/PIDs is always not_checked (see the table in 6.3) |
 
-The direct dispatch entrypoints detected are `orchestune dispatch`, `orchestune-dispatch`, and `python -m orchestune.dispatch.dispatcher` (entrypoints with `--no-apply` are not counted as control executors). Variable expansion of the command name, lines that cannot be split, the inside of `uses:` actions or reusable workflows, and called scripts cannot be detected and therefore yield `not_checked`. In that case, manually confirm the execution entrypoint and the protected section through post-processing.
+The direct dispatch entrypoints detected are `orchestune dispatch`, `orchestune-dispatch`, and `python -m orchestune.dispatch.dispatcher` (only applied entrypoints count as control executors). Variable expansion of the command name, lines that cannot be split, the inside of `uses:` actions or reusable workflows, and called scripts cannot be detected and therefore yield `not_checked`. In that case, manually confirm the execution entrypoint and the protected section through post-processing.
 
 Note that this repository does not currently run its own `orchestune dispatch` on a GitHub Actions schedule (dispatch here goes through the Cloud Routine or a local CLI), so the above is a configuration for adopting repositories. If you enable a real scheduled run here, add a workflow file under `.github/workflows/` that includes the concurrency settings above.
 

@@ -6,11 +6,11 @@ The behavior of a command run with no extra option, and the option that switches
 
 | Command | With no option | Switching option |
 | :--- | :--- | :--- |
-| `orchestune claim` | Applies | `--no-apply` to preview |
-| `orchestune complete` | Applies | `--no-apply` to preview |
-| `orchestune gc` | Applies | `--no-apply` to preview |
-| `orchestune provision` | Applies | `--no-apply` to preview |
-| `orchestune dispatch` | Applies | `--no-apply` to preview |
+| `orchestune claim` | Preview | `--apply` to apply |
+| `orchestune complete` | Preview | `--apply` to apply |
+| `orchestune gc` | Preview | `--apply` to apply |
+| `orchestune provision` | Preview | `--apply` to apply |
+| `orchestune dispatch` | Preview | `--apply` to apply |
 | `orchestune skills install` | Applies | `--dry-run` to preview |
 | `orchestune skills update` | Applies | `--dry-run` to preview |
 | `orchestune skills uninstall` | Applies | `--dry-run` to preview |
@@ -20,23 +20,25 @@ The behavior of a command run with no extra option, and the option that switches
 | `orchestune review retry` | Preview | `--apply` to apply |
 | `orchestune review override` | Preview | `--apply` to apply |
 
-- A preview shows the result without changing Git, GitHub, or the ledger. The exception is `dispatch --no-apply`, which creates local results and a report directory and lock (section 4).
+- A preview shows the result without changing Git refs, GitHub, or the ledger. Dispatch preview also saves local results and creates a report directory and lock (section 4).
 - The `orchestune-dispatch` command takes the same options as `orchestune dispatch`.
-- Only `skills` uses `--dry-run`; every other command uses `--no-apply` / `--apply`.
+- Only `skills` uses `--dry-run`. The commands that preview by default use `--apply` to make changes.
 - A command not in this table has no option that switches between preview and apply.
+
+Add `--apply` to mutating calls in existing Actions workflows and scripts. Remove the former `--no-apply` flag from preview calls. You can remove the legacy TOML `apply` key. The CLI flag determines whether to apply.
 
 ## Daily development flow
 
 The flow for one Issue. For command details see section 7 (`claim`), section 8 (`complete`), and section 9 (`gc`).
 
 ```bash
-orchestune claim <N> --no-apply   # validate before starting (optional)
-orchestune claim <N>              # start and create the worktree
+orchestune claim <N>   # validate before starting (optional)
+orchestune claim --apply <N>              # start and create the worktree
 # implement, run local CI, open the PR and handle review in the worktree
-orchestune complete --issue <N> --pr <PR> --result done --reviewer <claude|codex|skip> --review-reply <session-dir>/review-reply.md
+orchestune complete --apply --issue <N> --pr <PR> --result done --reviewer <claude|codex|skip> --review-reply <session-dir>/review-reply.md
 gh pr merge <PR> --merge --delete-branch   # merge from the primary checkout
-orchestune gc --no-apply          # inspect which reservations are released
-orchestune gc                     # release the reservations
+orchestune gc          # inspect which reservations are released
+orchestune gc --apply                     # release the reservations
 ```
 
 ## Next workflow action (`orchestune workflow next`)
@@ -173,7 +175,7 @@ orchestune remediate --spec remediation.md --apply --confirm-preview <displayed-
 Inspect the evidence, Footprint changes, and dependencies in preview. Existing titles and text outside the Footprint are preserved, with repair evidence appended.
 Follow-ups from #1277, including a depends_on-only Footprint or a `blocked-by #N` body reference, can be registered by supplying complete metadata and resolvable dependencies in the spec.
 Created numbers are written back to the spec. Apply appends parent plan entries, marks an open final PR pending, and posts one parent audit per revision.
-It does not start Dispatcher; the next `orchestune dispatch -p 693` cycle evaluates dependencies and conflicts.
+It does not start Dispatcher; the next `orchestune dispatch -p 693 --apply` cycle evaluates dependencies and conflicts.
 
 Exit 3 means a stale confirmation token, with no writes. Exit 4 means partial registration or concurrent changes.
 Keep the children, preview the same spec again, inspect `resume` and its remaining stages, then apply with the new token.
@@ -313,13 +315,13 @@ When `orchestune provision` (Stage 4) runs, the parent (EPIC) issue is created o
 
 - **Parent Issue Persistence and Child Issue Source of Truth**:
   Even if an AI agent's disposable worktree is removed and the local `decomposition_plan.md` is lost, the plan structure is retained in the parent issue body on GitHub. For provisioned subtasks, however, the child issue body is the canonical source of truth for prose (`overview`, `proposed_changes`, `acceptance_criteria`, `verification_plan`) and Footprint metadata (`footprint`, `symbols`).
-- **Safe Recovery from Lost Plan Files**:
-  1. Run `orchestune provision --restore-plan <parent_number>` (and optionally `--plan <output_path>` or `--template <template_path>`) to reconstruct `decomposition_plan.md`. For provisioned entries, prose and footprints are restored directly from child issue bodies (never falling back to stale prose in the parent), while unprovisioned entries retain parent plan values. Because the restored local plan contains all subtasks inline, any `plan_format: manifest-v1` from a manifest parent is dropped.
+- **Safe Recovery from Lost Plan Files**: Omit `--apply` to validate the parent and child Issues and show the destination without writing the plan.
+  1. Run `orchestune provision --restore-plan <parent_number> --apply` (and optionally `--plan <output_path>` or `--template <template_path>`) to reconstruct `decomposition_plan.md`. For provisioned entries, prose and footprints are restored directly from child issue bodies (never falling back to stale prose in the parent), while unprovisioned entries retain parent plan values. Because the restored local plan contains all subtasks inline, any `plan_format: manifest-v1` from a manifest parent is dropped.
   2. The parent plan structure and child bodies/metadata (`id`, `description`, `depends_on`, shared metadata, etc.) are strictly reconciled; any mismatch or missing child issue results in a fail-closed rejection.
   3. Before writing the output file, the parent and fetched child issues are re-read; if any concurrent modification is detected, restoration aborts without modifying the output file (no distributed transaction is formed; full concurrent point-in-time snapshot consistency is not guaranteed). Existing output files are atomically replaced via a temporary file and are never corrupted on failure.
   4. If a child issue body does not conform to the template structure (for example, an existing issue adopted as a repair task), manually format the child issue body to match the template structure and retry. Note that during `orchestune provision`, preflight validation (`validate_reversible_subtask`) rejects empty items, trailing whitespace, embedded newlines, and reserved placeholder items like '特になし', ensuring that non-reversible plans cannot be provisioned.
-  5. If re-running `orchestune provision` after restoring the plan file, specify `--parent-issue <parent_number>` and first run with `--no-apply` to preview and confirm that existing child issues will be reused.
-- **A Stale Local Plan Never Overwrites the Parent Plan**: when the parent plan has a subtask with an `issue_number` whose `id` is missing from the local plan (for example, a task added to the parent plan directly), `orchestune provision` stops with exit code 3 before creating any child issue and leaves the parent issue body untouched. Restore the plan with `orchestune provision --restore-plan <parent_number>` and rerun. Parent plan entries without an `issue_number` do not trigger this stop.
+  5. If re-running `orchestune provision` after restoring the plan file, specify `--parent-issue <parent_number>` and first run without `--apply` to preview and confirm that existing child issues will be reused.
+- **A Stale Local Plan Never Overwrites the Parent Plan**: when the parent plan has a subtask with an `issue_number` whose `id` is missing from the local plan (for example, a task added to the parent plan directly), `orchestune provision` stops with exit code 3 before creating any child issue and leaves the parent issue body untouched. Restore the plan with `orchestune provision --restore-plan <parent_number> --apply` and rerun. Parent plan entries without an `issue_number` do not trigger this stop.
 - **Concurrent Big Rocks**:
   To manage multiple big rocks in parallel, specify separate plan paths (e.g. `orchestune provision --plan plans/rock-a.md`) or manage them in isolated worktrees. Since each big rock's plan is persisted directly in its corresponding parent issue body, they remain cleanly separated and never conflict.
 - **`orchestune-dispatch` Does Not Read Plan Files**:
@@ -341,10 +343,10 @@ Files GitHub Issues from an approved `decomposition_plan.md`: `title` becomes th
 
 ```bash
 # Preview only (nothing is written to GitHub; prints the generated body/labels)
-orchestune provision --plan decomposition_plan.md --no-apply
+orchestune provision --plan decomposition_plan.md
 
 # Actually file the issues
-orchestune provision --plan decomposition_plan.md
+orchestune provision --apply --plan decomposition_plan.md
 ```
 
 ### Major Options
@@ -353,15 +355,15 @@ orchestune provision --plan decomposition_plan.md
 | :--- | :--- | :--- |
 | `--plan <path>` | `decomposition_plan.md` | Path to the decomposition plan to provision from. |
 | `--template <path>` | `.github/issue_template.md` | Path to the issue body template. |
-| `--apply` / `--no-apply` | `--apply` | Choose whether to actually create issues on GitHub and write back numbers, or just preview them (dry-run). |
+| `--apply` | `False` | Choose whether to actually create issues on GitHub and write back numbers, or just preview them (dry-run). |
 | `--parent-issue <number>` | none | Attach subtasks to this existing issue as their EPIC parent, instead of creating/reusing one derived from `title`. See "Attaching to a pre-existing EPIC issue" below. |
 
 ### Attaching to a pre-existing EPIC issue (`--parent-issue`)
 
-If the parent issue already has the Orchestune EPIC format (title starting with `[EPIC] ` and the parent marker embedded in the body), specifying `parent_issue_number: <number>` and `parent_issue_source: adopted` in the plan frontmatter is sufficient. If the existing issue is not yet an Orchestune EPIC, the first provision run requires `--parent-issue <number>` on the command line (including for `--no-apply` preview):
+If the parent issue already has the Orchestune EPIC format (title starting with `[EPIC] ` and the parent marker embedded in the body), specifying `parent_issue_number: <number>` and `parent_issue_source: adopted` in the plan frontmatter is sufficient. If the existing issue is not yet an Orchestune EPIC, the first provision run requires `--parent-issue <number>` on the command line (including in preview):
 
 ```bash
-orchestune provision --plan decomposition_plan.md --parent-issue 123
+orchestune provision --apply --plan decomposition_plan.md --parent-issue 123
 ```
 
 When `--parent-issue` is passed, the target issue is normalized in place if it doesn't already look like an Orchestune EPIC — its existing content is preserved, and the `[EPIC] ` prefix / parent marker are added as needed. No title match against the `title` frontmatter field is required.
@@ -434,10 +436,10 @@ Once the plan is finalized and approved, start the dispatcher to allocate subtas
 
 ```bash
 # Dry-run (preview execution plan without creating worktrees or updating labels)
-orchestune-dispatch --no-apply
+orchestune-dispatch
 
 # Apply (run dispatch cycle: create worktrees, update labels, launch agents)
-orchestune-dispatch
+orchestune-dispatch --apply
 ```
 
 ### Progress and result files
@@ -446,7 +448,7 @@ stdout displays flushed progress with a run ID, parent, mode and phase, includin
 
 TOML `report-dir` defaults to `.orchestune/reports/dispatch`, resolved from the primary checkout even in linked worktrees. Each run saves `parent-<N>/<UTC YYYYMMDDTHHMMSSZ>-<UUID>/result.json`. `ORCHESTUNE_DISPATCH_REPORT_PATH` overrides it with an unused file path, relative to invocation cwd or absolute. Existing results, symlinks, empty values, directories and business-state/lock paths are rejected. Reruns need fresh paths; never select the newest file or reuse an earlier result.
 
-`--no-apply` skips dispatch actions while saving local results and creating report directories/locks. `planned` means dry-run selection; `launched` means the launch procedure completed, not task completion (`local` is a dummy target). Progress failure does not stop result saving.
+The default preview skips dispatch actions while saving local results and creating report directories/locks. `planned` means dry-run selection; `launched` means the launch procedure completed, not task completion (`local` is a dummy target). Progress failure does not stop result saving.
 
 The dedicated `<result-name>.report.lock` remains beside the result, including for explicit paths. Exclusion covers cooperating dispatch runs; unrelated external writers are outside this guarantee. Do not remove a lock while other executions may use it.
 
@@ -487,7 +489,7 @@ Routine dispatch execution uses strictly the following 7 options. Detailed param
 | Option | Default | Description |
 | :--- | :--- | :--- |
 | `--parent-issue <int>` / `-p <int>` | - | The parent GitHub Issue number coordinating this plan. If omitted, inferred from the current Git branch name (`parent/issue-<N>`). If neither is available, startup fails with an error. Created sub-issues will link to this parent. |
-| `--apply` / `--no-apply` | `--apply` | Choose whether to actually execute actions (worktree setup, API calls) or preview them (dry-run). |
+| `--apply` | `False` | Choose whether to actually execute actions (worktree setup, API calls) or preview them (dry-run). |
 | `--dispatch-target {local,cloud-routine,codex-cloud,claude-cli,agy-cli,codex-cli,grok-cli,auto}` | auto-selected (non-CI: `auto` / GitHub Actions: `cloud-routine`) | Target environment to launch agents. When unspecified, resolved from configuration file or auto-selected from runtime environment (`GITHUB_ACTIONS`). `auto` detects a local CLI on `PATH`. `local` gives the backward-compatible no-op dummy (for tests/dry-runs). |
 | `--max-concurrent <int>` | `2` (when unset in config) | Maximum number of subtask agents running concurrently. CLI argument overrides configuration file setting. |
 | `--profile <name>` | - | Override the task execution profile (e.g. `balanced`, `fast-code`, `deep-reasoning`) for this entire run, taking precedence over the profile in task metadata. |
@@ -495,7 +497,7 @@ Routine dispatch execution uses strictly the following 7 options. Detailed param
 | `--final-acceptance-review {advisory,off}` | - | Advisory final-PR acceptance request (default `advisory`); independent of Layer 1/2. See §4.5. |
 | `--semantic-review-mode {required,advisory,off}` | - | Layer-2 integration-PR semantic review mode (`required`, `advisory`, or `off`). When omitted, falls back to config file (`semantic-review-mode`), env var (`ORCHESTUNE_SEMANTIC_REVIEW_MODE`), or default `required`. `off` skips verification. See [§4.5](#45-child-review-evidence-gate-and-layer-2-semantic-review-gate). |
 | `--force-integration-review` | - | Forces layer-2 integration-PR review even when a single child task qualifies for the Fast-Path. |
-| `--allow-unsafe-agent-execution` | `False` | Explicitly permits bypassing approvals and sandboxing (full-permission execution) for local CLIs (`claude-cli`, `agy-cli`, `codex-cli`, `grok-cli`, and when `auto` detects an installed CLI). Required on all runs including `--no-apply`. For safety, this flag is accepted only via CLI (prohibited in configuration files). Attempting to run a local CLI target without this flag fails closed with an error explaining why the target was selected. |
+| `--allow-unsafe-agent-execution` | `False` | Explicitly permits bypassing approvals and sandboxing (full-permission execution) for local CLIs (`claude-cli`, `agy-cli`, `codex-cli`, `grok-cli`, and when `auto` detects an installed CLI). Required on all runs including preview. For safety, this flag is accepted only via CLI (prohibited in configuration files). Attempting to run a local CLI target without this flag fails closed with an error explaining why the target was selected. |
 
 ### Configuration File (`orchestune.toml`) for Detailed Settings
 
@@ -508,7 +510,7 @@ Non-routine options (storage paths, rate limits, timeouts, reviewer selection, c
 - **Tier only:** Create a dedicated profile for the former tier (for example, `tier-strong`), add a target table with the intended `model` for each target that will run the task, and set the task's `execution_profile` to that profile. For each target, explicitly copy `reasoning_effort` from the same target in the profile selected by `default_execution_profile` in your old configuration. Profiles do not inherit individual fields, so omitting `reasoning_effort` leaves it unset and defers to that execution target's default behavior. If the old default profile had no `reasoning_effort` for a target, leave it unset. Record the old default profile's values before you edit or remove it. The previous per-target defaults are listed in the [`model_tiers` table before its retirement](https://github.com/Saltmu/orchestune/blob/95822058eec1243bdec3d13b710a64dee05597ab/orchestune.toml.example#L145-L164).
 - **Profile plus tier:** Copy the existing profile to a dedicated profile so other tasks keep their current settings. For each target, replace `model` with the model previously selected by the tier and retain that target's existing `reasoning_effort`. Set the task's `execution_profile` to the dedicated profile.
 
-Check each target's resolved values with a dry-run dispatch, for example `orchestune-dispatch -p <N> --no-apply --dispatch-target claude-cli`. Read that run's saved `result.json` and inspect `execution_selections` for the task's `profile`, `model`, and `reasoning_effort`; repeat for every target used by the plan.
+Check each target's resolved values with a dry-run dispatch, for example `orchestune-dispatch -p <N> --dispatch-target claude-cli --allow-unsafe-agent-execution`. Read that run's saved `result.json` and inspect `execution_selections` for the task's `profile`, `model`, and `reasoning_effort`; repeat for every target used by the plan.
 For tasks intended to use high reasoning with `Luna` or `HIGH` with Gemini Flash, verify the effective `model` and `reasoning_effort` for each target in the dispatch result. Merely setting `reasoning_effort = "high"` in an `agy-cli` profile does not confirm that Flash `HIGH` is active.
 
 #### Configuration File Settings
@@ -575,7 +577,7 @@ For tasks intended to use high reasoning with `Luna` or `HIGH` with Gemini Flash
 
 The default self-healing allowlist is intentionally separate from `consistency-repair-code`. It contains `status.blocked-with-resolved-dependencies`, `status.primary-status-conflict`, `execution.requeue`, `execution.update-bookkeeping`, and `execution.reclaim`, preserving the status promotion/reconciliation, state recovery, and GC behavior that predates the optional loop. Codes that reached a built-in repair pass are not attempted again by the later repository-wide repair loop; commands that appeared only as planner candidates remain eligible for the user allowlist. Opted-in execution commands use the same guarded GC and recovery handlers as the built-in boundaries.
 
-Use `off` for unchanged behavior, `shadow` to inspect additional start/end findings, `repair` with no repair codes to inspect final dispositions without enabling a new policy, and then a limited set of `consistency-repair-code` options to opt in. `--apply` permits the established repairs and opted-in policies to mutate; `--no-apply` permits no external or durable repair side effects (GC output is a preview and recovery may update only ephemeral in-memory preview bookkeeping).
+Use `off` for unchanged behavior, `shadow` to inspect additional start/end findings, `repair` with no repair codes to inspect final dispositions without enabling a new policy, and then a limited set of `consistency-repair-code` options to opt in. `--apply` permits the established repairs and opted-in policies to mutate; preview does not persist repairs or apply them externally (GC output is a preview and recovery may update only ephemeral in-memory preview bookkeeping).
 
 Inspect `consistency.scans`, `consistency.repair_passes`, and `consistency.repair_outcomes` in the saved dispatch JSON or `events.jsonl`. Outcomes are `resolved`, `unresolved`, `deferred`, `failed`, or `observation-unknown`. Unknown/stale observations and non-repairable findings remain visible without being mutated. A skipped command-level result caused by dry-run or a failed live precondition is represented by the finding's final disposition; there is no fallback to an old phase-owned repair path. A failed partial status transition leaves its Intent journal beside `run_state.json` so the next cycle can resume it without duplicating the external side effect.
 
@@ -821,7 +823,7 @@ Use the `input_base_sha` from the `orchestune-read-checkpoint` recorded when the
 `digest` is optional; the CLI computes it from the payload. If supplied, it must match the SHA-256 of the canonical payload. Example:
 
 ```bash
-orchestune complete --issue 123 --pr 456 --result done --reviewer codex \
+orchestune complete --apply --issue 123 --pr 456 --result done --reviewer codex \
   --review-reply .orchestune/tmp/task-123/review-reply.md \
   --read-evidence .orchestune/tmp/task-123/read-evidence.json
 ```
@@ -838,7 +840,7 @@ After a rebase or push changes the HEAD, do not rebind old evidence: review the 
 | Actor | Responsibility |
 | :--- | :--- |
 | Development skill (review loop, Step 11) | In interactive mode, runs `orchestune reviewer resolve` right after the start request (before claim) and records the printed reviewer; after the PR is created, runs the review on the child PR with that recorded value. Later rounds inherit the posted trigger and do not switch because config was reread. Records an LLM judgment (`adopt` / `decline` / `already_addressed` / `needs_information` / `duplicate`) for every finding in a judgment table. |
-| `orchestune complete --issue <N> --pr <PR> --result done --reviewer <bot> --review-reply <file>` | Re-acquires the PR's review state and checks that the table covers every current finding, that none is `unresolved`, that a `needs_information` or required (`adopt`) `deferred` row appears only in the final round (round >= `MAX_REVIEW_ROUNDS`, 5) and whose `evidence` names an OPEN follow-up Issue of this repository (never a PR, a closed Issue, another repository or the task itself; a lookup failure is `evidence_missing`), counted as `required_deferred`, and that the review target SHA equals the PR head and the local HEAD. It saves `verdict`, `reviewed_head_sha` and the judgment digest in the done Outcome Record. On any mismatch it rejects the completion (`review_evidence_invalid`, `review_head_mismatch` or `evidence_missing`) and posts nothing. `skip` is recorded as `verdict=skipped`, never as a pass. |
+| `orchestune complete --apply --issue <N> --pr <PR> --result done --reviewer <bot> --review-reply <file>` | Re-acquires the PR's review state and checks that the table covers every current finding, that none is `unresolved`, that a `needs_information` or required (`adopt`) `deferred` row appears only in the final round (round >= `MAX_REVIEW_ROUNDS`, 5) and whose `evidence` names an OPEN follow-up Issue of this repository (never a PR, a closed Issue, another repository or the task itself; a lookup failure is `evidence_missing`), counted as `required_deferred`, and that the review target SHA equals the PR head and the local HEAD. It saves `verdict`, `reviewed_head_sha` and the judgment digest in the done Outcome Record. On any mismatch it rejects the completion (`review_evidence_invalid`, `review_head_mismatch` or `evidence_missing`) and posts nothing. `skip` is recorded as `verdict=skipped`, never as a pass. |
 | Integrator | Only verifies the saved evidence; it never runs a review. |
 
 **Pass condition (per child)**: the child Issue's latest Outcome Record has `result=done` and `verdict=pass`, and both its `head_sha` and `reviewed_head_sha` equal the commit SHA about to be merged. A rebase or push after the review changes that SHA, so it must be reviewed again.
@@ -878,7 +880,7 @@ After a rebase or push changes the HEAD, do not rebind old evidence: review the 
 
 #### Invalidated Layer-2 attempts (#1440)
 
-When the parent branch moves or the child set changes, the runner saves the old attempt as `invalidated`; it is never reused. The post-cycle then retires it, one resumable step at a time (the `cleanup` list of the semantic review report; `--no-apply` only reports the plan):
+When the parent branch moves or the child set changes, the runner saves the old attempt as `invalidated`; it is never reused. The post-cycle then retires it, one resumable step at a time (the `cleanup` list of the semantic review report; preview only reports the plan):
 
 1. **Notice**: one comment on the old PR names the attempt, the reason, the base it was built on, the current parent tip and its head, and says the PR is out of scope for review and merge. It states whether a successor exists; it never guesses a PR number.
 2. **Close**: the PR is closed (REST, idempotent and read back). A merged PR stops all destructive cleanup. A closed PR is never reopened.
@@ -895,7 +897,7 @@ Use `--final-acceptance-review {advisory,off}`, `final-acceptance-review` (or un
 
 Posting waits for the head's CI, but only by deferring: while any check of the head SHA is unfinished (`waiting_for_ci` / `ci_pending`, with the unfinished names in `pending_checks`) or the head has no checks yet (`waiting_for_ci` / `no_checks`), nothing is posted and the next Dispatcher cycle re-evaluates; no cycle blocks. A failed or unreadable check listing (including an incomplete `total_count`) reports `indeterminate / ci_status_unavailable` and also posts nothing. Once every check has finished, the request is posted whatever the conclusions: a failed check is embedded as evidence, because the review is advisory. The CI section lists each check's name, kind (`check_run` / `status`), conclusion and URL in a deterministic order; names and conclusions are escaped and only plain `https://` URLs are kept. The request asks the reviewer to cite these results rather than to run tests in its sandbox. A repository with no CI never gets a request; set `final-acceptance-review = "off"` there. A check created after the others finish (for example CodeQL's aggregate check) may be missing from the embedded list, and re-running CI after posting does not trigger a new request for the same head.
 
-Orchestune never waits for this result, parses a verdict, launches fixes, changes labels or gates merge/close. Humans review and merge the final PR; existing parent-close checks remain authoritative. The nested `final_acceptance_review` report records `posted`, `already_requested`, `waiting_for_ci`, `skipped_off`, `reviewer_unresolved`, `not_applicable`, `indeterminate` or `failed`, with a reason and available PR/head/comment identifiers. Direct dry-run calls report `skipped_dry_run`; dispatcher `--no-apply` still skips all postcycle work.
+Orchestune never waits for this result, parses a verdict, launches fixes, changes labels or gates merge/close. Humans review and merge the final PR; existing parent-close checks remain authoritative. The nested `final_acceptance_review` report records `posted`, `already_requested`, `waiting_for_ci`, `skipped_off`, `reviewer_unresolved`, `not_applicable`, `indeterminate` or `failed`, with a reason and available PR/head/comment identifiers. Direct dry-run calls report `skipped_dry_run`; dispatch preview skips all postcycle work.
 
 Extraction selects level 2–4 ATX headings containing “受け入れ” or case-insensitive “Acceptance”, through the next same/higher heading. Code, quoted and list headings are ignored; multiple, missing and empty sections are handled explicitly. The finished comment has a 60,000 UTF-8 byte budget. Parent conditions, the CI results and all child identities/summaries are preserved; child criteria are truncated in issue-number order with omission notices and source references. Mandatory content exceeding the budget produces `indeterminate / payload_budget_exceeded` without posting. Missing or omitted data cannot establish acceptance.
 
@@ -982,7 +984,7 @@ To begin work on a provisioned subtask issue, use the `orchestune claim` command
 
 ```bash
 # Claim a task by specifying its issue number
-orchestune claim 123
+orchestune claim --apply 123
 ```
 
 The pre-claim fetch avoids updating `FETCH_HEAD`, but still needs write access to the Git metadata for refs and downloaded objects. If it fails, inspect the reported Git error; for permission or read-only errors, check the checkout and shared Git directory (`git rev-parse --git-dir --git-common-dir`). Retry the original claim command in an environment authorized to write the Git metadata. Worktree creation also requires Git metadata write access, so a standalone successful fetch does not guarantee the claim can complete.
@@ -993,7 +995,7 @@ Upon success, the command prints the issue number, claim ID, branch name, prepar
 
 | Option | Default | Description |
 | :--- | :--- | :--- |
-| `--no-apply` | disabled | Dry-run mode: validates prerequisites and previews planned values without modifying Git, GitHub, or local state. |
+| `--apply` | disabled | Claim the task, prepare the worktree and update state. |
 | `--resume <claim_id>` | none | Resumes an interrupted claim using its expected generation and verified local worktree. |
 | `--adopt-pr <number>` | none | Claims a verified orphaned PR or a PR named by a duplicate-pr notice from `status:blocked-human-review`; cannot be combined with `--resume` or `--amend-footprint`. |
 | `--amend-footprint` | disabled | Widens the held claim's file reservation. Cannot be combined with `--resume`. See below. |
@@ -1006,11 +1008,11 @@ Upon success, the command prints the issue number, claim ID, branch name, prepar
 When a worker exits without completing its claim, GC may report `completed_orphaned_pr`. To adopt the existing PR without requeueing the issue, run from the primary checkout:
 
 ```bash
-orchestune claim <issue> --adopt-pr <pr> --no-apply
 orchestune claim <issue> --adopt-pr <pr>
+orchestune claim --apply <issue> --adopt-pr <pr>
 cd <reported-worktree>
 ./scripts/local-ci.sh
-orchestune complete --issue <issue> --pr <pr> --result done --reviewer <bot> --review-reply <file>
+orchestune complete --apply --issue <issue> --pr <pr> --result done --reviewer <bot> --review-reply <file>
 ```
 
 The claim requires the latest trusted notice to match the current PR number and HEAD, plus a unique open same-repository PR, canonical head branch, parent base, and matching remote HEAD. An `orphaned-pr` notice requires a unique receipt for the old execution and proof that it stopped. A `duplicate-pr` notice without a corresponding orphan receipt can proceed through the normal admission gates, including checks for conflicting claims and unfinished completions. If an orphan receipt remains, it receives the same strict validation and stop check as an `orphaned-pr` adoption. Before adopting a receiptless duplicate notice, an operator must confirm that the old execution has stopped and ownership is clear; the ledger cannot prove that no unrecorded execution is running. Missing or ambiguous evidence, another claim, an unfinished completion, a fork, or a changed HEAD causes rejection. The adopted PR number and HEAD are bound to the claim; a later HEAD change prevents completion. The normal local CI and review evidence gates still apply. Manual merging bypasses the Layer-1 gate.
@@ -1029,7 +1031,7 @@ When GitHub GraphQL is unavailable (for example, Claude Code cloud sessions answ
 
 ### Footprint overlap warnings
 
-An interactive claim succeeds when its only conflict is a `footprint` overlap with another **interactive** reservation. The command then prints a `Warning:` to stderr with the other Issue number, branch, worktree, and the overlapping files (also in the `--no-apply` preview). When you see it, agree on the merge order with the other task; whichever merges later resolves the conflicts when rebasing.
+An interactive claim succeeds when its only conflict is a `footprint` overlap with another **interactive** reservation. The command then prints a `Warning:` to stderr with the other Issue number, branch, worktree, and the overlapping files (also in the preview). When you see it, agree on the merge order with the other task; whichever merges later resolves the conflicts when rebasing.
 
 An interactive claim is still rejected with `claim_conflict` when:
 
@@ -1045,10 +1047,10 @@ A dispatch claim is rejected on any footprint overlap, whoever holds the other r
 If the task turns out to need files outside its held file reservation, run:
 
 ```bash
-orchestune claim <N> --amend-footprint --no-apply  # preview
-orchestune claim <N> --amend-footprint
+orchestune claim <N> --amend-footprint  # preview
+orchestune claim --apply <N> --amend-footprint
 # Or explicitly specify paths to add:
-orchestune claim <N> --amend-footprint --add-path path/to/file.py
+orchestune claim --apply <N> --amend-footprint --add-path path/to/file.py
 ```
 
 The new footprint is the union of the held footprint, the Issue footprint, any paths specified via `--add-path`, and every file already changed in the worktree since the claim base (committed, uncommitted, and untracked). It never shrinks.
@@ -1080,7 +1082,7 @@ Recovery uses the same single waiting path:
 3. Exit 21: check the tracker's last progress and, when visible, the related workflow run/job. Codex's internal job is not visible: record it as unknown rather than assuming a GitHub Actions run exists. Then resume as in step 2.
 4. Exit 30: re-fetch with `--no-post`; the tracker table is not a review result.
 5. Change reviewers only when a human explicitly chooses it, with `--switch-reviewer` (verified replacement or the next round). Switching is not an automatic recovery default. If Claude does not start, check the workflow actor, `allowed_bots`, trigger marker and job conclusion instead of reposting.
-6. If bounded resumes still fail, stop with `orchestune complete --issue <N> --result blocked --reason review-timeout` (or `review-stalled`). A timeout is never a pass or a skip.
+6. If bounded resumes still fail, stop with `orchestune complete --apply --issue <N> --result blocked --reason review-timeout` (or `review-stalled`). A timeout is never a pass or a skip.
 
 Keep the wait to a single `wait_for_review.py` process. Never monitor a background wait with a polling loop or use `pgrep -f` / `pkill -f` (which self-matches the caller's command line and causes an infinite loop or terminates the shell). When a tool call yields, use the same session/task ID for continuation notifications rather than launching a new process. If tool execution limits can be configured, add margin beyond `--timeout` for polling (30 s per `gh` call) and the final HEAD lookup (30 s) to prevent abrupt termination. Resume with `--no-post --round <n>` only after confirming the original wait process has terminated; never rely on internal posting controls as authorization for concurrent wait processes.
 
@@ -1088,7 +1090,7 @@ Keep the wait to a single `wait_for_review.py` process. Never monitor a backgrou
 
 `orchestune complete` succeeds when it has posted the fixed Outcome Record, confirmed the corresponding Issue label (`status:done`, `status:blocked`, or `status:not-needed`), and durably saved the handoff and replay receipt in the shared ledger. Success does not mean the PR is merged, an independent not-needed review is approved, or the worktree is collected. `done` validates local CI, PR/head, child review evidence ([§4.5](#45-child-review-evidence-gate-and-layer-2-semantic-review-gate)) and token-limit evidence before publication; GC consumes that evidence. Legacy completion paths still perform their own token-limit checks.
 
-Run `orchestune complete --issue <N> --pr <PR> --result done` from the claimed worktree; `blocked` requires `--reason`, and `not-needed` can also reserve an unclaimed Issue without creating a worktree. The command prints a completion ID before remote effects. To resume interrupted publication, repeat the same arguments with `--completion-id <ID>` using the matching claim marker, or the explicit completion ID for an unclaimed Issue. A changed request or owner/generation cannot overwrite the frozen request. After handoff, replay returns the stored result even if a later policy queued the Issue or GC removed the active entry; it does not restore old labels.
+Run `orchestune complete --apply --issue <N> --pr <PR> --result done` from the claimed worktree; `blocked` requires `--reason`, and `not-needed` can also reserve an unclaimed Issue without creating a worktree. The command prints a completion ID before remote effects. To resume interrupted publication, repeat the same arguments with `--completion-id <ID>` using the matching claim marker, or the explicit completion ID for an unclaimed Issue. A changed request or owner/generation cannot overwrite the frozen request. After handoff, replay returns the stored result even if a later policy queued the Issue or GC removed the active entry; it does not restore old labels.
 
 ### Evidence Storage Location and Git State
 - **Default Storage Location**: `.orchestune/ci/ci_evidence.json` inside each worktree.
@@ -1110,8 +1112,8 @@ gh pr merge <PR> --merge --delete-branch
 Depending on the environment, this command also removes the worktree. If it does, `orchestune gc` reports the worktree as `absent` and still releases the reservation.
 
 ```bash
-orchestune gc --no-apply  # inspect decisions without changes
-orchestune gc             # apply the decisions
+orchestune gc  # inspect decisions without changes
+orchestune gc --apply             # apply the decisions
 ```
 
 Both the Dispatcher and `orchestune gc` discover verified completion journals and pending downstream policies independently of the Issue's `status:in-progress` label. Only matching label-confirmed handoff and replay receipt evidence allows new-format processing. Pending publication, inconsistent or unavailable evidence, and unverified legacy handoffs are retained. Legacy tasks without completion reservations keep their existing PR/cloud/Outcome detection paths.
@@ -1120,15 +1122,15 @@ The standalone command physically collects interactive worktrees; the Dispatcher
 
 Replay receipts and downstream context remain after active removal. Each policy uses a stable `(repository, generation, completion_id, policy_kind)` operation ID, saved with its decision and retry count before effects. Labels and close are reconciled against live state; comments use operation markers. Review-timeout retries retain pending/count/backoff state, and base-branch-red preserves attempt/marker/escalation behavior. Local not-needed subjects are closed; cloud and unclaimed subjects require independent review before close or dependency completion.
 
-`--no-apply` is a read-only preview and creates no locks. Apply mode can update Issue labels, comments and close state, and launch independent reviews. Without a running Dispatcher, rerun `orchestune gc` to advance pending policies; cloud reviews require `ORCHESTUNE_ROUTINE_ID` and `ORCHESTUNE_ROUTINE_TOKEN`. With no review provider or an unknown launch result, the review remains pending. A saved launch/attempt ID is reconciled when the provider supports lookup; unknown launches are never started twice. Unresolved launches escalate to human review after the configured review timeout; the policy and dependency remain pending. Review verdict comments carry the exact policy operation marker; generic labels alone do not approve a generation.
+The default preview is read-only and creates no locks. Apply mode can update Issue labels, comments and close state, and launch independent reviews. Without a running Dispatcher, rerun `orchestune gc --apply` to advance pending policies; cloud reviews require `ORCHESTUNE_ROUTINE_ID` and `ORCHESTUNE_ROUTINE_TOKEN`. With no review provider or an unknown launch result, the review remains pending. A saved launch/attempt ID is reconciled when the provider supports lookup; unknown launches are never started twice. Unresolved launches escalate to human review after the configured review timeout; the policy and dependency remain pending. Review verdict comments carry the exact policy operation marker; generic labels alone do not approve a generation.
 
-An interactive claim whose Issue or PR is already `CLOSED`/`MERGED` (for example, when `orchestune complete` never ran after an override merge) is released by both the Dispatcher GC phase and `orchestune gc`, so it no longer blocks later claims with `footprint_overlap`. A claim is released only when it is interactive, no completion journal, stage or reservation owns it, the live Forge state is closed, and the same checks as `orchestune recover` pass (repository identity, marker generation, launch phase, no live process). The release removes the active entry and records a `release` recovery receipt with reason `closed-target:<CLOSED|MERGED>`; the worktree, branch and claim marker are retained, so remove them yourself after checking for uncommitted work. `--no-apply` shows `would_release` with reason `closed_target`. An open target is left alone, and a Forge error is held.
+An interactive claim whose Issue or PR is already `CLOSED`/`MERGED` (for example, when `orchestune complete` never ran after an override merge) is released by both the Dispatcher GC phase and `orchestune gc --apply`, so it no longer blocks later claims with `footprint_overlap`. A claim is released only when it is interactive, no completion journal, stage or reservation owns it, the live Forge state is closed, and the same checks as `orchestune recover` pass (repository identity, marker generation, launch phase, no live process). The release removes the active entry and records a `release` recovery receipt with reason `closed-target:<CLOSED|MERGED>`; the worktree, branch and claim marker are retained, so remove them yourself after checking for uncommitted work. Preview shows `would_release` with reason `closed_target`. An open target is left alone, and a Forge error is held.
 
 All writers using the same resolved state path share its reentrant ledger lock across bounded remote operations and durable saves; physical removal also holds the per-worktree claim lock. Different state paths do not share that exclusion boundary. Running/current worktrees and ownership mismatches remain protected. If GC reports `current_worktree`, rerun from the primary checkout. Old `handed_off_to_gc` records are held for explicit evidence migration rather than automatically promoted; resume a recoverable publication through `complete` with its original completion ID and matching claim marker.
 
 | Option | Default | Description |
 | :--- | :--- | :--- |
-| `--no-apply` | disabled | Show decisions without applying them. |
+| `--apply` | disabled | Apply decisions and advance completion policies. |
 | `--state <path>` | primary checkout's `run_state.json` | Select the ledger path. Relative paths are based on the primary checkout. |
 | `--timeout <seconds>` | `0` | Lock wait time for the ledger and claim lock. Negative and non-finite values are argument errors. |
 

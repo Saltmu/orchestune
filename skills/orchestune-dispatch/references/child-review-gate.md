@@ -17,7 +17,7 @@ The child Issue's latest Outcome Record must have `result=done` and `verdict=pas
 | `skipped` | Review was explicitly skipped | Rerun review and complete, or accept gate off |
 | `not_pass` | `verdict` is not `pass` | Resolve findings so review passes, then rerun complete |
 | `sha_mismatch` | Child HEAD moved after `complete` | Review new HEAD and rerun complete |
-| `absent` | Child Issue has no Outcome Record | Run `orchestune complete` for the child |
+| `absent` | Child Issue has no Outcome Record | Run `orchestune complete --apply` for the child |
 | `lookup_unknown` | Reading child comments failed | Re-run dispatch; no action needed on child |
 | `integration_evidence_missing` | Missing integration proof | Restore evidence and re-run dispatch |
 

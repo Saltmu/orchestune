@@ -199,9 +199,9 @@ def _apply_duplicate_skip(
                 f"重複起動防止: Issue #{task.issue_number} に open PR #{existing_pr.number} "
                 f"(branch `{existing_pr.head_ref}`, head `{existing_pr.head_sha or 'unknown'}`) が存在します。\n"
                 "旧実行の停止、PR の所有権、ローカル CI と HEAD に対するレビュー証跡は再確認が必要です。\n"
-                f"条件を確認後 `orchestune claim {task.issue_number} --adopt-pr {existing_pr.number}` → "
+                f"条件を確認後 `orchestune claim {task.issue_number} --apply --adopt-pr {existing_pr.number}` → "
                 "`./scripts/local-ci.sh` → "
-                f"`orchestune complete --issue {task.issue_number} --pr {existing_pr.number} "
+                f"`orchestune complete --apply --issue {task.issue_number} --pr {existing_pr.number} "
                 "--result done --reviewer <bot> --review-reply <file>`。\n"
                 "手動マージは Layer-1 ゲートを通らない代替手段です。"
             )

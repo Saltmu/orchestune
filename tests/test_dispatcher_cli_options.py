@@ -65,13 +65,14 @@ class TestBuildArgParser:
 
         return _build_arg_parser().parse_args(["--parent-issue", "100", *args])
 
-    def test_apply_defaults_to_none_in_parser(self):
+    def test_apply_defaults_to_false_in_parser(self):
         args = self._parse_args([])
-        assert args.apply is None
+        assert args.apply is False
 
     def test_apply_flags_parse_correctly(self):
         assert self._parse_args(["--apply"]).apply is True
-        assert self._parse_args(["--no-apply"]).apply is False
+        with pytest.raises(SystemExit, match="2"):
+            self._parse_args(["--no-apply"])
 
     def test_parent_issue_options(self):
         from orchestune.dispatch.dispatcher import _build_arg_parser
@@ -389,7 +390,6 @@ class TestMainDispatchTargetAutoDetection:
                 [
                     "--parent-issue",
                     "100",
-                    "--no-apply",
                 ],
                 cwd=tmp_path,
             )
@@ -412,7 +412,6 @@ class TestMainDispatchTargetAutoDetection:
                 [
                     "--parent-issue",
                     "100",
-                    "--no-apply",
                 ],
                 cwd=tmp_path,
             )
@@ -437,7 +436,6 @@ class TestMainDispatchTargetAutoDetection:
                 [
                     "--parent-issue",
                     "100",
-                    "--no-apply",
                     "--dispatch-target",
                     "local",
                 ],
@@ -464,7 +462,6 @@ class TestMainDispatchTargetAutoDetection:
                 [
                     "--parent-issue",
                     "100",
-                    "--no-apply",
                 ],
                 cwd=tmp_path,
             )
@@ -495,7 +492,6 @@ class TestMainDispatchTargetAutoDetection:
                 [
                     "--parent-issue",
                     "100",
-                    "--no-apply",
                     "--dispatch-target",
                     "local",
                     "--profile",

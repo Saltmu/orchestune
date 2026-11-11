@@ -80,7 +80,9 @@ def test_provision_cli_exits_non_zero_when_plan_sync_fails(
     _stub_provision_result(monkeypatch, plan_synced=False)
 
     with pytest.raises(SystemExit) as excinfo:
-        provisioning_main(["--plan", str(tmp_path / "decomposition_plan.md")])
+        provisioning_main(
+            ["--apply", "--plan", str(tmp_path / "decomposition_plan.md")]
+        )
 
     assert excinfo.value.code != 0
     assert "could not sync decomposition plan" in capsys.readouterr().out
@@ -90,19 +92,19 @@ def test_provision_cli_exits_zero_when_plan_sync_succeeds(tmp_path, monkeypatch)
     _stub_provision_result(monkeypatch, plan_synced=True)
 
     with pytest.raises(SystemExit) as excinfo:
-        provisioning_main(["--plan", str(tmp_path / "decomposition_plan.md")])
+        provisioning_main(
+            ["--apply", "--plan", str(tmp_path / "decomposition_plan.md")]
+        )
 
     assert excinfo.value.code == 0
 
 
 def test_provision_cli_exits_zero_on_dry_run(tmp_path, monkeypatch):
-    """`--no-apply`は書き込みを伴わないため同期未実施でも成功終了する。"""
+    """`dry run`は書き込みを伴わないため同期未実施でも成功終了する。"""
     _stub_provision_result(monkeypatch, applied=False, plan_synced=False)
 
     with pytest.raises(SystemExit) as excinfo:
-        provisioning_main(
-            ["--plan", str(tmp_path / "decomposition_plan.md"), "--no-apply"]
-        )
+        provisioning_main(["--plan", str(tmp_path / "decomposition_plan.md")])
 
     assert excinfo.value.code == 0
 
@@ -278,7 +280,9 @@ def test_provision_cli_exits_3_with_restore_hint_on_parent_only_subtask(
     )
 
     with pytest.raises(SystemExit) as excinfo:
-        provisioning_main(["--plan", str(tmp_path / "decomposition_plan.md")])
+        provisioning_main(
+            ["--apply", "--plan", str(tmp_path / "decomposition_plan.md")]
+        )
 
     assert excinfo.value.code == 3
     out = capsys.readouterr().out

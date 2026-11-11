@@ -99,7 +99,7 @@ def test_json_output(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
         "  ctl:\n"
         "    runs-on: ubuntu-latest\n"
         "    steps:\n"
-        "      - run: orchestune dispatch --dispatch-target cloud-routine\n"
+        "      - run: orchestune dispatch --apply --dispatch-target cloud-routine\n"
         "        env:\n"
         "          ORCHESTUNE_ROUTINE_ID: id\n"
         "          ORCHESTUNE_ROUTINE_TOKEN: token\n",

@@ -598,7 +598,7 @@ class TestBuildDispatchTarget:
         assert "agy" in msg
         assert "--allow-unsafe-agent-execution" in msg
         assert "cloud-routine" in msg
-        assert "--no-apply" in msg
+        assert "プレビュー" in msg
 
     def test_auto_detected_claude_unsafe_cli_error_message(self, tmp_path, monkeypatch):
         import shutil
@@ -630,7 +630,7 @@ class TestBuildDispatchTarget:
         msg = str(excinfo.value)
         assert "--dispatch-target" in msg
         assert "dispatch_target" in msg
-        assert "--no-apply" in msg
+        assert "プレビュー" in msg
         assert "cloud-routine" in msg
 
     def test_unsafe_cli_with_allow_unsafe_flag_succeeds(self, tmp_path):

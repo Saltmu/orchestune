@@ -587,7 +587,7 @@ class TestApplyFootprintDeviationOutcomePersistsRecoveryCounters:
         assert "forced_serial: true" in written_body
 
     def test_does_not_write_when_apply_is_false(self, tmp_path):
-        """dry-run（--no-apply）では他の副作用と同様、書き込みを行わない。"""
+        """dry-run（dry run）では他の副作用と同様、書き込みを行わない。"""
         active = _active(recompute_count=1)
         decision = FootprintDeviationDecision(
             action="recomputed", subtask_id="task-a", conflicts=[]

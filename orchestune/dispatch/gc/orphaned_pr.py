@@ -118,9 +118,9 @@ def orphan_message(active: ActiveWorktree, pr: PrRecord) -> str:
         f"{orphan_marker(active.claim.claim_id or '', pr)}\n"
         f"completed_orphaned_pr: PR #{pr.number}, head `{pr.head_sha}`. "
         "ローカル CI と現在の HEAD に対するレビュー証跡は再確認が必要です。\n\n"
-        f"`orchestune claim {active.core.issue_number} --adopt-pr {pr.number}` → "
+        f"`orchestune claim {active.core.issue_number} --apply --adopt-pr {pr.number}` → "
         "`./scripts/local-ci.sh` → "
-        f"`orchestune complete --issue {active.core.issue_number} --pr {pr.number} "
+        f"`orchestune complete --apply --issue {active.core.issue_number} --pr {pr.number} "
         "--result done --reviewer <bot> --review-reply <file>`。\n"
         "手動マージは Layer-1 ゲートを通らない代替手段です。"
     )

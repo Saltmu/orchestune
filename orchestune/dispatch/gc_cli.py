@@ -10,6 +10,7 @@ from pathlib import Path
 
 from orchestune.dispatch.gc.handoff import GcRequest
 from orchestune.dispatch.gc_service import GcItemResult, run_handoff_gc
+from orchestune.infra.apply_mode import add_apply_switch
 from orchestune.infra.cli_output import Block, CliOutput, make_output
 
 _TABLE_HEADERS = ("ISSUE", "RESULT", "ACTION", "REASON", "WORKTREE")
@@ -32,11 +33,7 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="orchestune gc",
         description="Resume verified completion policies and collect interactive worktrees.",
     )
-    parser.add_argument(
-        "--no-apply",
-        action="store_true",
-        help="preview decisions without changing state, worktrees, or GitHub",
-    )
+    add_apply_switch(parser, help="apply completion policies and collect worktrees")
     parser.add_argument(
         "--state",
         type=Path,
@@ -115,16 +112,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     request = GcRequest(
         state_path=args.state,
-        apply=not args.no_apply,
+        apply=args.apply,
         timeout_seconds=args.timeout,
     )
     result = run_handoff_gc(request)
-    if args.no_apply:
+    if not args.apply:
         _write_lines(
             make_output(sys.stdout),
             ["Preview only; no state, worktree, or GitHub changes were made."],
         )
     if result.items:
-        _print_items(result.items, args.no_apply)
-    _print_summary(result.items, result.skipped, result.exit_code, args.no_apply)
+        _print_items(result.items, not args.apply)
+    _print_summary(result.items, result.skipped, result.exit_code, not args.apply)
     return result.exit_code

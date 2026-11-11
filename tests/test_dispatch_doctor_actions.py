@@ -24,7 +24,7 @@ GROUP = "orchestune-control-${{ github.repository }}"
 def make_workflow(
     *,
     concurrency: str | None = f"  group: {GROUP}\n  cancel-in-progress: false",
-    command: str = "orchestune dispatch -p 1 --dispatch-target cloud-routine",
+    command: str = "orchestune dispatch --apply -p 1 --dispatch-target cloud-routine",
     top_env: str = "",
     job_env: str = "",
     step_env: str = (
@@ -136,10 +136,12 @@ def test_cancel_errors(cancel: str | None) -> None:
         {"extra_job": "    concurrency: other\n"},
         {
             "extra_jobs": "  second:\n    runs-on: x\n    steps:\n"
-            "      - run: orchestune dispatch --dispatch-target cloud-routine\n"
+            "      - run: orchestune dispatch --apply --dispatch-target cloud-routine\n"
         },
-        {"command": "orchestune dispatch --dispatch-target cloud-routine &"},
-        {"command": "nohup orchestune dispatch --dispatch-target cloud-routine"},
+        {"command": "orchestune dispatch --apply --dispatch-target cloud-routine &"},
+        {
+            "command": "nohup orchestune dispatch --apply --dispatch-target cloud-routine"
+        },
     ],
 )
 def test_parallelism_errors(kwargs: dict[str, str]) -> None:
@@ -161,36 +163,52 @@ def test_entrypoint_with_undetectable_other_job_is_not_checked() -> None:
     assert status(make_workflow(extra_jobs=other), "entrypoint") == "not_checked"
 
 
-def test_no_apply_is_not_counted() -> None:
-    result = checks(make_workflow(command="orchestune dispatch --no-apply"))
+def test_preview_is_not_counted() -> None:
+    result = checks(make_workflow(command="orchestune dispatch"))
     assert result["entrypoint"].status == "not_checked"
     assert any("not counted" in line for line in result["entrypoint"].evidence)
+
+
+def test_removed_no_apply_is_reported_as_an_argument_error() -> None:
+    entrypoint = checks(make_workflow(command="orchestune dispatch --no-apply"))[
+        "entrypoint"
+    ]
+    assert entrypoint.status == "not_checked"
+    assert any(
+        "unrecognized arguments: --no-apply" in line for line in entrypoint.evidence
+    )
 
 
 @pytest.mark.parametrize(
     "target", ["local", "claude-cli", "agy-cli", "codex-cli", "grok-cli", "auto"]
 )
 def test_local_process_target_argument_is_error(target: str) -> None:
-    text = make_workflow(command=f"orchestune dispatch --dispatch-target {target}")
+    text = make_workflow(
+        command=f"orchestune dispatch --apply --dispatch-target {target}"
+    )
     assert status(text, "target") == "error"
 
 
 def test_target_from_config_then_actions_default() -> None:
-    text = make_workflow(command="orchestune dispatch -p 1")
+    text = make_workflow(command="orchestune dispatch --apply -p 1")
     assert status(text, "target", config={"dispatch_target": "local"}) == "error"
     assert status(text, "target", config={"dispatch_target": "codex-cloud"}) == "ok"
     assert status(text, "target") == "ok"
 
 
 def test_argument_wins_over_config() -> None:
-    text = make_workflow(command="orchestune dispatch --dispatch-target cloud-routine")
+    text = make_workflow(
+        command="orchestune dispatch --apply --dispatch-target cloud-routine"
+    )
     assert status(text, "target", config={"dispatch_target": "local"}) == "ok"
 
 
 def test_dynamic_target_and_invalid_config_are_not_checked() -> None:
-    dynamic = make_workflow(command='orchestune dispatch --dispatch-target "$T"')
+    dynamic = make_workflow(
+        command='orchestune dispatch --apply --dispatch-target "$T"'
+    )
     assert status(dynamic, "target") == "not_checked"
-    plain = make_workflow(command="orchestune dispatch -p 1")
+    plain = make_workflow(command="orchestune dispatch --apply -p 1")
     assert status(plain, "target", config_valid=False) == "not_checked"
 
 
@@ -230,7 +248,7 @@ def test_credentials_env_expression_is_not_checked() -> None:
 
 
 def test_credentials_codex_cloud() -> None:
-    cmd = "orchestune dispatch --dispatch-target codex-cloud"
+    cmd = "orchestune dispatch --apply --dispatch-target codex-cloud"
     text = make_workflow(command=cmd, step_env="          OTHER: x")
     assert status(text, "credentials") == "error"
     assert status(text, "credentials", config={"codex_cloud_env": "e"}) == "ok"
@@ -241,7 +259,7 @@ def test_credentials_codex_cloud() -> None:
 
 
 def test_credentials_with_error_target_is_not_checked_and_hides_values() -> None:
-    local = make_workflow(command="orchestune dispatch --dispatch-target local")
+    local = make_workflow(command="orchestune dispatch --apply --dispatch-target local")
     assert status(local, "credentials") == "not_checked"
     result = checks(
         make_workflow(

@@ -137,12 +137,12 @@ orchestune config init
 orchestune dag --plan decomposition_plan.md
 
 # 3. Preview, then create, the GitHub Issues from the approved plan
-orchestune provision --plan decomposition_plan.md --no-apply
 orchestune provision --plan decomposition_plan.md
+orchestune provision --plan decomposition_plan.md --apply
 
 # 4. Start the dispatcher (dry-run, then execute)
-orchestune dispatch --no-apply
 orchestune dispatch
+orchestune dispatch --apply
 ```
 
 👉 For CLI options and `decomposition_plan.md` syntax specification, see the [Usage & Command Reference](docs/en/usage.md).

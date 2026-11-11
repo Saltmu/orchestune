@@ -9,8 +9,8 @@ worktrees. For an interactive task after its PR is merged, run the local GC
 command from the primary checkout:
 
 ```bash
-orchestune gc --no-apply
 orchestune gc
+orchestune gc --apply
 ```
 
 Review the preview before applying it. Standalone GC physically collects interactive

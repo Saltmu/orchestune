@@ -12,6 +12,7 @@ from rich.text import Text
 
 from orchestune.config_contracts import ConfigError
 from orchestune.forge import GitHubForge
+from orchestune.infra.apply_mode import add_apply_switch
 from orchestune.infra.cli_output import Block, CliOutput, Level, make_output
 from orchestune.infra.cli_progress import ProgressHandle, progress
 from orchestune.infra.repository_config import resolve_repo_root
@@ -30,6 +31,7 @@ from orchestune.provisioning.plan import (
     _parent_body,
     restore_plan_file_from_parent,
 )
+from orchestune.provisioning.plan_restoration import restore_plan_from_parent
 from orchestune.provisioning.rendering import (
     _build_subtask_issue_body,
     _derive_labels,
@@ -191,7 +193,7 @@ def _print_result(result: ProvisionResult, output: CliOutput | None = None) -> N
 
 
 def _print_preview_plain(result: ProvisionResult, output: CliOutput) -> None:
-    _say(output, "Dry run (--no-apply): no Issues were created.")
+    _say(output, "Dry run: no Issues were created.")
     if result.parent_issue_number is not None:
         _say(output, f"Target parent issue: #{result.parent_issue_number}")
     for preview in result.previews:
@@ -247,7 +249,7 @@ def _print_result_plain(result: ProvisionResult, output: CliOutput) -> None:
         _say(
             output,
             "No Issues were created. Restore the plan with "
-            f"`orchestune provision --restore-plan {result.parent_issue_number}` "
+            f"`orchestune provision --restore-plan {result.parent_issue_number} --apply` "
             "and rerun provision.",
         )
         return
@@ -267,7 +269,7 @@ def _print_preview_rich(result: ProvisionResult, output: CliOutput) -> None:
     items = []
     if result.parent_issue_number is not None:
         items.append(("Target parent issue", f"#{result.parent_issue_number}"))
-    output.summary(Level.DRY_RUN, "Dry run (--no-apply): no Issues were created", items)
+    output.summary(Level.DRY_RUN, "Dry run: no Issues were created", items)
     for preview in result.previews:
         status = "reuse expected" if preview.already_has_issue else "would create"
         output.summary(
@@ -321,7 +323,7 @@ def _print_result_rich(result: ProvisionResult, output: CliOutput) -> None:
             f"the plan of #{number} has registered subtasks missing from the local plan: "
             f"{', '.join(result.parent_only_subtask_ids)}",
             detail="No Issues were created. Restore the plan with "
-            f"`orchestune provision --restore-plan {number}` and rerun provision.",
+            f"`orchestune provision --restore-plan {number} --apply` and rerun provision.",
         )
         return
     if not result.plan_synced:
@@ -339,8 +341,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--plan", default="decomposition_plan.md")
     parser.add_argument("--template", default=".github/issue_template.md")
-    parser.add_argument("--apply", dest="apply", action="store_true", default=True)
-    parser.add_argument("--no-apply", dest="apply", action="store_false")
+    add_apply_switch(parser, help="create Issues or write the restored plan file")
     parser.add_argument("--parent-issue", type=int, default=None)
     parser.add_argument(
         "--restore-plan", type=int, metavar="PARENT_ISSUE", default=None
@@ -348,21 +349,30 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _restore_plan(args: argparse.Namespace, output: CliOutput) -> None:
+    forge = GitHubForge()
+    number = args.restore_plan
+    if args.apply:
+        out = restore_plan_file_from_parent(
+            forge, number, args.plan, template_path=args.template
+        )
+        _say(
+            output, f"Successfully restored decomposition plan from #{number} to {out}"
+        )
+    else:
+        restore_plan_from_parent(forge, number, template_path=args.template)
+        _say(
+            output,
+            f"Dry run: would restore decomposition plan from #{number} to {args.plan}",
+        )
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     args = _build_arg_parser().parse_args(argv)
     output = make_output()
     try:
         if args.restore_plan is not None:
-            out = restore_plan_file_from_parent(
-                GitHubForge(),
-                args.restore_plan,
-                args.plan,
-                template_path=args.template,
-            )
-            _say(
-                output,
-                f"Successfully restored decomposition plan from #{args.restore_plan} to {out}",
-            )
+            _restore_plan(args, output)
             raise SystemExit(0)
         with ProvisionProgressDisplay(output) as hook:
             result = _provision_issues(

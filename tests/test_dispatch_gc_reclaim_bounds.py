@@ -210,7 +210,7 @@ class TestReclaimRetryBound:
         assert run_state.task_reclaim_counts == {}
 
     def test_dry_run_reports_escalation_without_touching_the_ledger(self, tmp_path):
-        """--no-applyでは台帳を変更しないが、イベントは適用時と同じ判定を返す。"""
+        """dry runでは台帳を変更しないが、イベントは適用時と同じ判定を返す。"""
         active = _active(worktree_path=str(tmp_path / "missing-280"))
         run_state = RunState(
             active_worktrees={"280": active},

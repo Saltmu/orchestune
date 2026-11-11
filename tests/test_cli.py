@@ -165,7 +165,7 @@ def test_cli_delegates_to_claim():
 
     captured_argv: list[list[str]] = []
     with (
-        patch("sys.argv", ["orchestune", "claim", "123", "--no-apply"]),
+        patch("sys.argv", ["orchestune", "claim", "123", "--apply"]),
         patch(
             "orchestune.claim.cli.main",
             autospec=True,
@@ -177,7 +177,7 @@ def test_cli_delegates_to_claim():
 
     assert exc_info.value.code == 0
     mock_claim_main.assert_called_once()
-    assert captured_argv == [["orchestune", "123", "--no-apply"]]
+    assert captured_argv == [["orchestune", "123", "--apply"]]
 
 
 def test_cli_delegates_to_complete_with_its_exit_code():
@@ -200,14 +200,14 @@ def test_cli_delegates_to_gc_with_its_exit_code():
     from orchestune.cli import main
 
     with (
-        patch("sys.argv", ["orchestune", "gc", "--no-apply"]),
+        patch("sys.argv", ["orchestune", "gc", "--apply"]),
         patch(
             "orchestune.dispatch.gc_cli.main", autospec=True, return_value=22
         ) as mock_gc_main,
         pytest.raises(SystemExit) as exc_info,
     ):
         main()
-        assert sys.argv == ["orchestune", "--no-apply"]
+        assert sys.argv == ["orchestune", "--apply"]
 
     assert exc_info.value.code == 22
     mock_gc_main.assert_called_once()
@@ -459,10 +459,10 @@ def test_cli_no_args_exits(capsys):
         "  provision Provision GitHub Issues from decomposition_plan.md\n"
         "  replan    Preview or replace an unstarted decomposition generation\n"
         "  remediate Preview parent-scope remediation tasks\n"
-        "  claim     Claim a task issue (--no-apply for a read-only preview)\n"
+        "  claim     Claim a task issue (--apply to claim)\n"
         "  complete  Complete a claimed task issue\n"
         "  recover   Inspect or recover one stopped claim (preview by default)\n"
-        "  gc        Release handoff-ready task reservations (--no-apply to preview)\n"
+        "  gc        Release handoff-ready task reservations (--apply to release)\n"
         "  doctor    Diagnose dispatch single-executor setup (offline, read-only)\n"
         "  review    Inspect, retry or override a Layer-2 semantic review\n"
         "  reviewer  Resolve the interactive review bot (read-only)\n"

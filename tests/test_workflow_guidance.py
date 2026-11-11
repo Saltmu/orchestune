@@ -76,13 +76,13 @@ def test_resolved_claim_argv_is_quoted_as_a_command() -> None:
             actions=(
                 {
                     "description": "Use the existing claim operation.",
-                    "argv": ["orchestune", "claim", "1763"],
+                    "argv": ["orchestune", "claim", "1763", "--apply"],
                     "references": [],
                 },
             ),
         )
     )
     text = render_guidance(guidance)
-    assert "コマンド: orchestune claim 1763" in text
+    assert "コマンド: orchestune claim 1763 --apply" in text
     assert "次の担当: agent" in text
     assert "自動進行: manual" in text

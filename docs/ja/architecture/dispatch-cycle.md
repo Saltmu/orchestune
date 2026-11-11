@@ -10,11 +10,11 @@
 
 ## 2. 投稿の条件
 
-**apply（`--no-apply`ではない）モードの**各ディスパッチサイクル終了時に、設定された親Issue（`--parent-issue`、#396）へ`## 🤖 Orchestune Dispatch Cycle Report`という見出しのコメントを投稿します。
+**apply（プレビューではない）モードの**各ディスパッチサイクル終了時に、設定された親Issue（`--parent-issue`、#396）へ`## 🤖 Orchestune Dispatch Cycle Report`という見出しのコメントを投稿します。
 
 次の場合は投稿しません。
 
-- `--no-apply`で実行した場合。`--no-apply`はpost-cycleブロック全体をスキップします。
+- プレビューで実行した場合。プレビューはpost-cycleブロック全体をスキップします。
 - 報告すべき内容が無いサイクル。
 - 親Issueが未設定の場合。
 
@@ -55,7 +55,7 @@ Dispatcher は apply モードにおいて、1 回の実行を以下の 4 つの
 3. **scheduling cycle (`run_dispatch_cycle`)**: 再度 `run_state_lock` を取得し、最新の状態を再取得したコンテキストで `reconciliation_external_locks`（external-lock 判定・依存昇格）および `scheduling`（選定・起動）を実行し、イベントログに記録します（`stage="scheduling"`）。完了後に `run_state_lock` を解放します。
 4. **post-cycle (`_post_cycle_steps`)**: `run_state_lock` のスコープ外で、親Issue完了処理、両サイクルのイベントを統合した親Issueイベントログコメントの投稿、整合性スーパーバイザの finding 通知を行います。
 
-`--no-apply`（dry-run モード）では、統合前cycleおよび統合境界は実行されず、従来の単一 scheduling cycle のみが FULL で実行されます。
+プレビュー（dry-run モード）では、統合前cycleおよび統合境界は実行されず、従来の単一 scheduling cycle のみが FULL で実行されます。
 
 ## 7. 候補選定における active 予約との重複除外 (#1547)
 

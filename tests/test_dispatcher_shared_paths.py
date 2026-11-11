@@ -60,7 +60,7 @@ def test_report_env_resolves_from_explicit_cwd(tmp_path, monkeypatch, value):
         ),
     ):
         config = load_and_resolve_config(
-            ["-p", "100", "--no-apply"],
+            ["-p", "100"],
             cwd=tmp_path,
             load_config_fn=lambda _: {"report-dir": "configured"},
             build_target_fn=lambda _: None,
@@ -103,7 +103,7 @@ def test_invalid_report_env_is_config_error(tmp_path, monkeypatch, value):
         pytest.raises(ConfigError),
     ):
         load_and_resolve_config(
-            ["-p", "100", "--no-apply"],
+            ["-p", "100"],
             cwd=tmp_path,
             load_config_fn=lambda _: {},
             build_target_fn=lambda _: None,
@@ -133,7 +133,6 @@ def test_shared_relative_paths_use_primary_repository_root(cwd_suffix):
             [
                 "--parent-issue",
                 "100",
-                "--no-apply",
             ],
             cwd=worktree_root / cwd_suffix,
         )
@@ -168,7 +167,6 @@ def test_absolute_shared_paths_are_preserved(tmp_path):
             [
                 "--parent-issue",
                 "100",
-                "--no-apply",
             ],
             cwd=repository_root,
         )
@@ -196,7 +194,7 @@ def test_config_file_shared_paths_use_primary_repository_root():
             return_value=_empty_report(),
         ) as mock_run,
     ):
-        main(["-p", "100", "--no-apply"], cwd=repository_root)
+        main(["-p", "100"], cwd=repository_root)
 
     config = mock_run.call_args.args[0]
     assert (
@@ -222,7 +220,6 @@ def test_dispatch_from_outside_repository_fails_closed(tmp_path):
             [
                 "--parent-issue",
                 "100",
-                "--no-apply",
             ],
             cwd=tmp_path,
         )

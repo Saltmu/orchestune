@@ -12,24 +12,24 @@ import pytest
 pytest_plugins = ["tests.test_local_claim_identity"]
 
 
-def test_gc_parser_defaults_to_apply_with_no_explicit_state():
+def test_gc_parser_defaults_to_preview_with_no_explicit_state():
     from orchestune.dispatch.gc_cli import _build_parser
 
     args = _build_parser().parse_args([])
 
-    assert args.no_apply is False
+    assert args.apply is False
     assert args.state is None
     assert args.timeout == 0.0
 
 
-def test_gc_parser_accepts_preview_state_and_timeout():
+def test_gc_parser_accepts_apply_state_and_timeout():
     from orchestune.dispatch.gc_cli import _build_parser
 
     args = _build_parser().parse_args(
-        ["--no-apply", "--state", "custom/run_state.json", "--timeout", "5"]
+        ["--apply", "--state", "custom/run_state.json", "--timeout", "5"]
     )
 
-    assert args.no_apply is True
+    assert args.apply is True
     assert args.state == Path("custom/run_state.json")
     assert args.timeout == 5.0
 
@@ -61,7 +61,6 @@ def test_gc_main_forwards_request_and_displays_preview(capsys):
             "sys.argv",
             [
                 "orchestune",
-                "--no-apply",
                 "--state",
                 "custom/run_state.json",
                 "--timeout",
@@ -133,7 +132,7 @@ def _run_preview(items=_PREVIEW_ITEMS) -> int:
 
     result = SimpleNamespace(items=items, skipped=2, exit_code=0)
     with (
-        patch("sys.argv", ["orchestune", "--no-apply"]),
+        patch("sys.argv", ["orchestune"]),
         patch("orchestune.dispatch.gc_cli.run_handoff_gc", return_value=result),
     ):
         return main()
@@ -211,7 +210,7 @@ def test_gc_preview_reports_closed_target_without_changing_state(
         partial(run_handoff_gc, forge_factory=_closed_target_factory("MERGED")),
     )
 
-    assert gc_cli.main(["--no-apply"]) == 0
+    assert gc_cli.main([]) == 0
 
     output = capsys.readouterr().out
     assert "would_release" in output and "closed_target" in output

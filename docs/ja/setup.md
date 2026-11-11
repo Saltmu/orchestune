@@ -13,7 +13,7 @@ Orchestuneは「エージェントが標準開発ワークフローに従って�
 2. **(b) 自動マージを任せられる厚さの品質ゲート（CI）が存在すること**
    Orchestuneの子タスクレベルには人間によるレビューゲートが存在しません。CIに加え、子レビュー証跡ゲートが既定の `required` モードで自動ゲートとして働き、親ブランチ更新前に各子のレビュー合格証跡（`verdict=pass`、マージ対象SHAとの一致）を検証します（詳細は[使い方 §4.5](usage.md#45-子レビュー証跡ゲート)および[Architecture & Design](architecture.md)を参照）。ただし、`child-review-gate = "off"` を明示すると証跡検証は省略され、ゲートが有効でもレビュー判断はLLMによるものです。機械的な正しさの担保はCIに依存するため、スモークテスト程度のCIだけでは、自動で統合されるコードの品質を十分に担保できません。
 3. **(c) `ci_command` を自リポジトリのCIエントリーポイントに設定すること**
-   `orchestune.toml` のトップレベル、または `pyproject.toml` の `[tool.orchestune]` に、例えば `ci-command = "make ci"` や `"npm run ci"` を設定してください。CLI の `--ci-command` はありません。未設定の場合、POSIX は `scripts/local-ci.sh`、Windows は `scripts/local-ci.ps1` があるときだけ既定値を使います。無い場合、apply の dispatch はレポート予約やタスク状態変更より前に終了コード 2 で停止します。`--no-apply` は利用できます。`orchestune complete` は primary checkout の設定を読み、タスク worktree で実行し、成功して HEAD・tree が変わらず worktree が clean な場合に証跡を記録します。`config init` はローカルスクリプト、Makefile、package.json、pytest 設定から候補を提示し、候補コマンドは実行しません。Windows 環境のパスを指定する場合は、スラッシュ区切り（例: `"./scripts/local-ci.ps1"`）または配列形式（例: `["powershell", "-File", ".\\scripts\\local-ci.ps1"]`）を使用してください。文字列指定でのバックスラッシュ記法は POSIX エスケープによるパス破損を防ぐため早期検知・拒否されます。
+   `orchestune.toml` のトップレベル、または `pyproject.toml` の `[tool.orchestune]` に、例えば `ci-command = "make ci"` や `"npm run ci"` を設定してください。CLI の `--ci-command` はありません。未設定の場合、POSIX は `scripts/local-ci.sh`、Windows は `scripts/local-ci.ps1` があるときだけ既定値を使います。無い場合、apply の dispatch はレポート予約やタスク状態変更より前に終了コード 2 で停止します。プレビューは利用できます。`orchestune complete` は primary checkout の設定を読み、タスク worktree で実行し、成功して HEAD・tree が変わらず worktree が clean な場合に証跡を記録します。`config init` はローカルスクリプト、Makefile、package.json、pytest 設定から候補を提示し、候補コマンドは実行しません。Windows 環境のパスを指定する場合は、スラッシュ区切り（例: `"./scripts/local-ci.ps1"`）または配列形式（例: `["powershell", "-File", ".\\scripts\\local-ci.ps1"]`）を使用してください。文字列指定でのバックスラッシュ記法は POSIX エスケープによるパス破損を防ぐため早期検知・拒否されます。
 
 導入前の準備状況（(a)〜(c)、実行先、レビュー担当、gitignore、認証）は、`orchestune doctor --execution-mode local`（認証確認を含む場合は `--online`）で一括診断できます。不足項目がある場合は warning として直すコマンドや設定例が提示されます。
 
@@ -221,9 +221,9 @@ orchestune scratch create plan 1191
 
    ```bash
    export ORCHESTUNE_CODEX_CLOUD_ENV="<environment_id>"
-   orchestune dispatch --dispatch-target codex-cloud
+   orchestune dispatch --apply --dispatch-target codex-cloud
    # または
-   orchestune dispatch --dispatch-target codex-cloud --codex-cloud-env "<environment_id>"
+   orchestune dispatch --apply --dispatch-target codex-cloud --codex-cloud-env "<environment_id>"
    ```
 
 起動前にタスク用ブランチを `origin` へ push し、`codex cloud exec --env <environment_id> --branch <branch>` を非対話で実行します。投入後は実タスク ID / URL を追跡し、Cloud 上の実タスク状態（failed / cancelled 等の早期検知）および対象ブランチの PR / outcome record を用いて完了を判定します。environment ID が未設定の場合は、警告の上で安全なダミー起動へフォールバックします。
@@ -249,15 +249,15 @@ npm install -g @anthropic-ai/claude-code
 `--local-cmd` テンプレートを手書きせずに、ローカルの`claude`・`agy`(Antigravity)・`codex`(Codex CLI)・`grok`(Grok Build) いずれかのCLIセッションへサブタスクをディスパッチするには、組み込みのプリセットを使用します：
 
 ```bash
-orchestune dispatch --dispatch-target claude-cli
+orchestune dispatch --apply --dispatch-target claude-cli
 # または
-orchestune dispatch --dispatch-target agy-cli
+orchestune dispatch --apply --dispatch-target agy-cli
 # または
-orchestune dispatch --dispatch-target codex-cli
+orchestune dispatch --apply --dispatch-target codex-cli
 # または
-orchestune dispatch --dispatch-target grok-cli
+orchestune dispatch --apply --dispatch-target grok-cli
 # インストール済みのCLIを自動検出させたい場合は --dispatch-target を省略するか auto を指定
-orchestune dispatch --dispatch-target auto
+orchestune dispatch --apply --dispatch-target auto
 ```
 
 これは各サブタスクの専用worktree内で `claude -p "..." --permission-mode bypassPermissions` / `agy -p "..." --add-dir . --dangerously-skip-permissions` / `codex exec "..." --dangerously-bypass-approvals-and-sandbox` / `grok -p "..." --always-approve --no-plan --no-auto-update --output-format streaming-json`（非対話・print/execモード）を実行します。いずれのプリセットも、許可プロンプトのバイパスフラグを毎回付与することで無人実行がブロックされないようにしています。
@@ -301,7 +301,7 @@ PATH 上の `claude` と `codex` が片方だけの場合、上書きのない `
 | run-state、intent journal、review状態、worktree、実行中PID | 1つの運用所有者が継続して管理し、移管時に状態を引き継ぐ | 同時実行を止めるだけではローカル状態の消失・他マシンのPIDを復元できない |
 
 - 「単一実行者」は制御処理の契約です。選ばれた子タスクの開発エージェントは並列に動いてかまいません。通常の `claim`／`complete` も禁止しません（それぞれの既存の所有権・状態ロック契約に従います）。
-- 定期実行する `orchestune gc`（既定で予約解放を適用します）は、dispatchと同じ直列化スコープ（Actionsでは同じgroup）へ入れます。`orchestune recover --apply` などの一回限りの操作は、制御実行者の停止を確認してから行います。
+- 定期実行する `orchestune gc --apply`は、dispatchと同じ直列化スコープ（Actionsでは同じgroup）へ入れます。`orchestune recover --apply` などの一回限りの操作は、制御実行者の停止を確認してから行います。
 - 契約外の構成（独立した状態からの同時実行）では、起動予約の上書きや同一タスクの重複選出が起こり得ます。
 - run-stateロックは `execute_cycle` のサイクル部分だけを覆い、その後のnot-needed reviewのポーリング・Integrator（Semantic Reviewを含む）・親Issue完了・報告は覆いません。CLI全体の直列化は、単一所有者またはActionsのgroupという運用で担保します。ローカルロックがCLI全体を保護しているわけではありません。
 
@@ -399,11 +399,11 @@ orchestune doctor --execution-mode local --online
 | `dispatch.readiness.auth` | `--online` 指定時のみ診断。GitHub 認証が確認できればok。未認証・失敗時はwarning |
 | `dispatch.local.serialization` | localモードでは常にnot_checked（単一所有者とCLI全体の直列実行を運用で確認） |
 | `dispatch.repository.other_entrypoints` | 指定外workflowの直接dispatch。標準groupならwarning、欠落・非標準groupはerror（旧workflowの残置を含む）。localモードでは直接dispatchを含むworkflowがあればwarning |
-| `dispatch.repository.other_control_entrypoints` | 適用モードの `orchestune gc`／`orchestune recover --apply` を検出。標準groupならok、それ以外はwarning |
+| `dispatch.repository.other_control_entrypoints` | 適用モードの `orchestune gc --apply`／`orchestune recover --apply` を検出。標準groupならok、それ以外はwarning |
 | `dispatch.external_ownership` | 別マシン・別clone・Actions外入口は常にnot_checked |
 | `dispatch.state.continuity` | 永続状態・worktree／PIDの引継ぎは常にnot_checked（6.3の表を確認） |
 
-直接dispatch入口として検出するのは、`orchestune dispatch`、`orchestune-dispatch`、`python -m orchestune.dispatch.dispatcher` です（`--no-apply` の入口は制御実行者に数えません）。コマンド名の変数展開、分割できない行、`uses:` のactionやreusable workflowの内部、呼び出し先のscriptは検出できないため、`not_checked` になります。その場合は実行入口と後処理までの保護区間を手動で確認してください。
+直接dispatch入口として検出するのは、`orchestune dispatch`、`orchestune-dispatch`、`python -m orchestune.dispatch.dispatcher` です（`--apply` を指定した入口が制御実行者に数えられます）。コマンド名の変数展開、分割できない行、`uses:` のactionやreusable workflowの内部、呼び出し先のscriptは検出できないため、`not_checked` になります。その場合は実行入口と後処理までの保護区間を手動で確認してください。
 
 なお、本リポジトリ自身は現時点でOrchestuneのdispatchをGitHub Actionsのスケジュール実行では回しておらず（Cloud RoutineまたはローカルCLIへのディスパッチが前提）、上記は導入先リポジトリ向けの設定です。本リポジトリで実際にcron定期実行を有効化する際は、上記のconcurrency設定を含むworkflowファイルを別途`.github/workflows/`へ追加してください。
 

@@ -164,7 +164,7 @@ the compatibility tests).
 All production Forge label mutations, completion determinations, GC reclaims, retry reservations, and escalations are abstracted as Events,
 mapped to their production call sites (`CALL_SITES` / `OUT_OF_SCOPE_PATHS` / label-invariant completion paths / label-invariant budget paths).
 `COMPLETION` is the `orchestune complete` label reconciliation: it rejects, before any mutation, a state holding a `status:*` label (auxiliary or unknown) other than the primary labels, the target and `status:force-serial`.
-`COMPLETION_REVIEW` is the `orchestune complete --result not-needed` label reconciliation for which production creates a `not-needed-review` policy (a cloud execution, i.e. with an `external_id`, or no worktree). It makes the same transition as `COMPLETION` (`status:not-needed`), but afterwards `TaskModel.review_pending` is true and `completion_done` stays false until the review passes (dependents are held). A local execution (no `external_id`) keeps using `COMPLETION` and completes immediately. The auxiliary `not-needed-review:pending` label is added and confirmed before publication. Readers OR it with the ledger hold, ahead of closed/done and completion overrides.
+`COMPLETION_REVIEW` is the `orchestune complete --apply --result not-needed` label reconciliation for which production creates a `not-needed-review` policy (a cloud execution, i.e. with an `external_id`, or no worktree). It makes the same transition as `COMPLETION` (`status:not-needed`), but afterwards `TaskModel.review_pending` is true and `completion_done` stays false until the review passes (dependents are held). A local execution (no `external_id`) keeps using `COMPLETION` and completes immediately. The auxiliary `not-needed-review:pending` label is added and confirmed before publication. Readers OR it with the ledger hold, ahead of closed/done and completion overrides.
 `AWAIT_REVIEW` hands a cloud not-needed decision to the independent review: it ends the execution, but is not a completion until the review decides.
 `REVIEW_PASSED` is the passed independent review: it closes the issue and removes the pending auxiliary label after the current generation pass and close are confirmed, then marks the `not-needed-review` policy applied, and only then do dependents treat the task as complete.
 
@@ -302,7 +302,7 @@ Among the production routes (`EVENT_BY_SOURCE`), those that go from an executed 
 | `REQUEUE` / `RECOVERY` | requeue of an execution lost by a restart; bounded by the number of restarts, not by a budget | none |
 | `REVIEW_REJECT` / `PLAIN` | an independent review rejected a not-needed completion (not-needed -> queued, added by #1264); every round needs one more independent review | consider a budget |
 | `BLOCK` / `PLAIN` | launch failure or a blocked outcome hold (in-progress -> blocked); with every dependency complete the next cycle promotes it again | consider budgeting repeated launch failures |
-| `BLOCK` / `COMPLETION` | `orchestune complete --result blocked` (in-progress -> blocked); promoted again like any blocked task | same as above |
+| `BLOCK` / `COMPLETION` | `orchestune complete --apply --result blocked` (in-progress -> blocked); promoted again like any blocked task | same as above |
 | `BLOCK` / `RECOMPUTE` | blocked by another task's footprint deviation; bounded by that task's recompute budget, which the single-task model cannot see (the budget persists in the Issue body since #1280 and no longer resets on relaunch) | none |
 
 ### Stopping and resuming the production retry paths
@@ -660,7 +660,7 @@ conflicts require manual resolution.
   `status:manual-merge-required`), the lock and release notices say it does not
   start automatically ([#1654](https://github.com/Saltmu/orchestune/issues/1654)).
   After the lock is released the label stays `status:blocked-human-review`; a person
-  adopts an orphaned PR with `orchestune claim --adopt-pr`.
+  adopts an orphaned PR with `orchestune claim --apply --adopt-pr`.
 
 ### 14. Parent Issue → `status:blocked-human-review` (child review gate stop)
 - Source: `AutoMergeChildIntegrationStep._handle_review_gate_block` in `orchestune/integrator/steps.py`

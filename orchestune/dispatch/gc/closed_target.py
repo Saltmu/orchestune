@@ -275,7 +275,7 @@ def preview_closed_target_items(
     forge: IssueStateReader | None,
     cwd: Path | None = None,
 ) -> list[GcItemResult]:
-    """``orchestune gc --no-apply``: report ``would_release`` without writing."""
+    """``orchestune gc``: report ``would_release`` without writing."""
     items = (
         _decision_item(
             decide_closed_target(key, active, state, workspace, forge, cwd),
@@ -326,7 +326,7 @@ def apply_closed_target_items(
     timeout_seconds: float,
     cwd: Path | None = None,
 ) -> list[GcItemResult]:
-    """``orchestune gc``: re-decide under the claim lock, then release.
+    """``orchestune gc --apply``: re-decide under the claim lock, then release.
 
     The caller holds the run_state lock; each claim is re-read and re-inspected
     under its own claim lock just before the write.

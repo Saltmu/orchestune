@@ -113,7 +113,7 @@ def _assemble(
     tmp_path: Path, toml_data: dict[str, Any], **cli: Any
 ) -> DispatcherConfig:
     args = SimpleNamespace(
-        **{"apply": None, "max_concurrent": None, "profile": None, **cli}
+        **{"apply": False, "max_concurrent": None, "profile": None, **cli}
     )
     return _assemble_dispatcher_config(
         args,
@@ -172,10 +172,10 @@ class TestDispatcherEntry:
             "max_concurrent"
         )
 
-    def test_the_apply_entry_difference_is_kept(self, tmp_path):
+    def test_apply_uses_only_the_cli_value(self, tmp_path):
         assert _field_default("apply") is False
-        assert _assemble(tmp_path, {}).apply is True
-        assert _assemble(tmp_path, {"apply": False}).apply is False
+        assert _assemble(tmp_path, {}).apply is False
+        assert _assemble(tmp_path, {"apply": True}).apply is False
         assert _assemble(tmp_path, {"apply": False}, apply=True).apply is True
 
 

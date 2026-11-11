@@ -17,6 +17,7 @@ from orchestune.complete.contracts import (
 )
 from orchestune.complete.read_evidence import load_read_evidence
 from orchestune.complete.service import complete_task
+from orchestune.infra.apply_mode import add_apply_switch
 from orchestune.infra.cli_output import CliOutput, make_output
 
 
@@ -37,11 +38,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--completion-id", help="resume or read an immutable completion result"
     )
-    parser.add_argument(
-        "--no-apply",
-        action="store_true",
-        help="validate without CI, state, or GitHub writes",
-    )
+    add_apply_switch(parser, help="record completion in local state and GitHub")
     return parser
 
 
@@ -64,7 +61,7 @@ def _request_from_args(args: argparse.Namespace) -> CompleteRequest:
         "completion_id": args.completion_id,
         "owner_token": token,
         "claim_id": claim_id,
-        "dry_run": args.no_apply,
+        "dry_run": not args.apply,
         "state_path": state_path,
         "worktree_root": Path.cwd(),
     }

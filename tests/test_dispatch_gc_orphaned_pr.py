@@ -409,6 +409,6 @@ def test_duplicate_pr_diagnostics_provide_adoption_steps(tmp_path, fake_forge, c
             == []
         )
     text = escalate.call_args.args[2]
-    assert "orchestune claim 1 --adopt-pr 5" in text
+    assert "orchestune claim 1 --apply --adopt-pr 5" in text
     assert pr.head_sha in text and "Layer-1" in text
-    assert "orchestune claim 1 --adopt-pr 5" in capsys.readouterr().err
+    assert "orchestune claim 1 --apply --adopt-pr 5" in capsys.readouterr().err

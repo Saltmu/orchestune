@@ -14,7 +14,7 @@ Each *applied* dispatch cycle posts a `## 🤖 Orchestune Dispatch Cycle Report`
 
 Nothing is posted:
 
-- under `--no-apply`, which skips the entire post-cycle block;
+- in preview mode, which skips the entire post-cycle block;
 - for a cycle with nothing to report;
 - when no parent Issue is configured.
 
@@ -55,7 +55,7 @@ In apply mode, Dispatcher splits each execution into four distinct stages:
 3. **Scheduling cycle (`run_dispatch_cycle`)**: Acquires `run_state_lock` with a fresh context, evaluates `reconciliation_external_locks` (external-lock reconciliation and dependency promotions) and performs `scheduling` (selection and launching), recording events (`stage="scheduling"`). Releases `run_state_lock` upon completion.
 4. **Post-cycle (`_post_cycle_steps`)**: Runs outside `run_state_lock`. Processes parent completion, posts a combined event log comment to the parent Issue merging events from both cycles, and notifies finding notices from consistency evaluation.
 
-Under `--no-apply` (dry-run mode), the pre-integration cycle and integration boundary are skipped; only a single scheduling cycle runs FULL without side-effect writes.
+In preview mode, the pre-integration cycle and integration boundary are skipped; only a single scheduling cycle runs FULL without side-effect writes.
 
 ## 7. Filtering Candidates for Active Reservation Overlaps (#1547)
 

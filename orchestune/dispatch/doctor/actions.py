@@ -191,7 +191,7 @@ def _entrypoint_result(wf: _Workflow) -> _Result:
     applied = wf.applied
     lines = [f"entrypoint: {_where(e)}" for e in applied]
     lines.extend(
-        f"not counted (--no-apply): {_where(e)}"
+        f"not counted (preview without --apply): {_where(e)}"
         for e in wf.scan.dispatch
         if not e.apply
     )
@@ -200,7 +200,11 @@ def _entrypoint_result(wf: _Workflow) -> _Result:
         f"line {u.location.line_no}: {u.detail}"
         for u in wf.scan.undetectable
     ]
-    broken = [f"unparsable arguments: {_where(e)}" for e in applied if e.args_error]
+    broken = [
+        f"unparsable arguments: {_where(e)} ({e.args_error})"
+        for e in applied
+        if e.args_error
+    ]
     if applied and not blind and not broken:
         return "ok", tuple(lines)
     if not applied:
@@ -349,7 +353,7 @@ _CHECKS: tuple[tuple[str, str, str], ...] = (
     (
         CODE_ACTIONS_ENTRYPOINT,
         "Dispatch entrypoint",
-        "Call `orchestune dispatch` directly in a run step, not through wrappers.",
+        "Call `orchestune dispatch --apply` directly in a run step, not through wrappers.",
     ),
     (
         CODE_ACTIONS_TARGET,

@@ -725,7 +725,7 @@ class TestOrchestuneTomlExample:
         )
 
         all_toml_keys = (
-            BOOLEAN_CONFIG_KEYS
+            (BOOLEAN_CONFIG_KEYS - {"apply"})
             | NON_NEGATIVE_INT_KEYS
             | POSITIVE_INT_KEYS
             | PATH_CONFIG_KEYS
@@ -753,6 +753,9 @@ class TestOrchestuneTomlExample:
                 missing.append(key)
 
         assert not missing, f"設定例に未記載のdispatcher設定があります: {missing}"
+
+        # Accepted in old configs for compatibility, but now solely a CLI flag.
+        assert re.search(r"(?m)^#?\s*apply\s*=", raw_toml) is None
 
         data = tomllib.loads(raw_toml)
         for prohibited in (

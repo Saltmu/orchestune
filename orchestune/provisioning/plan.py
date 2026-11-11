@@ -94,7 +94,7 @@ def _warn_parent_only_subtasks(
         f"Warning: could not sync decomposition plan into #{parent_issue_number}'s body: "
         f"the parent plan has registered subtasks missing from the local plan "
         f"({', '.join(subtask_ids)}); restore the plan with "
-        f"`orchestune provision --restore-plan {parent_issue_number}` and retry",
+        f"`orchestune provision --restore-plan {parent_issue_number} --apply` and retry",
         file=sys.stderr,
     )
 

@@ -23,7 +23,7 @@ exit_conditions = ["claim_current"]
 references = ["skills/local-ci-developer/references/worktree.md"]
 artifacts = ["claim", "plan", "state"]
 branches = { mode = ["interactive", "auto"], change_kind = ["code", "docs"], backend = ["gh", "mcp"] }
-actions = [{ id = "claim", description = "Use the existing claim operation, enter its worktree, and migrate the explicit session plan; an existing matching claim is reused.", argv = ["orchestune", "claim", "<issue>"], references = ["skills/local-ci-developer/references/worktree.md"] }]
+actions = [{ id = "claim", description = "Use the existing claim operation, enter its worktree, and migrate the explicit session plan; an existing matching claim is reused.", argv = ["orchestune", "claim", "<issue>", "--apply"], references = ["skills/local-ci-developer/references/worktree.md"] }]
 on_failure = [{ id = "recover", description = "Follow claim diagnostics for resume, ownership or reservation conflicts; do not manually create another worktree or change labels.", reason_codes = ["claim_missing", "claim_conflict", "ownership_mismatch"], references = ["skills/local-ci-developer/references/worktree.md#claim-failures-and-recovery"] }]
 
 [[stage]]

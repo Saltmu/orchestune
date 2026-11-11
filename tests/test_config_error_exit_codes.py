@@ -106,7 +106,6 @@ class TestConfigErrorExitCodeConsistency:
                     str(plan_path),
                     "--template",
                     str(template_path),
-                    "--no-apply",
                 ]
             )
 
@@ -117,7 +116,7 @@ class TestConfigErrorExitCodeConsistency:
         _write_invalid_orchestune_toml(tmp_path)
 
         with pytest.raises(SystemExit) as excinfo:
-            dispatcher_main(["--no-apply"], cwd=tmp_path)
+            dispatcher_main([], cwd=tmp_path)
 
         assert excinfo.value.code == 2
         assert "invalid dispatcher config" in capsys.readouterr().err
@@ -167,7 +166,7 @@ class TestRetiredModelTiersExitCodeConsistency:
         writer(tmp_path, key)
 
         with pytest.raises(SystemExit) as excinfo:
-            dispatcher_main(["--no-apply"], cwd=tmp_path)
+            dispatcher_main([], cwd=tmp_path)
 
         assert excinfo.value.code == 2
         assert "execution_profiles.<name>.<target>.model" in capsys.readouterr().err
@@ -187,7 +186,7 @@ class TestDispatcherConfigErrorNotAffectedByChange:
             ),
             pytest.raises(SystemExit) as excinfo,
         ):
-            dispatcher_main(["--no-apply"], cwd=tmp_path)
+            dispatcher_main([], cwd=tmp_path)
 
         assert excinfo.value.code == 2
 
@@ -232,7 +231,6 @@ class TestNonTableToolSectionExitCodeConsistency:
                     str(plan_path),
                     "--template",
                     str(template_path),
-                    "--no-apply",
                 ]
             )
 
@@ -245,7 +243,7 @@ class TestNonTableToolSectionExitCodeConsistency:
         )
 
         with pytest.raises(SystemExit) as excinfo:
-            dispatcher_main(["--no-apply"], cwd=tmp_path)
+            dispatcher_main([], cwd=tmp_path)
 
         assert excinfo.value.code == 2
         assert "[tool]" in capsys.readouterr().err
@@ -306,7 +304,6 @@ class TestPathologicalRegexExitCodeConsistency:
                     str(plan_path),
                     "--template",
                     str(template_path),
-                    "--no-apply",
                 ]
             )
 
@@ -318,7 +315,7 @@ class TestPathologicalRegexExitCodeConsistency:
         self._write_config(tmp_path, pattern)
 
         with pytest.raises(SystemExit) as excinfo:
-            dispatcher_main(["--no-apply"], cwd=tmp_path)
+            dispatcher_main([], cwd=tmp_path)
 
         assert excinfo.value.code == 2
         assert "dag_ignore_patterns" in capsys.readouterr().err
@@ -361,7 +358,6 @@ class TestInvalidUtf8ConfigExitCodeConsistency:
                     str(plan_path),
                     "--template",
                     str(template_path),
-                    "--no-apply",
                 ]
             )
 
@@ -371,7 +367,7 @@ class TestInvalidUtf8ConfigExitCodeConsistency:
         self._write_invalid_utf8_config(tmp_path)
 
         with pytest.raises(SystemExit) as excinfo:
-            dispatcher_main(["--no-apply"], cwd=tmp_path)
+            dispatcher_main([], cwd=tmp_path)
 
         assert excinfo.value.code == 2
 
@@ -416,7 +412,6 @@ class TestOversizedThresholdIntegerExitCodeConsistency:
                     str(plan_path),
                     "--template",
                     str(template_path),
-                    "--no-apply",
                 ]
             )
 
@@ -427,7 +422,7 @@ class TestOversizedThresholdIntegerExitCodeConsistency:
         self._write_config(tmp_path)
 
         with pytest.raises(SystemExit) as excinfo:
-            dispatcher_main(["--no-apply"], cwd=tmp_path)
+            dispatcher_main([], cwd=tmp_path)
 
         assert excinfo.value.code == 2
         assert "dag_similarity_threshold" in capsys.readouterr().err
@@ -485,7 +480,6 @@ class TestDeeplyNestedTomlExitCodeConsistency:
                     str(plan_path),
                     "--template",
                     str(template_path),
-                    "--no-apply",
                 ]
             )
 
@@ -498,6 +492,6 @@ class TestDeeplyNestedTomlExitCodeConsistency:
         write_config(self, tmp_path)
 
         with pytest.raises(SystemExit) as excinfo:
-            dispatcher_main(["--no-apply"], cwd=tmp_path)
+            dispatcher_main([], cwd=tmp_path)
 
         assert excinfo.value.code == 2

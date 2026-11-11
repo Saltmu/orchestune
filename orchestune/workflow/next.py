@@ -184,7 +184,9 @@ def _stage_checks(
                 id="terminal_receipt",
                 status="unmet",
                 evidence=(),
-                missing=("Run orchestune complete for the current claim generation",),
+                missing=(
+                    "Run orchestune complete --apply for the current claim generation",
+                ),
             ),
         )
     return checks

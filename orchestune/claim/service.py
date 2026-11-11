@@ -118,7 +118,7 @@ def _perform_git_fetch(repo_root: Path, issue_number: int) -> ClaimFailure | Non
         next_actions=(
             "Check the Git error above for connection, authentication, or origin configuration issues.",
             "For permission/read-only errors, inspect Git paths with `git rev-parse --git-dir --git-common-dir` and check write access.",
-            f"Retry `orchestune claim {issue_number}` in a writable environment; fetch refs/objects and worktree creation need Git metadata write access.",
+            f"Retry `orchestune claim {issue_number} --apply` in a writable environment; fetch refs/objects and worktree creation need Git metadata write access.",
         ),
     )
 

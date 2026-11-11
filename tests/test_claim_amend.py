@@ -456,8 +456,8 @@ def test_reclaim_of_held_issue_reports_recovery_next_actions(amend_env):
     assert outcome.failure.reason == ClaimFailureReason.EXISTING_CLAIM_UNRECOVERED
     actions = "\n".join(outcome.failure.next_actions)
     assert str(amend_env["worktree"]) in actions
-    assert f"orchestune claim 201 --resume {CLAIM_ID}" in actions
-    assert "orchestune claim 201 --amend-footprint" in actions
+    assert f"orchestune claim 201 --apply --resume {CLAIM_ID}" in actions
+    assert "orchestune claim 201 --apply --amend-footprint" in actions
 
 
 def test_amend_rejects_missing_issue(amend_env):

@@ -64,7 +64,7 @@ def test_loader_snapshot_and_semantic_provider(tmp_path, monkeypatch, fake_forge
     from types import SimpleNamespace
 
     config = load_and_resolve_config(
-        ["--parent-issue", "1", "--no-apply", "--dispatch-target", "claude-cli"],
+        ["--parent-issue", "1", "--dispatch-target", "claude-cli"],
         cwd=tmp_path,
         build_target_fn=lambda cfg: captured.append(cfg)
         or SimpleNamespace(target_name="claude-cli"),

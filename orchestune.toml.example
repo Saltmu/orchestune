@@ -18,7 +18,6 @@
 # -----------------------------------------------------------------------------
 # Dispatcher defaults
 # -----------------------------------------------------------------------------
-apply = true
 max-concurrent = 2
 # Time-based launch cap is disabled by default; concurrency (`max-concurrent`) is
 # the primary launch control. Uncomment to cap launches per window (`0` prohibits
