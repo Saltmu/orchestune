@@ -131,7 +131,7 @@ def _other_control_entrypoints(
             "not_checked",
             "Some workflow calls could not be inspected for gc/recover.",
             tuple(evidence + blind),
-            "Call `orchestune gc` / `orchestune recover --apply` directly in a run step.",
+            "Call `orchestune gc --apply` / `orchestune recover --apply` directly in a run step.",
         )
     if status == "ok":
         message = (

@@ -88,7 +88,7 @@ class TestDispatcherConfigLoading:
 
     def test_parent_issue_is_required_when_absent_from_cli_and_config(self, tmp_path):
         with pytest.raises(SystemExit) as error:
-            main(["--no-apply"], cwd=tmp_path)
+            main([], cwd=tmp_path)
 
         assert error.value.code == 2
 
@@ -116,7 +116,7 @@ class TestDispatcherConfigLoading:
                 return_value=self._empty_report(),
             ) as mock_run,
         ):
-            main(["--parent-issue", "181", "--no-apply"], cwd=tmp_path)
+            main(["--parent-issue", "181"], cwd=tmp_path)
 
         mock_build.assert_called_once()
         assert mock_build.call_args.args[0].dispatch_target_name == "local"
@@ -140,7 +140,7 @@ class TestDispatcherConfigLoading:
         )
 
         with pytest.raises(SystemExit):
-            main(["--parent-issue", "100", "--no-apply"], cwd=tmp_path)
+            main(["--parent-issue", "100"], cwd=tmp_path)
 
     def test_consistency_repair_is_configurable_from_the_config_file(self, tmp_path):
         (tmp_path / "orchestune.toml").write_text(
@@ -161,7 +161,7 @@ class TestDispatcherConfigLoading:
                 return_value=self._empty_report(),
             ) as mock_run,
         ):
-            main(["--parent-issue", "100", "--no-apply"], cwd=tmp_path)
+            main(["--parent-issue", "100"], cwd=tmp_path)
 
         config = mock_run.call_args.args[0]
         assert config.consistency_mode.value == "repair"
@@ -177,7 +177,7 @@ class TestDispatcherConfigLoading:
         )
 
         with pytest.raises(SystemExit):
-            main(["--parent-issue", "100", "--no-apply"], cwd=tmp_path)
+            main(["--parent-issue", "100"], cwd=tmp_path)
 
     def test_cli_repair_allowlist_flag_is_removed_from_cli(self, tmp_path):
         with pytest.raises(SystemExit) as excinfo:
@@ -185,7 +185,6 @@ class TestDispatcherConfigLoading:
                 [
                     "--parent-issue",
                     "100",
-                    "--no-apply",
                     "--consistency-repair-code",
                     "status.from-cli",
                 ],
@@ -217,7 +216,7 @@ class TestDispatcherConfigLoading:
                 return_value=self._empty_report(),
             ) as mock_run,
         ):
-            main(["--parent-issue", "100", "--no-apply"], cwd=tmp_path)
+            main(["--parent-issue", "100"], cwd=tmp_path)
 
         assert mock_run.called
         config_arg = mock_run.call_args.args[0]
@@ -249,7 +248,7 @@ class TestDispatcherConfigLoading:
                 return_value=self._empty_report(),
             ) as mock_run,
         ):
-            main(["--parent-issue", "100", "--no-apply"], cwd=tmp_path)
+            main(["--parent-issue", "100"], cwd=tmp_path)
 
         config_arg = mock_run.call_args.args[0]
         assert config_arg.dag_similarity_threshold == 0.1
@@ -273,7 +272,6 @@ class TestDispatcherConfigLoading:
                 [
                     "--parent-issue",
                     "100",
-                    "--no-apply",
                 ],
                 cwd=tmp_path,
             )
@@ -291,7 +289,7 @@ class TestDispatcherConfigLoading:
         )
 
         with pytest.raises(SystemExit) as excinfo:
-            main(["--parent-issue", "100", "--no-apply"], cwd=tmp_path)
+            main(["--parent-issue", "100"], cwd=tmp_path)
 
         assert excinfo.value.code == 2
         assert "[0, 1]" in capsys.readouterr().err
@@ -319,7 +317,7 @@ class TestDispatcherConfigLoading:
                 return_value=self._empty_report(),
             ) as mock_run,
         ):
-            main(["--parent-issue", "100", "--no-apply"], cwd=tmp_path)
+            main(["--parent-issue", "100"], cwd=tmp_path)
 
         config_arg = mock_run.call_args.args[0]
         assert len(config_arg.dag_ignore_patterns) == 1
@@ -337,7 +335,7 @@ class TestDispatcherConfigLoading:
         )
 
         with pytest.raises(SystemExit) as error:
-            main(["--parent-issue", "100", "--no-apply"], cwd=tmp_path)
+            main(["--parent-issue", "100"], cwd=tmp_path)
 
         assert error.value.code == 2
         assert "dag_ignore_patterns" in capsys.readouterr().err
@@ -366,7 +364,6 @@ class TestDispatcherConfigLoading:
                 [
                     "--parent-issue",
                     "100",
-                    "--no-apply",
                     "--allow-unsafe-agent-execution",
                 ],
                 cwd=tmp_path,
@@ -399,7 +396,6 @@ class TestDispatcherConfigLoading:
                 [
                     "--parent-issue",
                     "100",
-                    "--no-apply",
                     "--max-concurrent",
                     "3",
                     "--dispatch-target",
@@ -422,7 +418,6 @@ class TestDispatcherConfigLoading:
                 [
                     "--parent-issue",
                     "100",
-                    "--no-apply",
                     "--ci-command",
                     "make ci",
                 ],
@@ -447,7 +442,6 @@ class TestDispatcherConfigLoading:
                 [
                     "--parent-issue",
                     "100",
-                    "--no-apply",
                 ],
                 cwd=tmp_path,
             )
@@ -477,7 +471,6 @@ class TestDispatcherConfigLoading:
                 [
                     "--parent-issue",
                     "100",
-                    "--no-apply",
                 ],
                 cwd=tmp_path,
             )
@@ -504,7 +497,7 @@ class TestDispatcherConfigLoading:
         (tmp_path / "orchestune.toml").write_text(config, encoding="utf-8")
 
         with pytest.raises(SystemExit) as error:
-            main(["--parent-issue", "100", "--no-apply"], cwd=tmp_path)
+            main(["--parent-issue", "100"], cwd=tmp_path)
 
         assert error.value.code == 2
         assert expected_error in capsys.readouterr().err
@@ -520,7 +513,7 @@ class TestDispatcherConfigLoading:
         )
 
         with pytest.raises(SystemExit) as error:
-            main(["--parent-issue", "100", "--no-apply"], cwd=tmp_path)
+            main(["--parent-issue", "100"], cwd=tmp_path)
 
         assert error.value.code == 2
         assert "failed to load" in capsys.readouterr().err
@@ -558,7 +551,6 @@ class TestDispatcherConfigLoading:
                 [
                     "--parent-issue",
                     "100",
-                    "--no-apply",
                     "--allow-unsafe-agent-execution",
                 ],
                 cwd=tmp_path,
@@ -1012,7 +1004,6 @@ class TestDispatcherConfigLoading:
                     "--dispatch-target",
                     "claude-cli",
                     "--allow-unsafe-agent-execution",
-                    "--no-apply",
                 ],
                 cwd=tmp_path,
             )
@@ -1033,7 +1024,6 @@ class TestDispatcherConfigLoading:
                     "100",
                     "--dispatch-target",
                     "claude-cli",
-                    "--no-apply",
                 ],
                 cwd=tmp_path,
             )
@@ -1074,7 +1064,6 @@ reasoning_effort = "low"
                 [
                     "--parent-issue",
                     "100",
-                    "--no-apply",
                 ],
                 cwd=tmp_path,
             )
@@ -1109,7 +1098,7 @@ model = "--dangerous-injected-flag"
             encoding="utf-8",
         )
         with pytest.raises(SystemExit) as exc_info:
-            main(["--parent-issue", "100", "--no-apply"], cwd=tmp_path)
+            main(["--parent-issue", "100"], cwd=tmp_path)
 
         assert exc_info.value.code == 2
         assert "invalid model name" in capsys.readouterr().err

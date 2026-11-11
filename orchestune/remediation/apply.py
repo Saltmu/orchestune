@@ -347,6 +347,6 @@ def apply_remediation(
         )
     return RemediationResult(
         0,
-        f"Registered. Next orchestune dispatch -p {snapshot.parent.number} cycle will process these tasks",
+        f"Registered. Next orchestune dispatch -p {snapshot.parent.number} --apply cycle will process these tasks",
         tuple(numbers.values()),
     )

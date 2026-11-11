@@ -352,7 +352,7 @@ class TestPrintResultPlain:
             ),
         )
         assert _plain_text(result, capsys) == (
-            "Dry run (--no-apply): no Issues were created.\n"
+            "Dry run: no Issues were created.\n"
             "Target parent issue: #100\n"
             "\n"
             "=== task-a (would create) ===\n"
@@ -370,9 +370,7 @@ class TestPrintResultPlain:
         result = ProvisionResult(
             parent_issue_number=None, applied=False, created={}, reused={}
         )
-        assert _plain_text(result, capsys) == (
-            "Dry run (--no-apply): no Issues were created.\n"
-        )
+        assert _plain_text(result, capsys) == ("Dry run: no Issues were created.\n")
 
     def test_applied_text_is_unchanged(self, capsys):
         result = ProvisionResult(
@@ -427,7 +425,7 @@ class TestPrintResultPlain:
             "Error: the plan of #100 has registered subtasks missing from the "
             "local plan: ghost-a, ghost-b\n"
             "No Issues were created. Restore the plan with "
-            "`orchestune provision --restore-plan 100` and rerun provision.\n"
+            "`orchestune provision --restore-plan 100 --apply` and rerun provision.\n"
         )
 
     def test_plan_sync_failure_text_is_unchanged(self, capsys):

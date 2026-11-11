@@ -154,7 +154,7 @@ Source of Truthに保持します（[アーキテクチャ](./architecture.md)�
 すべてのForgeラベル変更、完了確定、GC回収、retry予約、エスカレーションはEventとして抽象化され、
 呼び出し箇所（`CALL_SITES` / `OUT_OF_SCOPE_PATHS` / ラベル不変の完了確定経路 / ラベル不変の予算経路）と対応付けられます。
 `COMPLETION`は`orchestune complete`の完了ラベル調停で、primaryラベル・遷移先・`status:force-serial`以外の`status:*`（補助・未知のラベル）を保持していれば変更前に拒否します。
-`COMPLETION_REVIEW`は、本番が`not-needed-review`ポリシーを作る`orchestune complete --result not-needed`（cloud実行＝`external_id`あり、またはworktreeなし）の完了ラベル調停です。`COMPLETION`と同じ遷移（`status:not-needed`）ですが、適用後は`TaskModel.review_pending`が真になり、レビューがpassするまで`completion_done`は偽です（依存側は保留される）。ローカル実行（`external_id`なし）のnot-neededは従来どおり`COMPLETION`で、直ちに完了です。`not-needed-review:pending` は独立レビューの永続保留を示す補助ラベルです。公開前に追加・確認し、本番は台帳の保留と OR で依存を止めます。closed・done・完了 override でも迂回できません。
+`COMPLETION_REVIEW`は、本番が`not-needed-review`ポリシーを作る`orchestune complete --apply --result not-needed`（cloud実行＝`external_id`あり、またはworktreeなし）の完了ラベル調停です。`COMPLETION`と同じ遷移（`status:not-needed`）ですが、適用後は`TaskModel.review_pending`が真になり、レビューがpassするまで`completion_done`は偽です（依存側は保留される）。ローカル実行（`external_id`なし）のnot-neededは従来どおり`COMPLETION`で、直ちに完了です。`not-needed-review:pending` は独立レビューの永続保留を示す補助ラベルです。公開前に追加・確認し、本番は台帳の保留と OR で依存を止めます。closed・done・完了 override でも迂回できません。
 `AWAIT_REVIEW`はクラウド実行のnot-needed判定を独立検証レビューへ回す経路で、実行は終えますが、レビューの判定までは完了として扱いません。
 `REVIEW_PASSED`は独立レビューの通過で、Issueをクローズし`not-needed-review`ポリシーをappliedにします（現行世代の pass と close を確認してから pending 補助ラベルを除去します）。この時点で初めて依存側から完了として扱われます。
 
@@ -288,7 +288,7 @@ Source of Truthに保持します（[アーキテクチャ](./architecture.md)�
 | `REQUEUE` / `RECOVERY` | 再起動で失われた実行の再投入。予算ではなく再起動の回数で抑えられる | なし |
 | `REVIEW_REJECT` / `PLAIN` | 対応不要の独立レビュー却下による not-needed → queued（#1264 で追加）。1周ごとに独立レビューが1回必要 | 予算化の検討 |
 | `BLOCK` / `PLAIN` | 起動失敗・blocked outcome の保留（in-progress → blocked）。依存がすべて完了していれば次cycleで再び昇格する | 起動失敗の繰り返しの予算化の検討 |
-| `BLOCK` / `COMPLETION` | `orchestune complete --result blocked`（in-progress → blocked）。他のblockedと同じく再び昇格する | 同上 |
+| `BLOCK` / `COMPLETION` | `orchestune complete --apply --result blocked`（in-progress → blocked）。他のblockedと同じく再び昇格する | 同上 |
 | `BLOCK` / `RECOMPUTE` | 他タスクのfootprint逸脱によるblocked。逸脱した側のrecompute予算で抑えられるが、単一タスクのモデルからは見えない（予算は #1280 以降Issue本文に永続し、再起動でも0に戻らない） | なし |
 
 ### 本番retry経路の停止・再開
@@ -628,7 +628,7 @@ queued保持とpromotion hold不在を確認してdoneだけを除去します�
 - 人の確認待ち（`status:blocked-human-review` / `status:manual-merge-required`）の
   タスクでは、解除時の通知は「自動では起動しません」と書きます（[#1654](https://github.com/Saltmu/orchestune/issues/1654)）。
   ロックが解除されてもラベルは `status:blocked-human-review` のまま残り、
-  孤立PRの採用は人が `orchestune claim --adopt-pr` で行います。
+  孤立PRの採用は人が `orchestune claim --apply --adopt-pr` で行います。
 
 ### 14. 親Issue → `status:blocked-human-review`（子レビューゲートによる停止）
 - 発生元: `orchestune/integrator/steps.py`の`AutoMergeChildIntegrationStep._handle_review_gate_block`

@@ -36,7 +36,7 @@ def test_cli_displays_uuid_and_resumes_after_post_failure(
         if op == "post"
         else None
     )
-    assert cli.main(["--issue", "1111", "--result", "not-needed"]) != 0
+    assert cli.main(["--apply", "--issue", "1111", "--result", "not-needed"]) != 0
     out = capsys.readouterr().out
     completion_id = next(
         line.split(": ", 1)[1]
@@ -51,6 +51,7 @@ def test_cli_displays_uuid_and_resumes_after_post_failure(
     assert (
         cli.main(
             [
+                "--apply",
                 "--issue",
                 "1111",
                 "--result",
@@ -72,6 +73,7 @@ def test_cli_displays_uuid_and_resumes_after_post_failure(
     assert (
         cli.main(
             [
+                "--apply",
                 "--issue",
                 "1111",
                 "--result",
@@ -89,7 +91,7 @@ def test_cli_dry_run_never_generates_private_credentials(unclaimed, monkeypatch)
     request, forge = unclaimed
     _cli_environment(request, forge, monkeypatch)
     before = request.state_path.read_bytes()
-    assert cli.main(["--issue", "1111", "--result", "not-needed", "--no-apply"]) == 0
+    assert cli.main(["--issue", "1111", "--result", "not-needed"]) == 0
     assert request.state_path.read_bytes() == before
     assert not (request.state_path.parent / ".orchestune").exists()
 
@@ -110,6 +112,7 @@ def test_pending_completion_resumes_without_token(unclaimed, monkeypatch):
     assert (
         cli.main(
             [
+                "--apply",
                 "--issue",
                 "1111",
                 "--result",
@@ -162,7 +165,7 @@ def test_cli_resumes_after_label_or_posting_evidence_save_failure(
         and (boundary != "add" or "not-needed-review:pending" in forge.labels)
         else None
     )
-    assert cli.main(["--issue", "1111", "--result", "not-needed"]) != 0
+    assert cli.main(["--apply", "--issue", "1111", "--result", "not-needed"]) != 0
     output = capsys.readouterr().out
     completion_id = next(
         line.split(": ", 1)[1]
@@ -177,6 +180,7 @@ def test_cli_resumes_after_label_or_posting_evidence_save_failure(
     assert (
         cli.main(
             [
+                "--apply",
                 "--issue",
                 "1111",
                 "--result",

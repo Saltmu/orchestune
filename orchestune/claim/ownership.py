@@ -272,18 +272,18 @@ def held_claim_next_actions(active: ActiveWorktree) -> tuple[str, ...]:
         ):
             actions.append(
                 "If the task needs files outside its reservation, run: "
-                f"orchestune claim {n} --amend-footprint --add-path <path>... "
-                f"(if rejected due to conflicts, run: orchestune complete --issue {n} --result blocked --reason footprint-expansion-required)"
+                f"orchestune claim {n} --apply --amend-footprint --add-path <path>... "
+                f"(if rejected due to conflicts, run: orchestune complete --apply --issue {n} --result blocked --reason footprint-expansion-required)"
             )
         else:
             actions.append(
-                "If the task needs files outside its reservation (and amendment is unavailable due to claim stage), run: orchestune complete "
+                "If the task needs files outside its reservation (and amendment is unavailable due to claim stage), run: orchestune complete --apply "
                 f"--issue {n} --result blocked --reason footprint-expansion-required"
             )
         return tuple(actions)
     if active.claim.claim_id:
         actions.append(
-            f"If the claim was interrupted, run: orchestune claim {n} --resume {active.claim.claim_id}"
+            f"If the claim was interrupted, run: orchestune claim {n} --apply --resume {active.claim.claim_id}"
         )
     if _is_repository_reservation(active):
         actions.append("The claim already reserves the whole repository.")
@@ -293,6 +293,6 @@ def held_claim_next_actions(active: ActiveWorktree) -> tuple[str, ...]:
     ):
         actions.append(
             "If the task needs files outside its reservation, update the Issue footprint "
-            f"and run: orchestune claim {n} --amend-footprint"
+            f"and run: orchestune claim {n} --apply --amend-footprint"
         )
     return tuple(actions)

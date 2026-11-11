@@ -164,10 +164,13 @@ def _run_step(
 @pytest.mark.parametrize(
     ("env", "expected"),
     [
-        ({"VAR_PARENT_ISSUES": "3 5"}, ["dispatch -p 3", "dispatch -p 5"]),
+        (
+            {"VAR_PARENT_ISSUES": "3 5"},
+            ["dispatch -p 3 --apply", "dispatch -p 5 --apply"],
+        ),
         (
             {"VAR_PARENT_ISSUES": "3 5", "INPUT_PARENT_ISSUE": "7"},
-            ["dispatch -p 7"],
+            ["dispatch -p 7 --apply"],
         ),
     ],
 )

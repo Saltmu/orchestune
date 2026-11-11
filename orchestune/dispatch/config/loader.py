@@ -48,6 +48,7 @@ from orchestune.dispatch.targets import (
     resolve_default_dispatch_target_name,
 )
 from orchestune.forge import Forge
+from orchestune.infra.apply_mode import add_apply_switch
 from orchestune.infra.git_cli import run_git
 from orchestune.infra.repository_config import (
     find_and_load_config_file as find_and_load_config_file,
@@ -64,7 +65,7 @@ class DispatchCliArgs(Protocol):
     """CLI attributes this loader reads. Missing attributes stay optional."""
 
     parent_issue: int | None
-    apply: bool | None
+    apply: bool
     dispatch_target: str | None
     max_concurrent: int | None
     allow_unsafe_agent_execution: bool
@@ -173,13 +174,7 @@ def _add_core_cli_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="開発対象をまとめている親の GitHub Issue 番号（未指定時は現在ブランチから推論）",
     )
-    parser.add_argument(
-        "--apply",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="実際にラベル更新・worktree作成・エージェント起動を行う（既定）。"
-        "--no-applyでdry-run（dispatch対象へ適用せず、ローカル結果を保存）にできる。",
-    )
+    add_apply_switch(parser, help="ラベル更新・worktree作成・エージェント起動を行う")
     parser.add_argument(
         "--dispatch-target",
         choices=[
@@ -250,7 +245,7 @@ def _add_cli_arguments(parser: argparse.ArgumentParser) -> None:
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="スケジューラ駆動ディスパッチャー: 1サイクル分の選出・dispatchを実行する"
-        "（既定でラベル更新・worktree作成・エージェント起動まで行う。dry-runには--no-applyを指定）"
+        "（既定はプレビュー。適用には --apply を指定）"
     )
     _add_cli_arguments(parser)
     return parser
@@ -556,10 +551,7 @@ def _assemble_dispatcher_config(
     repair_codes = list(toml_data.get("consistency_repair_code", []))
     config_kwargs: dict[str, object] = {
         "parent_issue_number": parent_issue,
-        "apply": cast(
-            bool,
-            args.apply if args.apply is not None else toml_data.get("apply", True),
-        ),
+        "apply": args.apply,
         **cast(ResolvedPaths, paths),
         "dispatch_target": dispatch_target,
         "profile": args.profile,

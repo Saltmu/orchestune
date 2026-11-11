@@ -16,13 +16,13 @@ def _scan(run: str):
 @pytest.mark.parametrize(
     "run",
     [
-        "orchestune dispatch -p 1",
-        "uv run orchestune dispatch -p 1",
-        "uvx orchestune dispatch",
-        "poetry run orchestune dispatch",
-        "pipx run orchestune dispatch",
-        "cd repo && orchestune dispatch -p 1",
-        "FOO=1 orchestune dispatch",
+        "orchestune dispatch --apply -p 1",
+        "uv run orchestune dispatch --apply -p 1",
+        "uvx orchestune dispatch --apply",
+        "poetry run orchestune dispatch --apply",
+        "pipx run orchestune dispatch --apply",
+        "cd repo && orchestune dispatch --apply -p 1",
+        "FOO=1 orchestune dispatch --apply",
     ],
 )
 def test_detects_orchestune_dispatch(run):
@@ -36,7 +36,7 @@ def test_detects_orchestune_dispatch(run):
 
 
 def test_orchestune_dispatch_binary_and_no_apply():
-    entry = _scan("orchestune-dispatch --no-apply").dispatch[0]
+    entry = _scan("orchestune-dispatch").dispatch[0]
     assert entry.via == "orchestune-dispatch"
     assert entry.apply is False
 
@@ -61,9 +61,11 @@ def test_line_continuation_is_joined():
     assert entry.location.step_index == 0
 
 
-def test_abbreviations_and_last_wins():
-    assert _scan("orchestune dispatch --no-ap").dispatch[0].apply is False
-    assert _scan("orchestune dispatch --no-apply --apply").dispatch[0].apply is True
+def test_dispatch_apply_abbreviation_and_legacy_flag():
+    assert _scan("orchestune dispatch --ap").dispatch[0].apply is True
+    legacy = _scan("orchestune dispatch --no-apply").dispatch[0]
+    assert legacy.apply is True
+    assert legacy.args_error and "--no-apply" in legacy.args_error
     entry = _scan("orchestune dispatch --dispatch-t codex-cloud").dispatch[0]
     assert entry.dispatch_target == "codex-cloud"
     assert entry.args_error is None
@@ -202,9 +204,14 @@ def test_uses_classification():
     ]
 
 
-def test_gc_control():
-    assert [c.kind for c in _scan("orchestune gc").control] == ["gc"]
-    assert not _scan("orchestune gc --no-apply").control
+@pytest.mark.parametrize("flag", ["--apply", "--ap", "--a"])
+def test_gc_control(flag):
+    assert [c.kind for c in _scan(f"orchestune gc {flag}").control] == ["gc"]
+
+
+@pytest.mark.parametrize("args", ["", "-- --apply", "--apply=false", "--no-apply"])
+def test_gc_preview_or_invalid_args_are_not_control(args):
+    assert not _scan(f"orchestune gc {args}").control
 
 
 @pytest.mark.parametrize(

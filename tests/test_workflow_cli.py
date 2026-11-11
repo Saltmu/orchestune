@@ -180,7 +180,7 @@ def test_next_text_shows_guidance_and_json_does_not(tmp_path, capsys, monkeypatc
         actions=(
             {
                 "description": "Use the existing claim operation.",
-                "argv": ["orchestune", "claim", "1496"],
+                "argv": ["orchestune", "claim", "1496", "--apply"],
                 "references": [],
             },
         ),
@@ -196,7 +196,7 @@ def test_next_text_shows_guidance_and_json_does_not(tmp_path, capsys, monkeypatc
     assert main(args) == 0
     text = capsys.readouterr().out
     assert "案内:" in text
-    assert "コマンド: orchestune claim 1496" in text
+    assert "コマンド: orchestune claim 1496 --apply" in text
 
     assert main([*args, "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)

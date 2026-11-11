@@ -106,7 +106,7 @@ _COMMAND_SPECS: tuple[_Command, ...] = (
     ),
     _Command(
         "claim",
-        "Claim a task issue (--no-apply for a read-only preview)",
+        "Claim a task issue (--apply to claim)",
         "orchestune.claim.cli",
         exit_with_return=True,
         kwargs=_claim_kwargs,
@@ -125,7 +125,7 @@ _COMMAND_SPECS: tuple[_Command, ...] = (
     ),
     _Command(
         "gc",
-        "Release handoff-ready task reservations (--no-apply to preview)",
+        "Release handoff-ready task reservations (--apply to release)",
         "orchestune.dispatch.gc_cli",
         exit_with_return=True,
     ),

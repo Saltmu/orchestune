@@ -669,7 +669,7 @@ def _unsafe_execution_error(target_name: str, auto_detected: bool) -> ValueError
             f"実行ターゲット `{target_name}` は `--dispatch-target` または `orchestune.toml` の `dispatch_target` で指定されています。"
         )
     lines.append(
-        "この確認は `--no-apply`（ドライラン）を含むすべての実行で必要です。\n"
+        "この確認は プレビューを含むすべての実行で必要です。\n"
         "完全権限実行を避ける場合は `--dispatch-target cloud-routine` または `codex-cloud` を、エージェントを起動しない確認のみの場合は `--dispatch-target local` を指定してください。"
     )
     return ValueError("\n".join(lines))

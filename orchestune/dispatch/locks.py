@@ -422,7 +422,7 @@ _RELEASE_NOTICE = (
 _ESCALATED_LOCK_NOTICE_NOTE = (
     "このタスクは人の確認待ち（エスカレーション）です。"
     "ロックが解除されても自動では起動しません。"
-    "ロック中は孤立 PR の採用（`orchestune claim --adopt-pr`）も受け付けられないため、"
+    "ロック中は孤立 PR の採用（`orchestune claim --apply --adopt-pr`）も受け付けられないため、"
     "解除を待ってから直前のエスカレーション通知の手順に従ってください。"
 )
 
@@ -430,7 +430,7 @@ _ESCALATED_RELEASE_NOTICE = (
     "🔓 外部ロックを解除しました（`status:external-lock` を外しました）。\n\n"
     "ただし、このタスクは人の確認待ち（エスカレーション）のため、自動では起動しません。"
     "直前のエスカレーション通知の手順に従ってください"
-    "（孤立 PR の案内がある場合は、ここから `orchestune claim --adopt-pr` を実行できます）。"
+    "（孤立 PR の案内がある場合は、ここから `orchestune claim --apply --adopt-pr` を実行できます）。"
 )
 
 

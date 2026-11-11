@@ -162,7 +162,7 @@ def _find_active_or_held(
             False,
             request.issue_number,
             "held",
-            f"no active claim; for an eligible orphan PR, preview orchestune claim {request.issue_number} --adopt-pr <PR> --no-apply",
+            f"no active claim; for an eligible orphan PR, preview orchestune claim {request.issue_number} --adopt-pr <PR>",
         )
     if len(matches) != 1:
         return RecoveryResult(

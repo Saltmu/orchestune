@@ -245,13 +245,22 @@ def _interpret_dispatch(args: list[str]) -> tuple[bool, str | None, bool, str | 
         error = f"unrecognized arguments: {' '.join(unknown)}"
     elif isinstance(target, str) and not dynamic and target not in _TARGET_CHOICES:
         error = f"invalid --dispatch-target: {target}"
-    return ns.apply is not False, target, dynamic, error
+    return ns.apply or error is not None, target, dynamic, error
 
 
 def _is_recover_apply(arg: str) -> bool:
     if arg.startswith("--apply="):
         return True
     return len(arg) >= 3 and "--apply".startswith(arg)
+
+
+def _has_gc_apply(args: list[str]) -> bool:
+    for arg in args:
+        if arg == "--":
+            break
+        if len(arg) >= 3 and "--apply".startswith(arg):
+            return True
+    return False
 
 
 def _find_dispatch(segment: list[str]) -> tuple[str, list[str]] | None:
@@ -265,7 +274,7 @@ def _find_dispatch(segment: list[str]) -> tuple[str, list[str]] | None:
             name, args = rest[sub], rest[sub + 1 :]
             if name == "dispatch":
                 return "orchestune", args
-            if name == "gc" and "--no-apply" not in args:
+            if name == "gc" and _has_gc_apply(args):
                 return "control:gc", args
             if name == "recover" and any(_is_recover_apply(a) for a in args):
                 return "control:recover", args

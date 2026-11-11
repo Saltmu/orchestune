@@ -20,7 +20,19 @@ def test_done_requires_reviewer_and_bot_judgment_file(options):
 
     with patch("orchestune.complete.cli._credentials", return_value=(None, None, None)):
         assert (
-            main(["--issue", "1029", "--pr", "42", "--result", "done", *options]) == 40
+            main(
+                [
+                    "--apply",
+                    "--issue",
+                    "1029",
+                    "--pr",
+                    "42",
+                    "--result",
+                    "done",
+                    *options,
+                ]
+            )
+            == 40
         )
 
 
@@ -36,6 +48,7 @@ def test_done_carries_reviewer_and_reply_path():
         assert (
             main(
                 [
+                    "--apply",
                     "--issue",
                     "1029",
                     "--pr",
@@ -70,7 +83,7 @@ def test_done_carries_parsed_read_evidence(tmp_path):
         patch.object(cli, "_credentials", return_value=(None, None, None)),
         patch.object(cli, "complete_task") as service,
     ):
-        assert cli.main([*_DONE_ARGS, "--read-evidence", str(path)]) == 0
+        assert cli.main(["--apply", *_DONE_ARGS, "--read-evidence", str(path)]) == 0
     assert service.call_args.args[0].payload.read_evidence == parse_read_evidence(
         read_evidence_to_dict(value)
     )
@@ -91,7 +104,7 @@ def test_read_evidence_input_errors_are_cli_errors(tmp_path, content, capsys):
         patch.object(cli, "_credentials", return_value=(None, None, None)),
         patch.object(cli, "complete_task") as service,
     ):
-        assert cli.main([*_DONE_ARGS, "--read-evidence", str(path)]) == 40
+        assert cli.main(["--apply", *_DONE_ARGS, "--read-evidence", str(path)]) == 40
     assert "Error:" in capsys.readouterr().out
     service.assert_not_called()
 
@@ -105,7 +118,16 @@ def test_read_evidence_only_valid_for_done(options, capsys):
 
     with patch.object(cli, "_credentials", return_value=(None, None, None)):
         assert (
-            cli.main(["--issue", "1003", *options, "--read-evidence", "unused.json"])
+            cli.main(
+                [
+                    "--apply",
+                    "--issue",
+                    "1003",
+                    *options,
+                    "--read-evidence",
+                    "unused.json",
+                ]
+            )
             == 40
         )
     assert "--read-evidence is only valid when --result=done" in capsys.readouterr().out
@@ -128,7 +150,6 @@ def test_dry_run_builds_done_request_without_calling_service() -> None:
                 "done",
                 "--reviewer",
                 "skip",
-                "--no-apply",
             ]
         )
 
@@ -143,7 +164,7 @@ def test_dry_run_builds_done_request_without_calling_service() -> None:
 def test_blocked_requires_reason() -> None:
     from orchestune.complete.cli import main
 
-    assert main(["--issue", "1003", "--result", "blocked", "--no-apply"]) != 0
+    assert main(["--issue", "1003", "--result", "blocked"]) != 0
 
 
 def test_cli_returns_service_failure_exit_code() -> None:
@@ -168,7 +189,7 @@ def test_cli_returns_service_failure_exit_code() -> None:
         patch("orchestune.complete.cli._credentials", return_value=(None, None, None)),
         patch("orchestune.complete.cli.complete_task", return_value=failed),
     ):
-        exit_code = main(["--issue", "1003", "--result", "not-needed", "--no-apply"])
+        exit_code = main(["--issue", "1003", "--result", "not-needed"])
 
     assert failed.failure is not None
     assert exit_code == int(failed.failure.exit_code)
@@ -198,7 +219,17 @@ def test_cli_displays_resumable_completion_id_and_reached_stage(capsys) -> None:
         patch("orchestune.complete.cli.complete_task", return_value=failed),
     ):
         exit_code = main(
-            ["--issue", "1003", "--pr", "42", "--result", "done", "--reviewer", "skip"]
+            [
+                "--apply",
+                "--issue",
+                "1003",
+                "--pr",
+                "42",
+                "--result",
+                "done",
+                "--reviewer",
+                "skip",
+            ]
         )
 
     output = capsys.readouterr().out
@@ -229,6 +260,7 @@ def test_cli_passes_explicit_replay_identity_without_credentials():
         assert (
             main(
                 [
+                    "--apply",
                     "--issue",
                     "1003",
                     "--result",
@@ -266,6 +298,7 @@ def test_actual_cli_replays_saved_result_after_gc_without_token(
     assert (
         main(
             [
+                "--apply",
                 "--issue",
                 "1110",
                 "--result",
@@ -292,7 +325,7 @@ def test_cli_corrupt_state_preview_never_renames_or_backs_up(tmp_path, monkeypat
         lambda: SimpleNamespace(run_state_path=path),
     )
     before = {item.name: item.read_bytes() for item in tmp_path.iterdir()}
-    assert main(["--issue", "1110", "--result", "not-needed", "--no-apply"]) != 0
+    assert main(["--issue", "1110", "--result", "not-needed"]) != 0
     assert {item.name: item.read_bytes() for item in tmp_path.iterdir()} == before
 
 
@@ -311,7 +344,7 @@ def test_cli_reports_generated_completion_id_before_service_returns(capsys):
         patch("orchestune.complete.cli._credentials", return_value=(None, None, None)),
         patch("orchestune.complete.cli.complete_task", side_effect=complete),
     ):
-        assert main(["--issue", "1003", "--result", "not-needed"]) == 0
+        assert main(["--apply", "--issue", "1003", "--result", "not-needed"]) == 0
 
 
 class _TtyStream(io.StringIO):
@@ -346,7 +379,7 @@ def _run_done(result: CompleteResult, argv: list[str] | None = None) -> int:
         patch("orchestune.complete.cli._credentials", return_value=(None, None, None)),
         patch("orchestune.complete.cli.complete_task", return_value=result),
     ):
-        return main(_DONE_ARGS if argv is None else argv)
+        return main(["--apply", *_DONE_ARGS] if argv is None else argv)
 
 
 def test_plain_handoff_stdout_is_unchanged(capsys) -> None:
@@ -363,7 +396,7 @@ def test_plain_handoff_stdout_is_unchanged(capsys) -> None:
 
 def test_plain_preview_stdout_is_unchanged(capsys) -> None:
     result = CompleteResult.preview_result(1003, "done", pr=42)
-    assert _run_done(result, [*_DONE_ARGS, "--no-apply"]) == 0
+    assert _run_done(result, [*_DONE_ARGS]) == 0
     assert capsys.readouterr().out == (
         f"Reached stage: {result.stage.value}\n"
         "Completion preview validated for Issue #1003.\n"
@@ -400,7 +433,7 @@ def test_plain_failure_stdout_and_exit_code_are_unchanged(capsys) -> None:
 def test_plain_argument_error_stays_on_stdout_with_exit_40(capsys) -> None:
     from orchestune.complete.cli import main
 
-    assert main(["--issue", "1003", "--result", "done"]) == 40
+    assert main(["--apply", "--issue", "1003", "--result", "done"]) == 40
     assert capsys.readouterr().out == ("Error: --pr is required when --result=done\n")
 
 
@@ -418,7 +451,7 @@ def test_progress_lines_are_printed_before_the_result(capsys) -> None:
         patch("orchestune.complete.cli._credentials", return_value=(None, None, None)),
         patch("orchestune.complete.cli.complete_task", side_effect=fake_service),
     ):
-        assert main(_DONE_ARGS) == 0
+        assert main(["--apply", *_DONE_ARGS]) == 0
     assert capsys.readouterr().out.splitlines()[:2] == [
         "Completion ID: completion-1003",
         "Reached stage: outcome_posted",

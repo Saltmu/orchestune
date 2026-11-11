@@ -523,7 +523,7 @@ class TestRunDispatchCycleBlockedPromotion:
     def test_prior_parent_merge_promotion_is_previewed_without_github_writes(
         self, tmp_path, fake_forge
     ):
-        """#859: `--no-apply`では先行マージ由来の昇格も予告に留める。
+        """#859: `dry run`では先行マージ由来の昇格も予告に留める。
 
         ドライランでは先行マージの修復自体が適用されないため、昇格を実施済みと
         してGitHubへ書き込んではならない。予告として`promotion_events`へ現れる

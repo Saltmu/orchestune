@@ -205,14 +205,14 @@ def _instruction_for_reason(reason: str) -> str:
             "証跡なしで受け入れて進める実行に限り、明示的に `--child-review-gate off` を指定して再開してください"
             "（その実行のすべての子のレビュー検証が無効になります）。"
             "handoff前で `complete` が拒否され、何も投稿されていない場合は、"
-            "現在のheadの再レビュー・判断表の補完などで原因を解消して `orchestune complete` を再実行してください。"
+            "現在のheadの再レビュー・判断表の補完などで原因を解消して `orchestune complete --apply` を再実行してください。"
             "詳しい再開手順は usage §4.5（"
             "[日本語](https://github.com/Saltmu/orchestune/blob/main/docs/ja/usage.md#45-子レビュー証跡ゲート) / "
             "[English](https://github.com/Saltmu/orchestune/blob/main/docs/en/usage.md#45-child-review-evidence-gate)"
             "）を参照してください。"
         )
     if reason == REASON_ABSENT:
-        return "子タスク完了時に `orchestune complete` を実行してOutcome Recordを投稿してください。"
+        return "子タスク完了時に `orchestune complete --apply` を実行してOutcome Recordを投稿してください。"
     if reason == REASON_LOOKUP_UNKNOWN:
         return "API障害等の一時的な問題の可能性があるため、ディスパッチまたは統合を再実行してください。"
     if reason == REASON_INTEGRATION_EVIDENCE_MISSING:
@@ -257,7 +257,7 @@ def format_child_review_gate_escalation_comment(
     lines.append(
         "> [!NOTE]\n"
         "> レビュー検証を意図的に省略して自動マージを進める場合は、"
-        "`orchestune-dispatch --child-review-gate off` を指定して再実行してください"
+        "`orchestune-dispatch --apply --child-review-gate off` を指定して再実行してください"
         "（注: 本オプションは統合対象のすべての子Issueのレビュー検証を無効化します）。"
     )
     return "\n".join(lines)

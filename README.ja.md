@@ -137,12 +137,12 @@ orchestune config init
 orchestune dag --plan decomposition_plan.md
 
 # 3. 承認した計画からGitHub Issueをプレビューし、その後起票する
-orchestune provision --plan decomposition_plan.md --no-apply
 orchestune provision --plan decomposition_plan.md
+orchestune provision --plan decomposition_plan.md --apply
 
 # 4. ディスパッチャーの起動（ドライラン、その後実行）
-orchestune dispatch --no-apply
 orchestune dispatch
+orchestune dispatch --apply
 ```
 
 👉 各コマンドの全オプション、および `decomposition_plan.md` の記述スキーマ詳細については [使用方法とコマンドリファレンス](docs/ja/usage.md) を参照してください。

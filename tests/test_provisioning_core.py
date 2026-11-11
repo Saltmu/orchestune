@@ -395,7 +395,7 @@ class TestProvisionIssuesNoApply:
     ):
         class ExplodingForge:
             def __getattr__(self, name):
-                raise AssertionError(f"forge.{name} must not be called in --no-apply")
+                raise AssertionError(f"forge.{name} must not be called in dry run")
 
         result = provision_issues(
             plan_path, forge=ExplodingForge(), apply=False, template_path=template_path
@@ -413,13 +413,13 @@ class TestProvisionIssuesNoApply:
     def test_no_apply_honors_explicit_parent_issue_in_preview_bodies(
         self, plan_path: Path, template_path: Path
     ):
-        """codex review (PR #506): `--no-apply --parent-issue N` must preview
+        """codex review (PR #506): `dry run --parent-issue N` must preview
         the bodies that the subsequent `--apply` run would actually file,
         not the plan's stale/absent persisted `parent_issue_number`."""
 
         class ExplodingForge:
             def __getattr__(self, name):
-                raise AssertionError(f"forge.{name} must not be called in --no-apply")
+                raise AssertionError(f"forge.{name} must not be called in dry run")
 
         result = provision_issues(
             plan_path,
@@ -436,14 +436,14 @@ class TestProvisionIssuesNoApply:
     def test_no_apply_rejects_invalid_parent_issue_before_previewing(
         self, plan_path: Path, template_path: Path
     ):
-        """codex review (PR #506): a `--no-apply --parent-issue 0` dry run
+        """codex review (PR #506): a `dry run --parent-issue 0` dry run
         must fail the same way the corresponding `--apply` run would,
         instead of successfully previewing an invocation that can never
         actually be applied."""
 
         class ExplodingForge:
             def __getattr__(self, name):
-                raise AssertionError(f"forge.{name} must not be called in --no-apply")
+                raise AssertionError(f"forge.{name} must not be called in dry run")
 
         with pytest.raises(ValueError):
             provision_issues(
@@ -470,7 +470,6 @@ class TestMain:
                     str(plan_path),
                     "--template",
                     str(template_path),
-                    "--no-apply",
                 ]
             )
         assert exc_info.value.code == 0
@@ -487,7 +486,9 @@ class TestMain:
         capsys,
     ):
         with pytest.raises(SystemExit) as exc_info:
-            main(["--plan", str(plan_path), "--template", str(template_path)])
+            main(
+                ["--apply", "--plan", str(plan_path), "--template", str(template_path)]
+            )
         assert exc_info.value.code == 0
         captured = capsys.readouterr()
         assert "Parent issue:" in captured.out
@@ -514,7 +515,9 @@ class TestMain:
         )
 
         with pytest.raises(SystemExit) as exc_info:
-            main(["--plan", str(plan_path), "--template", str(template_path)])
+            main(
+                ["--apply", "--plan", str(plan_path), "--template", str(template_path)]
+            )
 
         assert exc_info.value.code == 2
         captured = capsys.readouterr()
@@ -550,7 +553,6 @@ class TestMain:
                     str(plan_path),
                     "--template",
                     str(template_path),
-                    "--no-apply",
                 ]
             )
 
@@ -563,7 +565,7 @@ class TestMain:
         self, tmp_path: Path, provisioning_forge: FakeForge, capsys
     ):
         with pytest.raises(SystemExit) as exc_info:
-            main(["--plan", str(tmp_path / "nonexistent.md")])
+            main(["--apply", "--plan", str(tmp_path / "nonexistent.md")])
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
         assert "Error:" in captured.err
@@ -627,7 +629,9 @@ class TestMainPresentation:
         tty_output: _TtyStream,
     ):
         with pytest.raises(SystemExit) as exc_info:
-            main(["--plan", str(plan_path), "--template", str(template_path)])
+            main(
+                ["--apply", "--plan", str(plan_path), "--template", str(template_path)]
+            )
         assert exc_info.value.code == 0
         text = _ANSI.sub("", tty_output.getvalue())
         assert "[OK]" in text
@@ -650,7 +654,6 @@ class TestMainPresentation:
                     str(plan_path),
                     "--template",
                     str(template_path),
-                    "--no-apply",
                 ]
             )
         assert exc_info.value.code == 0
@@ -675,7 +678,9 @@ class TestMainPresentation:
         monkeypatch.setattr("orchestune.provisioning.cli._provision_issues", boom)
 
         with pytest.raises(SystemExit) as exc_info:
-            main(["--plan", str(plan_path), "--template", str(template_path)])
+            main(
+                ["--apply", "--plan", str(plan_path), "--template", str(template_path)]
+            )
         assert exc_info.value.code == 1
         assert live_events == ["start", "stop"]
         assert "Error: boom" in capsys.readouterr().err
@@ -689,7 +694,9 @@ class TestMainPresentation:
         capsys,
     ):
         with pytest.raises(SystemExit) as exc_info:
-            main(["--plan", str(plan_path), "--template", str(template_path)])
+            main(
+                ["--apply", "--plan", str(plan_path), "--template", str(template_path)]
+            )
         assert exc_info.value.code == 0
         captured = capsys.readouterr()
         assert live_events == []
@@ -913,7 +920,9 @@ class TestMainPlainErrorOutput:
     ):
         self._raise(monkeypatch, RuntimeError("boom\nsecond line"))
         with pytest.raises(SystemExit) as exc_info:
-            main(["--plan", str(plan_path), "--template", str(template_path)])
+            main(
+                ["--apply", "--plan", str(plan_path), "--template", str(template_path)]
+            )
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
         assert captured.out == ""
@@ -932,7 +941,9 @@ class TestMainPlainErrorOutput:
     ):
         self._raise(monkeypatch, RuntimeError(_HOSTILE))
         with pytest.raises(SystemExit) as exc_info:
-            main(["--plan", str(plan_path), "--template", str(template_path)])
+            main(
+                ["--apply", "--plan", str(plan_path), "--template", str(template_path)]
+            )
         assert exc_info.value.code == 1
         err = capsys.readouterr().err
         assert err.startswith(f"Error: {_HOSTILE_CLEAN}\n")
@@ -950,7 +961,9 @@ class TestMainPlainErrorOutput:
 
         self._raise(monkeypatch, ConfigError(f"bad config {_HOSTILE}"))
         with pytest.raises(SystemExit) as exc_info:
-            main(["--plan", str(plan_path), "--template", str(template_path)])
+            main(
+                ["--apply", "--plan", str(plan_path), "--template", str(template_path)]
+            )
         assert exc_info.value.code == 2
         captured = capsys.readouterr()
         assert captured.out == ""
@@ -997,7 +1010,7 @@ class TestMainPlainErrorOutput:
             lambda *args, **kwargs: target,
         )
         with pytest.raises(SystemExit) as exc_info:
-            main(["--restore-plan", "100", "--plan", str(tmp_path / "p.md")])
+            main(["--apply", "--restore-plan", "100", "--plan", str(tmp_path / "p.md")])
         assert exc_info.value.code == 0
         captured = capsys.readouterr()
         clean = f"out-{_HOSTILE_CLEAN}.md" if hostile else "out.md"
@@ -1005,6 +1018,35 @@ class TestMainPlainErrorOutput:
         assert captured.out == (
             f"Successfully restored decomposition plan from #100 to {clean}\n"
         )
+
+    @pytest.mark.parametrize("output_exists", [False, True])
+    def test_restore_plan_preview_preserves_destination(
+        self, tmp_path, provisioning_forge, monkeypatch, capsys, output_exists
+    ):
+        output = tmp_path / "restored" / "plan.md"
+        if output_exists:
+            output.parent.mkdir()
+            output.write_text("original", encoding="utf-8")
+        from unittest.mock import Mock
+
+        from orchestune.provisioning import cli as cli_module
+
+        validate = Mock(return_value=({}, None, {}))
+        persist = Mock(side_effect=AssertionError("preview must not persist"))
+        monkeypatch.setattr(cli_module, "restore_plan_from_parent", validate)
+        monkeypatch.setattr(cli_module, "restore_plan_file_from_parent", persist)
+        with pytest.raises(SystemExit, match="0"):
+            main(["--restore-plan", "100", "--plan", str(output)])
+
+        validate.assert_called_once_with(
+            provisioning_forge, 100, template_path=".github/issue_template.md"
+        )
+        persist.assert_not_called()
+        assert str(output) in capsys.readouterr().out
+        if output_exists:
+            assert output.read_text(encoding="utf-8") == "original"
+        else:
+            assert not output.parent.exists()
 
     def test_plain_env_on_a_tty_sanitizes_errors(
         self,
@@ -1018,7 +1060,9 @@ class TestMainPlainErrorOutput:
         monkeypatch.setattr("sys.stderr", stderr)
         self._raise(monkeypatch, RuntimeError(_HOSTILE))
         with pytest.raises(SystemExit):
-            main(["--plan", str(plan_path), "--template", str(template_path)])
+            main(
+                ["--apply", "--plan", str(plan_path), "--template", str(template_path)]
+            )
         text = stderr.getvalue()
         assert text.startswith(f"Error: {_HOSTILE_CLEAN}\n")
         assert not _FORBIDDEN.search(text)

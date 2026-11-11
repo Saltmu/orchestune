@@ -43,7 +43,7 @@ class CycleReport:
     execution_selections: dict[int, ExecutionSelection] = field(default_factory=dict)
     # #787: 選定フェーズに到達する前に候補から外れたタスクと、その理由。
     skips: list[SkipRecord] = field(default_factory=list)
-    # #787: 外部ロックの衝突理由（継続ロック中のタスクを含む）。`--no-apply`では
+    # #787: 外部ロックの衝突理由（継続ロック中のタスクを含む）。プレビューでは
     # Issueコメントを投稿しないため、ドライランでの唯一の観測点になる。
     external_lock_conflicts: dict[int, list[dict]] = field(default_factory=dict)
     # #787: Forge API障害で判定を保留した記録。

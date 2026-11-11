@@ -6,11 +6,11 @@
 
 | コマンド | 何もつけない場合 | 切り替えるオプション |
 | :--- | :--- | :--- |
-| `orchestune claim` | 適用 | `--no-apply` でプレビュー |
-| `orchestune complete` | 適用 | `--no-apply` でプレビュー |
-| `orchestune gc` | 適用 | `--no-apply` でプレビュー |
-| `orchestune provision` | 適用 | `--no-apply` でプレビュー |
-| `orchestune dispatch` | 適用 | `--no-apply` でプレビュー |
+| `orchestune claim` | プレビュー | `--apply` で適用 |
+| `orchestune complete` | プレビュー | `--apply` で適用 |
+| `orchestune gc` | プレビュー | `--apply` で適用 |
+| `orchestune provision` | プレビュー | `--apply` で適用 |
+| `orchestune dispatch` | プレビュー | `--apply` で適用 |
 | `orchestune skills install` | 適用 | `--dry-run` でプレビュー |
 | `orchestune skills update` | 適用 | `--dry-run` でプレビュー |
 | `orchestune skills uninstall` | 適用 | `--dry-run` でプレビュー |
@@ -20,23 +20,25 @@
 | `orchestune review retry` | プレビュー | `--apply` で適用 |
 | `orchestune review override` | プレビュー | `--apply` で適用 |
 
-- 「プレビュー」は、Git・GitHub・台帳を変更せずに結果を表示するモードです。ただし `dispatch --no-apply` は、ローカルの結果と報告用のディレクトリ・lockを作ります（4節）。
+- 「プレビュー」は、Git・GitHub・台帳を変更せずに結果を表示するモードです。dispatch のプレビューは、ローカルの結果と報告用のディレクトリ・lockも作ります（4節）。
 - `orchestune-dispatch` コマンドは `orchestune dispatch` と同じオプションです。
-- `--dry-run` を使うのは `skills` だけで、ほかのコマンドは `--no-apply` / `--apply` です。
+- `--dry-run` を使うのは `skills` だけです。プレビューが既定のコマンドは `--apply` で変更を適用します。
 - この表に載っていないコマンドには、プレビューと適用を切り替えるオプションはありません。
+
+既存の Actions ワークフローやスクリプトで適用する呼び出しには `--apply` を追加してください。プレビューでは旧 `--no-apply` を削除してください。TOML の旧 `apply` キーは削除でき、適用は CLI の `--apply` で決まります。
 
 ## 日常の開発フロー
 
 1つのIssueを進める流れです。各コマンドの詳細は、7節（`claim`）、8節（`complete`）、9節（`gc`）を参照してください。
 
 ```bash
-orchestune claim <N> --no-apply   # 着手前の検証だけ行う（省略可）
-orchestune claim <N>              # 着手して worktree を作る
+orchestune claim <N>   # 着手前の検証だけ行う（省略可）
+orchestune claim --apply <N>              # 着手して worktree を作る
 # worktree で実装、ローカルCI、PR作成、レビュー対応を行う
-orchestune complete --issue <N> --pr <PR> --result done --reviewer <claude|codex|skip> --review-reply <session-dir>/review-reply.md
+orchestune complete --apply --issue <N> --pr <PR> --result done --reviewer <claude|codex|skip> --review-reply <session-dir>/review-reply.md
 gh pr merge <PR> --merge --delete-branch   # primary checkout からマージする
-orchestune gc --no-apply          # 解放される予約を確認する
-orchestune gc                     # 予約を解放する
+orchestune gc          # 解放される予約を確認する
+orchestune gc --apply                     # 予約を解放する
 ```
 
 ## 次のワークフロー操作（`orchestune workflow next`）
@@ -162,7 +164,7 @@ orchestune remediate --spec remediation.md --apply --confirm-preview <表示さ�
 previewで根拠・変更するFootprint・依存関係を確認します。既存IssueのタイトルとFootprint以外の本文は保持し、補修の根拠を追記します。
 #1277のフォローアップ（`depends_on` だけのFootprintや `blocked-by #N` を含む本文）も、specに完全なFootprintと解決できる依存を記載して登録できます。
 起票した番号はspecに書き戻します。親計画の末尾へ追加し、openな最終PRを保留表示にし、親へ監査コメントを残します。
-登録でDispatcherは起動しません。次の `orchestune dispatch -p 693` サイクルで依存・競合を評価します。
+登録でDispatcherは起動しません。次の `orchestune dispatch -p 693 --apply` サイクルで依存・競合を評価します。
 
 終了コード3はtokenの不一致です。書き込みは行いません。終了コード4は部分登録または並行更新です。
 子Issueを取り消さず、同じspecで再previewし、`resume` と残りの段階を確認して新しいtokenでapplyしてください。
@@ -295,13 +297,13 @@ subtasks:
 
 - **親Issueへの永続化と起票済みサブタスクの正本（Source of Truth）**:
   AIエージェントの使い捨てworktreeが削除されてローカルの `decomposition_plan.md` が消失しても、親Issue本文に計画（各サブタスクの定義や起票された `issue_number`、説明文）が記録として残ります。ただし、起票済みのサブタスクについては、その文章（`overview`, `proposed_changes`, `acceptance_criteria`, `verification_plan`）および `footprint`, `symbols` の正本は子Issue本文となります。
-- **計画ファイルを失った状態からの安全な復元と再実行**:
-  1. `orchestune provision --restore-plan <親Issue番号>`（必要に応じて `--plan <出力先>` や `--template <テンプレートパス>`）を実行すると、親計画と各子Issue本文から完全な `decomposition_plan.md` が復元されます。起票済みエントリは各子Issue本文から最新の文章とFootprintが復元され（親に残った古い文章へはフォールバックしません）、未起票エントリは親計画の値が維持されます。復元後のローカル計画は全エントリがインライン展開された形式となるため、親計画が目次形式（`plan_format: manifest-v1`）であっても `plan_format` は付与されません。
+- **計画ファイルを失った状態からの安全な復元と再実行**: `--apply` を省略すると、親子 Issue を検証して復元先を表示します。
+  1. `orchestune provision --restore-plan <親Issue番号> --apply`（必要に応じて `--plan <出力先>` や `--template <テンプレートパス>`）を実行すると、親計画と各子Issue本文から完全な `decomposition_plan.md` が復元されます。起票済みエントリは各子Issue本文から最新の文章とFootprintが復元され（親に残った古い文章へはフォールバックしません）、未起票エントリは親計画の値が維持されます。復元後のローカル計画は全エントリがインライン展開された形式となるため、親計画が目次形式（`plan_format: manifest-v1`）であっても `plan_format` は付与されません。
   2. 親の構造と子の本文・メタデータ（`id`, `description`, `depends_on`, 共有メタデータ等）は厳密に照合され、不整合や子Issueの欠落がある場合は fail closed として復元を拒否します。
   3. 復元処理の最終段階で親および取得済みの子Issueを再取得して並行編集を検知した場合は出力を中止し再実行を促します（分散トランザクションは行わず、完全な同時点 snapshot は保証しません）。出力先ファイルは一時ファイルを経由してアトミックに置き換えられるため、復元失敗時に既存の出力ファイルが破壊されることはありません。
   4. 既存Issueを補修タスクとして登録した等の理由で本文がテンプレート構造に適合しない場合は、子Issue本文をテンプレートの形式に手動で整えてから再実行してください。なお、`orchestune provision` 実行時には起票前バリデーション（`validate_reversible_subtask`）が走り、箇条書きの空行・末尾空白・改行混入・予約語「特になし」を事前検出して復元不可能な計画の起票を未然に防止します。
-  5. 復元した状態で再度 `orchestune provision` を行う場合は、必ず `--parent-issue <親番号>` を指定し、まずは `--no-apply` でプレビューして既存の子Issueが正しく再利用されることを確認してください。
-- **古いローカル計画で親計画を上書きしない**: 親計画に `issue_number` を持つsubtaskがあり、同じ `id` のsubtaskがローカルの計画にない場合（親計画へ直接追加されたタスクがある場合など）、`orchestune provision` は子Issueを1件も作らずに終了コード3で止まり、親Issue本文も書き換えません。`orchestune provision --restore-plan <親番号>` で計画を復元してから再実行してください。`issue_number` を持たない親計画のエントリでは止まりません。
+  5. 復元した状態で再度 `orchestune provision` を行う場合は、必ず `--parent-issue <親番号>` を指定し、まずは `--apply` を付けずにプレビューして既存の子Issueが正しく再利用されることを確認してください。
+- **古いローカル計画で親計画を上書きしない**: 親計画に `issue_number` を持つsubtaskがあり、同じ `id` のsubtaskがローカルの計画にない場合（親計画へ直接追加されたタスクがある場合など）、`orchestune provision` は子Issueを1件も作らずに終了コード3で止まり、親Issue本文も書き換えません。`orchestune provision --restore-plan <親番号> --apply` で計画を復元してから再実行してください。`issue_number` を持たない親計画のエントリでは止まりません。
 - **複数 big rock（計画）の並行運用**:
   複数の大きな石を並行して進める場合は、`orchestune provision --plan plans/rock-a.md` のように `--plan` オプションで個別パスを指定するか、別々のworktreeで作成してください。いずれの場合も `provision` 実行時に各big rockの親Issue本文へ個別に計画が永続化されるため、衝突することなく安全に分離・管理されます。
 - **`orchestune-dispatch` は計画ファイルを参照しない**:
@@ -323,10 +325,10 @@ subtasks:
 
 ```bash
 # プレビュー（GitHubへ書き込まず、生成される本文・ラベルのみ出力）
-orchestune provision --plan decomposition_plan.md --no-apply
+orchestune provision --plan decomposition_plan.md
 
 # 実際に起票する
-orchestune provision --plan decomposition_plan.md
+orchestune provision --apply --plan decomposition_plan.md
 ```
 
 ### 主要なオプション
@@ -335,15 +337,15 @@ orchestune provision --plan decomposition_plan.md
 | :--- | :--- | :--- |
 | `--plan <path>` | `decomposition_plan.md` | 起票元の分解計画ファイルのパス。 |
 | `--template <path>` | `.github/issue_template.md` | Issue本文のテンプレートファイルのパス。 |
-| `--apply` / `--no-apply` | `--apply` | 実際にGitHubへIssueを作成・書き戻しを行うか、プレビュー（ドライラン）のみにするかを選択。 |
+| `--apply` | `False` | 実際にGitHubへIssueを作成・書き戻しを行うか、プレビュー（ドライラン）のみにするかを選択。 |
 | `--parent-issue <番号>` | なし | `title`から親Issueを新規作成/再利用する代わりに、既存の指定Issue番号をサブタスクの親EPICとして使う。詳細は下記「既存EPIC Issueへの紐付け」を参照。 |
 
 ### 既存EPIC Issueへの紐付け（`--parent-issue`）
 
-親IssueがすでにOrchestune形式（タイトルが `[EPIC] ` で始まり、本文に親マーカーが埋め込まれている状態）になっている場合は、計画ファイルのフロントマターで `parent_issue_number: <番号>` と `parent_issue_source: adopted` を指定するだけで再利用されます。既存IssueがまだOrchestune形式でない場合は、初回の起票時（`--no-apply` のプレビューも含む）にCLIで `--parent-issue <番号>` を指定する必要があります。
+親IssueがすでにOrchestune形式（タイトルが `[EPIC] ` で始まり、本文に親マーカーが埋め込まれている状態）になっている場合は、計画ファイルのフロントマターで `parent_issue_number: <番号>` と `parent_issue_source: adopted` を指定するだけで再利用されます。既存IssueがまだOrchestune形式でない場合は、初回の起票時（プレビューも含む）にCLIで `--parent-issue <番号>` を指定する必要があります。
 
 ```bash
-orchestune provision --plan decomposition_plan.md --parent-issue 123
+orchestune provision --apply --plan decomposition_plan.md --parent-issue 123
 ```
 
 `--parent-issue` を指定すると、対象IssueがまだOrchestune形式になっていなくても、既存の内容は保持したままその場で正規化されます（タイトルへの `[EPIC] ` プレフィックス付与、本文へのマーカー追記）。`title` フロントマターとのタイトル一致チェックは行われません。
@@ -416,10 +418,10 @@ dag_similarity_threshold = 0.35
 
 ```bash
 # ドライラン（対象へ適用せず、ローカル結果を保存する）
-orchestune-dispatch --no-apply
+orchestune-dispatch
 
 # 実際に適用して並列ワークスペースを起動し、エージェントを起動する
-orchestune-dispatch
+orchestune-dispatch --apply
 ```
 
 ### 進捗と結果ファイル
@@ -428,7 +430,7 @@ stdoutはrun ID・親Issue・apply/dry-run・phase付きの進捗を改行・flu
 
 TOML `report-dir` の既定は `.orchestune/reports/dispatch` で、linked worktreeでもprimary checkout基準です。実行ごとに `parent-<N>/<UTC YYYYMMDDTHHMMSSZ>-<UUID>/result.json` へ保存します。環境変数 `ORCHESTUNE_DISPATCH_REPORT_PATH` は未使用ファイルへの明示指定で優先され、相対値は呼出し時cwd基準、絶対値はそのままです。既存結果・symlink・空値・ディレクトリ・業務状態/lockと重なる指定は拒否します。再実行は新しいパスを使い、最新mtime検索や前回結果の流用はしません。
 
-`--no-apply` はdispatch対象へ適用せず、ローカル結果と報告用ディレクトリ/lockを作ります。`planned` はdry-runの選定、`launched` は起動手順の成立で、タスク完了を意味しません（`local` はダミー起動）。進捗表示障害でも保存を継続します。
+既定のプレビューはdispatch対象へ適用せず、ローカル結果と報告用ディレクトリ/lockを作ります。`planned` はdry-runの選定、`launched` は起動手順の成立で、タスク完了を意味しません（`local` はダミー起動）。進捗表示障害でも保存を継続します。
 
 専用の `<result-name>.report.lock` は明示パスでも結果の隣に残ります。排他の保証は協調するdispatch間に限り、無関係な外部writerは対象外です。他の実行が利用する可能性のあるlockは削除しないでください。
 
@@ -469,7 +471,7 @@ else { Write-Warning 'report not created' }
 | オプション | デフォルト値 | 説明 |
 | :--- | :--- | :--- |
 | `--parent-issue <int>` / `-p <int>` | - | 開発対象をまとめている親の GitHub Issue 番号を指定。未指定時は現在のGitブランチ名（`parent/issue-<N>`）から推論されます。どちらからも特定できない場合は起動エラーとなります。起票される子Issueがすべてこの親Issueに紐付けられます。 |
-| `--apply` / `--no-apply` | `--apply` | 実際にタスク割り当てやGitブランチ作成を実行するか、プレビュー（ドライラン）のみにするかを選択。 |
+| `--apply` | `False` | 実際にタスク割り当てやGitブランチ作成を実行するか、プレビュー（ドライラン）のみにするかを選択。 |
 | `--dispatch-target {local,cloud-routine,codex-cloud,claude-cli,agy-cli,codex-cli,grok-cli,auto}` | 自動選択（非CI: `auto` / GitHub Actions: `cloud-routine`） | エージェントの起動先。未指定時は設定ファイルの値、または実行環境（`GITHUB_ACTIONS`環境変数）から自動選択されます。`auto`はPATH上のローカルCLIを検出します。`local`は後方互換のダミー起動（no-op、テスト・dry-run用途）になります。 |
 | `--max-concurrent <int>` | `2` (設定ファイル未指定時) | 同時に実行（起動）できるサブタスクエージェントの最大数。設定ファイルの値よりもCLI引数が優先されます。 |
 | `--profile <name>` | - | この実行全体で使用するタスクプロファイル（例: `balanced`, `fast-code`, `deep-reasoning`）をオーバーライドします。タスクメタデータのプロファイルより優先されます。 |
@@ -477,7 +479,7 @@ else { Write-Warning 'report not created' }
 | `--final-acceptance-review {advisory,off}` | - | 最終PRの受け入れレビュー依頼（既定 `advisory`）。Layer 1/2と独立。§4.5参照。 |
 | `--semantic-review-mode {required,advisory,off}` | - | 統合PRの第2層セマンティックレビューモード（`required`、`advisory`、または `off`）。未指定時は設定ファイル（`semantic-review-mode`）または環境変数（`ORCHESTUNE_SEMANTIC_REVIEW_MODE`）、既定値は `required`。`off` でスキップ。[§4.5](#45-子レビュー証跡ゲートと第2層セマンティックレビューゲート)を参照。 |
 | `--force-integration-review` | - | 単一タスクFast-Pathをバイパスし、子タスク1件の場合でも統合PRセマンティックレビュー（第2層）を強制実行するフラグ。 |
-| `--allow-unsafe-agent-execution` | `False` | ローカルCLI（`claude-cli`、`agy-cli`、`codex-cli`、`grok-cli`、および `auto` がローカルCLIを検出した場合を含む）に対する承認・サンドボックスのバイパス（完全権限実行）を明示的に許可するフラグ。`--no-apply`（ドライラン）を含むすべての実行で必要です。安全のためCLI引数でのみ指定可能（設定ファイルでの指定は禁止）です。未指定でローカルCLIターゲットを実行しようとした場合は設定エラーで拒否され（Fail-Closed）、選択理由と代替ターゲットが通知されます。 |
+| `--allow-unsafe-agent-execution` | `False` | ローカルCLI（`claude-cli`、`agy-cli`、`codex-cli`、`grok-cli`、および `auto` がローカルCLIを検出した場合を含む）に対する承認・サンドボックスのバイパス（完全権限実行）を明示的に許可するフラグ。プレビューを含むすべての実行で必要です。安全のためCLI引数でのみ指定可能（設定ファイルでの指定は禁止）です。未指定でローカルCLIターゲットを実行しようとした場合は設定エラーで拒否され（Fail-Closed）、選択理由と代替ターゲットが通知されます。 |
 
 ### 設定ファイル (`orchestune.toml`) による詳細設定
 
@@ -490,7 +492,7 @@ else { Write-Warning 'report not created' }
 - **モデルランクのみを指定していた場合:** 以前のランクに対応する専用プロファイル（例: `tier-strong`）を作り、タスクを実行する各ターゲットに意図した `model` を設定して、タスクの `execution_profile` にそのプロファイルを指定します。各ターゲットの `reasoning_effort` は、旧環境の `default_execution_profile` が選ぶプロファイルにある同じターゲットの値を、専用プロファイルへ明示的に写します。プロファイルのフィールドは継承されないため、`reasoning_effort` を書かなければ未設定となり、その実行先の既定動作に委ねられます。旧 default profile にそのターゲットの `reasoning_effort` がなければ、未設定のままで構いません。旧 default profile を編集・削除する前に、その値を記録してください。以前のターゲット別デフォルトは[廃止前の `model_tiers` テーブル](https://github.com/Saltmu/orchestune/blob/95822058eec1243bdec3d13b710a64dee05597ab/orchestune.toml.example#L145-L164)で確認できます。
 - **プロファイルとモデルランクを併用していた場合:** 他タスクの設定を変えないよう既存プロファイルを複製し、専用プロファイルを作ります。各ターゲットで `model` だけを以前のランクに対応するモデルへ置き換え、既存の `reasoning_effort` はそのまま維持します。タスクの `execution_profile` に新しいプロファイルを指定します。
 
-dry-run dispatchを使って各ターゲットの解決結果を確認します。たとえば `orchestune-dispatch -p <N> --no-apply --dispatch-target claude-cli` を実行し、その実行で保存された `result.json` の `execution_selections` を開きます。対象タスクの `profile`、`model`、`reasoning_effort` を確認し、計画で使う各ターゲットについて繰り返します。
+dry-run dispatchを使って各ターゲットの解決結果を確認します。たとえば `orchestune-dispatch -p <N> --dispatch-target claude-cli --allow-unsafe-agent-execution` を実行し、その実行で保存された `result.json` の `execution_selections` を開きます。対象タスクの `profile`、`model`、`reasoning_effort` を確認し、計画で使う各ターゲットについて繰り返します。
 `Luna`の高推論やGemini Flashの`HIGH`を意図する場合も、対象ターゲットごとの実効 `model` / `reasoning_effort` をdispatch結果で確認してください。`agy-cli`のプロファイルに `reasoning_effort = "high"` を記載しただけでは、Flashの`HIGH`が有効になったことの確認にはなりません。
 
 #### 設定ファイル項目一覧
@@ -557,7 +559,7 @@ dry-run dispatchを使って各ターゲットの解決結果を確認します�
 
 default self-healing allowlistは`consistency-repair-code`から意図的に分離されています。内容は`status.blocked-with-resolved-dependencies`、`status.primary-status-conflict`、`execution.requeue`、`execution.update-bookkeeping`、`execution.reclaim`であり、追加loopより前から存在するstatus promotion／reconciliation、state recovery、GCの動作を維持します。組み込みrepair passへ到達したcodeを後段のrepository-wide repair loopが再試行することはなく、Planner候補に現れただけのcommandはuser allowlistの対象に残ります。opt-inしたexecution commandは、組み込み境界と同じguard付きGC／recovery handlerを使用します。
 
-既存動作を保つ場合は`off`、開始／終了findingを追加確認する場合は`shadow`、新規policyを有効にせず最終dispositionを確認する場合はrepair codeなしの`repair`、有効化する場合は限定した`consistency-repair-code`を使用します。`--apply`は既存修復とopt-in policyの変更を許可し、`--no-apply`は外部または永続的な修復副作用を許可しません（GC出力はpreviewとなり、recoveryは一時的なmemory上のpreview bookkeepingだけを更新する場合があります）。
+既存動作を保つ場合は`off`、開始／終了findingを追加確認する場合は`shadow`、新規policyを有効にせず最終dispositionを確認する場合はrepair codeなしの`repair`、有効化する場合は限定した`consistency-repair-code`を使用します。`--apply`は既存修復とopt-in policyの変更を許可し、プレビューは外部への修復や永続的な書き込みを行いません（GC出力はpreviewとなり、recoveryは一時的なmemory上のpreview bookkeepingだけを更新する場合があります）。
 
 保存したdispatch JSONまたは`events.jsonl`の`consistency.scans`、`consistency.repair_passes`、`consistency.repair_outcomes`を確認してください。Outcomeは`resolved`、`unresolved`、`deferred`、`failed`、`observation-unknown`を区別します。unknown／staleな観測とnon-repairable findingは変更されずreportに残ります。dry-runまたはlive precondition不成立によるcommand単位のskipped resultはfindingの最終dispositionで表され、旧phase所有の修復経路へfallbackすることはありません。status遷移が途中で失敗した場合はIntent journalが`run_state.json`の隣に残り、次cycleが外部副作用を重複させず再開できます。
 
@@ -803,7 +805,7 @@ Orchestuneでは、子タスクから親ブランチ（`parent/issue-{N}`）へ�
 `digest` は省略可能で、CLIがpayloadから計算します。含める場合は正規化済みpayloadのSHA-256と一致する必要があります。提出例:
 
 ```bash
-orchestune complete --issue 123 --pr 456 --result done --reviewer codex \
+orchestune complete --apply --issue 123 --pr 456 --result done --reviewer codex \
   --review-reply .orchestune/tmp/task-123/review-reply.md \
   --read-evidence .orchestune/tmp/task-123/read-evidence.json
 ```
@@ -820,7 +822,7 @@ rebaseやpushでHEADが変わった後は、古い証跡を付け替えず、新
 | 担当 | 責務 |
 | :--- | :--- |
 | 開発スキル（レビューループ・Step 11） | 対話モードでは着手依頼の直後（claim前）に `orchestune reviewer resolve` の結果を記録し、PR作成後はその値で子PR上のレビューを実行する。後続ラウンドは投稿済みtriggerの担当を継承し、設定の再読込では切り替えない。指摘ごとにLLMの判断（`adopt` / `decline` / `already_addressed` / `needs_information` / `duplicate`）を判断表へ記録する。 |
-| `orchestune complete --issue <N> --pr <PR> --result done --reviewer <bot> --review-reply <file>` | PRのレビュー状態を取得し直し、判断表が現在の全指摘を網羅していること、`unresolved`が残っていないこと、`needs_information`と必須指摘（`adopt`）の`deferred`は最終巡（`MAX_REVIEW_ROUNDS`＝5巡以上）に限り、`evidence`がこのリポジトリのOPENなフォローアップIssue（PR・CLOSED・別リポジトリ・タスク自身は不可）を指す場合だけ許可されること（`required_deferred`として件数を記録。参照の取得に失敗した場合は`evidence_missing`）、レビュー対象SHAがPRのheadおよびローカルHEADと一致することを確認する。`verdict`・`reviewed_head_sha`・判断表のdigestをdone Outcome Recordへ保存する。不一致の場合はcompleteを拒否し（`review_evidence_invalid`・`review_head_mismatch`・`evidence_missing`）、何も投稿しない。`skip`は`verdict=skipped`として記録され、合格にはならない。 |
+| `orchestune complete --apply --issue <N> --pr <PR> --result done --reviewer <bot> --review-reply <file>` | PRのレビュー状態を取得し直し、判断表が現在の全指摘を網羅していること、`unresolved`が残っていないこと、`needs_information`と必須指摘（`adopt`）の`deferred`は最終巡（`MAX_REVIEW_ROUNDS`＝5巡以上）に限り、`evidence`がこのリポジトリのOPENなフォローアップIssue（PR・CLOSED・別リポジトリ・タスク自身は不可）を指す場合だけ許可されること（`required_deferred`として件数を記録。参照の取得に失敗した場合は`evidence_missing`）、レビュー対象SHAがPRのheadおよびローカルHEADと一致することを確認する。`verdict`・`reviewed_head_sha`・判断表のdigestをdone Outcome Recordへ保存する。不一致の場合はcompleteを拒否し（`review_evidence_invalid`・`review_head_mismatch`・`evidence_missing`）、何も投稿しない。`skip`は`verdict=skipped`として記録され、合格にはならない。 |
 | Integrator | 保存済みの証跡を検証するだけで、レビュー自体は実行しない。 |
 
 **合格条件（子ごと）**: 子Issueの最新のOutcome Recordが`result=done`かつ`verdict=pass`で、`head_sha`と`reviewed_head_sha`の両方がマージ対象のコミットSHAと一致すること。レビュー後にリベースやpushを行うとSHAが変わるため、再レビューが必要です。
@@ -860,7 +862,7 @@ rebaseやpushでHEADが変わった後は、古い証跡を付け替えず、新
 
 #### 無効化された第2層 attempt の後始末（#1440）
 
-親ブランチが進む、または子の集合が変わると、runner は旧 attempt を `invalidated` として保存し、再利用しません。post-cycle はこの attempt を、再開できる段階に分けて片付けます（結果は semantic review レポートの `cleanup` リスト。`--no-apply` は計画の報告だけです）。
+親ブランチが進む、または子の集合が変わると、runner は旧 attempt を `invalidated` として保存し、再利用しません。post-cycle はこの attempt を、再開できる段階に分けて片付けます（結果は semantic review レポートの `cleanup` リスト。プレビューは計画の報告だけです）。
 
 1. **通知**: 旧 PR に1回だけコメントします。attempt・理由・構築時の base・現在の親ブランチ先頭・この attempt の head を示し、レビューとマージの対象外になったと伝えます。後続の有無は書きますが、PR 番号は推測しません。
 2. **クローズ**: PR を閉じます（REST。冪等で、結果を読み戻します）。merged の PR は破壊的な清掃を止め、閉じた PR を再オープンすることもありません。
@@ -877,7 +879,7 @@ rebaseやpushでHEADが変わった後は、古い証跡を付け替えず、新
 
 依頼の投稿はheadのCI完了を待ちますが、待機は投稿を見送ることで行います。head SHAのcheckが1件でも未完了（`waiting_for_ci / ci_pending`。未完了のcheck名は `pending_checks`）、またはcheckがまだ1件もない（`waiting_for_ci / no_checks`）間は投稿せず、次のDispatcherサイクルで再評価します。サイクルをブロックすることはありません。check一覧の取得失敗や不完全な `total_count` は `indeterminate / ci_status_unavailable` となり、やはり投稿しません。全checkが完了すれば結論にかかわらず投稿し、失敗したcheckも（advisoryのため）判断材料として埋め込みます。CI節にはcheckごとの名前・種別（`check_run` / `status`）・結論・URLを決定的な順序で載せ、名前と結論はエスケープし、URLは通常の `https://` のものだけを残します。依頼文はbotのsandboxでテストを実行させるのではなく、この結果を引用するよう求めます。CIのないリポジトリでは依頼が投稿されないため、`final-acceptance-review = "off"` を使ってください。他のcheckの完了後に作られるcheck（CodeQLの集約checkなど）は埋め込み一覧に含まれない場合があり、投稿後にCIを再実行しても同じheadへ再依頼はしません。
 
-結果の待機・解析、修正、ラベル操作、マージのブロックは行いません。人間が最終マージし、親Issueは既存の条件でクローズします。ネストした `final_acceptance_review` reportには `posted`、`already_requested`、`waiting_for_ci`、`skipped_off`、`reviewer_unresolved`、`not_applicable`、`indeterminate`、`failed` と理由、取得済みのPR/head/comment識別子を記録します。関数の直接dry-runは `skipped_dry_run`、Dispatcherの `--no-apply` は従来どおりpostcycle全体を省略します。
+結果の待機・解析、修正、ラベル操作、マージのブロックは行いません。人間が最終マージし、親Issueは既存の条件でクローズします。ネストした `final_acceptance_review` reportには `posted`、`already_requested`、`waiting_for_ci`、`skipped_off`、`reviewer_unresolved`、`not_applicable`、`indeterminate`、`failed` と理由、取得済みのPR/head/comment識別子を記録します。関数の直接dry-runは `skipped_dry_run`、dispatch のプレビューはpostcycle全体を省略します。
 
 条件は「受け入れ」または大小文字を区別しない「Acceptance」を含むレベル2～4のATX見出しから、同じか上位の次の見出しまでを抽出します。コード・引用・リスト内の見出しを除き、複数節、節なし、空の節を区別します。完成コメントはUTF-8で60,000 bytes以内とし、親の条件・CI結果と全子の識別情報・レビュー結果を確保したうえで、子の条件だけをIssue番号順に省略します。出典と省略通知を残し、必須情報だけで超過する場合は `indeterminate / payload_budget_exceeded` として投稿を見送ります。条件の欠落や省略を合格と見なすことはできません。
 
@@ -959,7 +961,7 @@ previewとtokenが必要で、完了済みの再実行はGitHubを変更しま�
 
 ```bash
 # 対象のIssue番号を指定して着手
-orchestune claim 123
+orchestune claim --apply 123
 ```
 
 着手前の fetch は `FETCH_HEAD` を更新しませんが、refs と取得した objects のために Git 管理領域への書き込みは必要です。失敗した場合は表示された Git エラーを確認してください。権限拒否または読み取り専用エラーの場合は、チェックアウトと共有 Git 管理領域（`git rev-parse --git-dir --git-common-dir`）の権限を確認し、Git 管理領域へ書き込める環境で元の claim コマンドを再実行してください。worktree 作成にも書き込み権限が必要なため、fetch 単独の成功は claim 完了を保証しません。
@@ -970,7 +972,7 @@ orchestune claim 123
 
 | オプション | デフォルト値 | 説明 |
 | :--- | :--- | :--- |
-| `--no-apply` | 無効 | Git、GitHub、台帳の変更を行わず、事前検証と予定値の表示のみを行うプレビュー（ドライラン）モード。 |
+| `--apply` | 無効 | タスクを予約し、worktree と状態を更新する。 |
 | `--resume <claim_id>` | なし | 途中停止した既存の claim を、期待する世代と登録worktreeを照合して再開する。 |
 | `--adopt-pr <番号>` | なし | 検証済みの孤立 PR または duplicate-pr 通知の PR を `status:blocked-human-review` から claim する。`--resume`、`--amend-footprint` とは併用不可。 |
 | `--amend-footprint` | 無効 | 保持中の claim のファイル予約を拡張する。`--resume` とは併用不可。詳細は後述。 |
@@ -983,11 +985,11 @@ orchestune claim 123
 ワーカーが claim を完了せずに終了すると、GC が `completed_orphaned_pr` と報告することがあります。Issue を再キューせず既存 PR を引き継ぐには、主チェックアウトで次を実行します。
 
 ```bash
-orchestune claim <issue> --adopt-pr <pr> --no-apply
 orchestune claim <issue> --adopt-pr <pr>
+orchestune claim --apply <issue> --adopt-pr <pr>
 cd <表示されたworktree>
 ./scripts/local-ci.sh
-orchestune complete --issue <issue> --pr <pr> --result done --reviewer <bot> --review-reply <file>
+orchestune complete --apply --issue <issue> --pr <pr> --result done --reviewer <bot> --review-reply <file>
 ```
 
 最新の信頼できる通知が現在の PR 番号と HEAD に一致すること、同一リポジトリの一意な open PR、正規 head ブランチ、親 base、リモート HEAD の一致を確認します。`orphaned-pr` 通知では旧実行の一意な記録と停止確認を必須とします。`duplicate-pr` 通知に対応する孤立 receipt がない場合は、競合する claim や未完了 completion などの通常の admission gate を通れば引き継げます。孤立 receipt が残っている場合は `orphaned-pr` と同じ厳密な検証と停止確認を行います。receipt がない duplicate-pr では台帳外の旧実行が止まっていることを `--adopt-pr` の前に運用者が確認してください。通知や証跡の欠落・曖昧さ、他の claim、未完了の completion、fork、HEAD の変更があれば拒否します。PR 番号と HEAD は claim に結び付けられ、その後 HEAD が変わると完了できません。通常のローカル CI とレビュー証跡のゲートも必要です。手動マージは Layer-1 ゲートを通らない代替手段です。
@@ -1006,7 +1008,7 @@ GitHub GraphQL が使えない環境（例: Claude Code のクラウドセッシ
 
 ### footprint 重複の警告
 
-interactive の claim では、他の **interactive** な予約と `footprint` が重なるだけなら claim は成功します。その場合、相手の Issue 番号・ブランチ・worktree・重なったファイルが `Warning:` として標準エラー出力に表示されます（`--no-apply` のプレビューでも表示されます）。警告が出たら、相手のタスクとマージの順序を決め、後からマージする側がリベース時にコンフリクトを解消してください。
+interactive の claim では、他の **interactive** な予約と `footprint` が重なるだけなら claim は成功します。その場合、相手の Issue 番号・ブランチ・worktree・重なったファイルが `Warning:` として標準エラー出力に表示されます（プレビューでも表示されます）。警告が出たら、相手のタスクとマージの順序を決め、後からマージする側がリベース時にコンフリクトを解消してください。
 
 次の場合は、interactive の claim でも従来どおり `claim_conflict` で拒否されます。
 
@@ -1022,10 +1024,10 @@ dispatch の claim は、footprint が重なれば相手の種類に関わらず
 保持中のファイル予約の外にあるファイルの変更が必要になった場合は、次を実行します。
 
 ```bash
-orchestune claim <N> --amend-footprint --no-apply  # プレビュー
-orchestune claim <N> --amend-footprint
+orchestune claim <N> --amend-footprint  # プレビュー
+orchestune claim --apply <N> --amend-footprint
 # パスを明示して追加する場合
-orchestune claim <N> --amend-footprint --add-path path/to/file.py
+orchestune claim --apply <N> --amend-footprint --add-path path/to/file.py
 ```
 
 新しい footprint は、保持中の footprint・Issue 本文の footprint・`--add-path` で指定されたパス・claim の基点以降に worktree で変更済みのすべてのファイル（コミット済み・未コミット・未追跡）の和集合です。縮小はしません。
@@ -1057,7 +1059,7 @@ MCP の `--validate-request` は、`request_operation: replace`、置換元の i
 3. Exit 21: tracker の最後の進行と、見える場合は関連する workflow run / job を確認します。Codex の内部 job は見えないため「不明」と記録し、GitHub Actions の実行がある前提にしません。その後は手順2と同じく再開します。
 4. Exit 30: `--no-post` で再取得します。tracker の表はレビュー結果ではありません。
 5. reviewer の切り替えは、人間が明示的に選んだ場合だけ `--switch-reviewer` で行います（検証付きの置換、または次のラウンド）。自動復旧の既定にはしません。Claude が起動しない場合は、再投稿せずに workflow の actor・`allowed_bots`・trigger marker・job の conclusion を確認します。
-6. 有限回の再開でも完了しなければ、`orchestune complete --issue <N> --result blocked --reason review-timeout`（または `review-stalled`）で停止します。timeout をレビューの pass や skip に読み替えません。
+6. 有限回の再開でも完了しなければ、`orchestune complete --apply --issue <N> --result blocked --reason review-timeout`（または `review-stalled`）で停止します。timeout をレビューの pass や skip に読み替えません。
 
 待機プロセスは `wait_for_review.py` の1本のみとし、バックグラウンド実行をポーリングループで監視する二重構造や、コマンドライン文字列に自己一致してハング・異常終了を引き起こす `pgrep -f` / `pkill -f` は厳禁です。ツール呼び出しが yield した場合は新しいプロセスを起動せず、同一 session/task ID への再接続や完了通知を利用してください。ツールの実行上限を設定できる場合は、polling や最終 HEAD 取得の余裕を `--timeout` に加算して強制終了を防ぎます。`--no-post --round <n>` による再開は必ず元の待機プロセスの終了を確認後に行い、終了確認不能時の多重起動や内部投稿制御を根拠にした並行待機は行わないでください。
 
@@ -1065,7 +1067,7 @@ MCP の `--validate-request` は、`request_operation: replace`、置換元の i
 
 `orchestune complete` の成功は、固定したOutcome Recordの投稿、結果に対応するIssueラベル（`status:done` / `status:blocked` / `status:not-needed`）の確認、および共有台帳へのhandoffとreplay receiptの永続保存が成立したことを意味します。PRマージ、対応不要の独立レビュー承認、worktree回収の完了までは意味しません。`done` は公開前にローカルCI、PR/head、子レビュー証跡（[§4.5](#45-子レビュー証跡ゲートと第2層セマンティックレビューゲート)）、トークン上限の証跡を検証し、GCはその証跡を消費します。予約なしの旧完了経路ではGC側のトークン上限判定を維持します。
 
-claim済みworktreeから `orchestune complete --issue <N> --pr <PR> --result done` を実行します。`blocked` は `--reason` が必要です。`not-needed` は未claimのIssueにもworktreeを作らず予約できます。コマンドは外部操作前にcompletion IDを表示します。途中から再開するには、対応する claim marker を保持したまま、同一引数に `--completion-id <ID>` を付けて再実行してください。引数・所有者・generationが変わると固定済み要求を上書きできません。handoff後の再実行は、後続ポリシーがIssueをqueuedにした後やactive回収後でも保存結果を返し、古いラベルへ戻しません。
+claim済みworktreeから `orchestune complete --apply --issue <N> --pr <PR> --result done` を実行します。`blocked` は `--reason` が必要です。`not-needed` は未claimのIssueにもworktreeを作らず予約できます。コマンドは外部操作前にcompletion IDを表示します。途中から再開するには、対応する claim marker を保持したまま、同一引数に `--completion-id <ID>` を付けて再実行してください。引数・所有者・generationが変わると固定済み要求を上書きできません。handoff後の再実行は、後続ポリシーがIssueをqueuedにした後やactive回収後でも保存結果を返し、古いラベルへ戻しません。
 
 ### CI証跡の保存場所とGit管理
 - **既定保存先**: 各worktree内の `.orchestune/ci/ci_evidence.json`
@@ -1087,8 +1089,8 @@ gh pr merge <PR> --merge --delete-branch
 環境によっては、このコマンドが worktree も削除します。削除された場合も、`orchestune gc` は worktree を `absent` と表示して予約を解放します。
 
 ```bash
-orchestune gc --no-apply  # 判定を確認する（状態・worktree・lockは変更しない）
-orchestune gc             # 確認後に適用する
+orchestune gc  # 判定を確認する（状態・worktree・lockは変更しない）
+orchestune gc --apply             # 確認後に適用する
 ```
 
 Dispatcherと `orchestune gc` の両方が、Issueの `status:in-progress` 一覧に依存せず、確定journalとpendingの後続ポリシーを探索します。新形式はラベル確認済みhandoffとreplay receiptの整合が必要です。公開途中、証跡不一致・取得不能、未検証の旧handoffは保留します。予約なしの従来PR/cloud/Outcome検出経路は維持します。
@@ -1097,15 +1099,15 @@ Dispatcherと `orchestune gc` の両方が、Issueの `status:in-progress` 一�
 
 active回収後もreplay receiptと後続処理の対象・設定情報を保持します。各ポリシーは `(repository, generation, completion_id, policy_kind)` の固定operation IDを持ち、判断・再試行回数を副作用前に保存します。ラベルとcloseはlive照合、コメントはmarkerで復旧します。review-timeoutのpending/count/backoff、base-branch-redのattempt/marker/エスカレーションを維持します。ローカルの対応不要はcloseし、cloud・未claimの対象は独立レビュー承認までclose・依存完了を保留します。
 
-`--no-apply` はlockも作らない読み取り専用プレビューです。applyモードではIssueのラベル・コメント・closeを更新し、独立レビューを起動する場合があります。Dispatcher不在でも `orchestune gc` を再実行してpending処理を進められます。cloudレビューには `ORCHESTUNE_ROUTINE_ID` / `ORCHESTUNE_ROUTINE_TOKEN` が必要です。provider不在・起動結果不明ならレビューを保留します。保存済みlaunch/attempt IDをproviderのlookupで照合できる場合は復旧し、不明な起動を二重実行しません。設定されたレビューtimeoutまで起動結果を確認できない場合は人間の確認へ移行し、policyと依存は保留を維持します。レビュー結果コメントには当該operationのmarkerが必要で、一般的な結果ラベルだけではgenerationの承認にしません。
+既定のプレビューは読み取り専用で、lockも作りません。applyモードではIssueのラベル・コメント・closeを更新し、独立レビューを起動する場合があります。Dispatcher不在でも `orchestune gc --apply` を再実行してpending処理を進められます。cloudレビューには `ORCHESTUNE_ROUTINE_ID` / `ORCHESTUNE_ROUTINE_TOKEN` が必要です。provider不在・起動結果不明ならレビューを保留します。保存済みlaunch/attempt IDをproviderのlookupで照合できる場合は復旧し、不明な起動を二重実行しません。設定されたレビューtimeoutまで起動結果を確認できない場合は人間の確認へ移行し、policyと依存は保留を維持します。レビュー結果コメントには当該operationのmarkerが必要で、一般的な結果ラベルだけではgenerationの承認にしません。
 
-対象のIssueまたはPRがすでに `CLOSED` / `MERGED` のinteractive claim（overrideマージ後に `orchestune complete` が実行されなかった場合など）は、Dispatcherのgcフェーズと `orchestune gc` のどちらでも解放され、後続claimの `footprint_overlap` の原因にならなくなります。解放するのは、interactive所有で、完了journal・stage・完了予約のいずれにも属さず、Forgeから取得した現在の状態が閉じており、`orchestune recover` と同じ検査（repository identity、markerの世代、launch phase、プロセス生存）に問題がない場合だけです。解放ではactiveエントリを削除し、理由 `closed-target:<CLOSED|MERGED>` の `release` recovery receiptを記録します。worktree・ブランチ・claim markerは残すため、未コミットの作業がないことを確認してから手動で削除してください。`--no-apply` では理由 `closed_target` の `would_release` を表示します。対象がOPENの場合は何もせず、Forgeの取得に失敗した場合は保留します。
+対象のIssueまたはPRがすでに `CLOSED` / `MERGED` のinteractive claim（overrideマージ後に `orchestune complete` が実行されなかった場合など）は、Dispatcherのgcフェーズと `orchestune gc --apply` のどちらでも解放され、後続claimの `footprint_overlap` の原因にならなくなります。解放するのは、interactive所有で、完了journal・stage・完了予約のいずれにも属さず、Forgeから取得した現在の状態が閉じており、`orchestune recover` と同じ検査（repository identity、markerの世代、launch phase、プロセス生存）に問題がない場合だけです。解放ではactiveエントリを削除し、理由 `closed-target:<CLOSED|MERGED>` の `release` recovery receiptを記録します。worktree・ブランチ・claim markerは残すため、未コミットの作業がないことを確認してから手動で削除してください。プレビューでは理由 `closed_target` の `would_release` を表示します。対象がOPENの場合は何もせず、Forgeの取得に失敗した場合は保留します。
 
 同じ解決済みstate pathを使うwriterは、上限付き外部操作と保存を含めて共通の再入可能な台帳lockを保持し、物理回収はworktree別claim lockも保持します。異なるstate path間にはこの排他は成立しません。実行中/current worktree、所有者不一致の保護は維持します。`current_worktree` の場合はprimary checkoutから再実行してください。旧 `handed_off_to_gc` は自動昇格せず証跡移行まで保留します。再開可能な公開処理は元のcompletion IDと対応するclaim markerで `complete` から再開してください。
 
 | オプション | デフォルト | 説明 |
 | :--- | :--- | :--- |
-| `--no-apply` | 無効 | 変更せずに判定を表示する。 |
+| `--apply` | 無効 | 予約を解放して完了ポリシーを進める。 |
 | `--state <path>` | primary checkoutの `run_state.json` | 台帳パスを指定する。相対パスはprimary checkout基準。 |
 | `--timeout <seconds>` | `0` | 台帳とclaim lockの取得待ち秒数。負数・非有限値は引数エラー。 |
 

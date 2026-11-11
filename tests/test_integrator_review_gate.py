@@ -321,7 +321,7 @@ class TestDigestAndCommentFormatting:
         assert "handoff前" in row
         assert "`complete` が拒否され、何も投稿されていない場合" in row
         assert "再レビュー・判断表の補完" in row
-        assert "`orchestune complete` を再実行" in row
+        assert "`orchestune complete --apply` を再実行" in row
         assert (
             "https://github.com/Saltmu/orchestune/blob/main/docs/ja/usage.md#45-子レビュー証跡ゲート"
             in row
@@ -337,7 +337,7 @@ class TestDigestAndCommentFormatting:
         [
             (
                 "absent",
-                "子タスク完了時に `orchestune complete` を実行してOutcome Recordを投稿してください。",
+                "子タスク完了時に `orchestune complete --apply` を実行してOutcome Recordを投稿してください。",
             ),
             (
                 "lookup_unknown",

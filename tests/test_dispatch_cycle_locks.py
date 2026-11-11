@@ -573,7 +573,7 @@ class TestExternalLockNotice:
         self, tmp_path, fake_forge
     ):
         """ロック理由を書いたIssueにだけ解除を伝える。理由を書いていない
-        Issue（本機能導入前のロックや`--no-apply`サイクル）には触れない。"""
+        Issue（本機能導入前のロックや`dry run`サイクル）には触れない。"""
         unlocked = _task(status_labels=("status:queued", "status:external-lock"))
         lock_result = ExternalLockScanResult(to_lock=[], to_unlock=[unlocked])
         fake_forge.list_comments.return_value = []

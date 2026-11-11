@@ -44,7 +44,6 @@ class TestCliOptionsSurface:
             [
                 "-p",
                 "1035",
-                "--no-apply",
                 "--dispatch-target",
                 "local",
                 "--max-concurrent",
@@ -183,28 +182,25 @@ class TestTomlSchemaAndValidation:
 class TestPrecedenceAndCloudSettings:
     """Acceptance condition: CLI > TOML > default precedence, env vars for cloud settings."""
 
-    def test_cli_no_apply_overrides_toml_apply_true(self, tmp_path, fake_forge):
-        toml_content = "apply = true\nmax-concurrent = 5\n"
-        (tmp_path / "orchestune.toml").write_text(toml_content, encoding="utf-8")
+    @pytest.mark.parametrize("config_file", ["orchestune.toml", "pyproject.toml"])
+    @pytest.mark.parametrize("legacy_value", ["", "apply = true\n", "apply = false\n"])
+    @pytest.mark.parametrize("apply", [False, True])
+    def test_apply_is_controlled_by_cli(
+        self, tmp_path, fake_forge, config_file, legacy_value, apply
+    ):
+        header = "[tool.orchestune]\n" if config_file == "pyproject.toml" else ""
+        (tmp_path / config_file).write_text(
+            header + legacy_value + "max-concurrent = 5\n", encoding="utf-8"
+        )
 
+        flags = ["--apply"] if apply else []
         config = load_and_resolve_config(
-            cli_args=["-p", "1035", "--no-apply", "--allow-unsafe-agent-execution"],
+            cli_args=["-p", "1035", "--allow-unsafe-agent-execution", *flags],
             cwd=tmp_path,
             forge=fake_forge,
         )
-        assert config.apply is False
+        assert config.apply is apply
         assert config.max_concurrent == 5
-
-    def test_cli_apply_overrides_toml_apply_false(self, tmp_path, fake_forge):
-        toml_content = "apply = false\n"
-        (tmp_path / "orchestune.toml").write_text(toml_content, encoding="utf-8")
-
-        config = load_and_resolve_config(
-            cli_args=["-p", "1035", "--apply", "--allow-unsafe-agent-execution"],
-            cwd=tmp_path,
-            forge=fake_forge,
-        )
-        assert config.apply is True
 
     def test_cloud_routine_id_precedence_env_over_toml(
         self, monkeypatch, tmp_path, fake_forge

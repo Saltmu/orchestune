@@ -329,6 +329,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "forge.prs",
             "forge.pr_merge_state",
             "forge.pr_reviews",
+            "infra.apply_mode",
             "infra.cli_guidance",
             "infra.cli_output",
             "infra.cli_progress",

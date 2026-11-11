@@ -20,9 +20,9 @@ This skill routes the standard development workflow. [stages.toml](../../orchest
 | :--- | :--- | :--- |
 | **Plan Approval (Step 1)** | Present plan to user and wait for approval; right after the start request (plan approval, or the user's instruction to start an existing Issue) and before claim, resolve reviewer bot by running `orchestune reviewer resolve --target <target> [--override <claude|codex|skip>]` (prompt explicit `claude` / `codex` / `skip` overrides config via `--override`; the command reads checkout root `orchestune.toml` then `pyproject.toml` `[tool.orchestune]`, including `reviewer-bot` and `[reviewer_by_target]`; session targets: Claude Code → `claude-cli`, Codex CLI → `codex-cli`, Antigravity → `agy-cli`, Grok → `grok-cli`; do not pass `auto` or guess a target; do not reimplement the mapping; a non-zero exit does not guess `claude` or `codex`; unresolved uses `--bot-name skip` without asking user) and record it in the plan | When invoked with an existing Issue or Auto-Dispatch, bypass user approval after writing `<session-dir>/implementation-plan.md` and proceed directly to implementation; resolve reviewer bot with `orchestune reviewer resolve --target <dispatch-target> [--override <claude|codex|skip>]` and record the printed value; do not reimplement the mapping, and a non-zero exit does not guess `claude` or `codex` |
 | **Issue Creation (Step 2)** | Create via selected backend (`gh` CLI or GitHub MCP/Web UI) if needed | Use issue number provided in prompt (skip creation) |
-| **Worktree (Step 2.5)** | Check the initial footprint, then run `orchestune claim <issue_number>` to prepare and enter task worktree (proceed directly if already inside task worktree) | Check the initial footprint, then run `orchestune claim <issue_number>` to prepare and enter task worktree (proceed directly if already inside task worktree) |
+| **Worktree (Step 2.5)** | Check the initial footprint, then run `orchestune claim <issue_number> --apply` to prepare and enter task worktree (proceed directly if already inside task worktree) | Check the initial footprint, then run `orchestune claim <issue_number> --apply` to prepare and enter task worktree (proceed directly if already inside task worktree) |
 | **Review Execution (Step 11)** | Use the reviewer recorded in Step 1 without re-asking and without running resolve again; later rounds inherit the existing trigger and do not switch because config changed (`--switch-reviewer` requires explicit user instruction); if unresolved, explicitly use `--bot-name skip` and stop for human review at the integration gate | Use the reviewer recorded in Step 1 without running resolve again; later rounds inherit the existing trigger and do not switch because config changed (`--switch-reviewer` requires explicit user instruction); if unresolved, explicitly use `--bot-name skip` and stop for human review at the integration gate |
-| **Escalation** | Prompt user for decision | Run `orchestune complete --issue <N> --result blocked --reason <REASON>` and terminate safely |
+| **Escalation** | Prompt user for decision | Run `orchestune complete --apply --issue <N> --result blocked --reason <REASON>` and terminate safely |
 
 ## Fast-Path for Minor Changes (Typo / Docs)
 For documentation updates or typo fixes that do not alter code logic, **Steps 3–8 (TDD) may be skipped**. However, to prevent secret leaks (gitleaks) and ensure quality, **Step 9 Local CI (`./scripts/local-ci.sh` / `.\\scripts\\local-ci.ps1`) must always be executed** before proceeding to Step 10 (PR creation).
@@ -81,12 +81,12 @@ Replace placeholders with the task Issue number, PR number, or concrete reason:
 
 ```bash
 # Requirement already satisfied before claim: run from the current checkout.
-orchestune complete --issue <N> --result not-needed
+orchestune complete --apply --issue <N> --result not-needed
 
 # Claude/Codex require the current-round judgment table; skip requires its PR marker (skipped, not pass).
-orchestune complete --issue <N> --pr <PR> --result done --reviewer <claude|codex|skip> --review-reply <session-dir>/review-reply.md
+orchestune complete --apply --issue <N> --pr <PR> --result done --reviewer <claude|codex|skip> --review-reply <session-dir>/review-reply.md
 # Claimed task: run from its worktree when work cannot continue.
-orchestune complete --issue <N> --result blocked --reason <REASON>
+orchestune complete --apply --issue <N> --result blocked --reason <REASON>
 ```
 
 For a claimed task whose requirement becomes unnecessary, run the `not-needed`

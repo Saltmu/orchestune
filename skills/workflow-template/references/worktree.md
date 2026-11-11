@@ -12,7 +12,7 @@ Otherwise, from the repository root, claim the Issue. The command validates
 dependencies, resolves the base branch, and prepares the task worktree.
 
 ```bash
-orchestune claim <issue_number>
+orchestune claim <issue_number> --apply
 cd <worktree_path>
 <INSTALL_COMMAND>
 ```
@@ -26,15 +26,15 @@ reservation, resume it with its reported claim ID instead of creating another
 worktree:
 
 ```bash
-orchestune claim <issue_number> --resume <claim_id>
+orchestune claim <issue_number> --apply --resume <claim_id>
 ```
 
 If an interactively claimed task needs files outside its held file reservation,
-add them to the Issue `footprint` and run `orchestune claim <issue_number> --amend-footprint`. It widens
+add them to the Issue `footprint` and run `orchestune claim <issue_number> --apply --amend-footprint`. It widens
 the reservation, or reports the conflicting task and changes nothing. For a local
-dispatcher-launched task, run `orchestune claim <issue_number> --amend-footprint --add-path <path>...`
+dispatcher-launched task, run `orchestune claim <issue_number> --apply --amend-footprint --add-path <path>...`
 instead of editing the Issue body. If rejected due to conflicts, or when running in the cloud where
-local claims are unavailable, report `orchestune complete --issue <issue_number>
+local claims are unavailable, report `orchestune complete --apply --issue <issue_number>
 --result blocked --reason footprint-expansion-required` instead.
 
 If a claim or amend succeeds with `Warning: footprint overlaps issue #<N>`, another

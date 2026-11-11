@@ -173,7 +173,7 @@ UNBUDGETED_LOOPS: dict[tuple[Event, Kind], UnbudgetedLoop] = {
         "budget repeated launch failures / blocked outcomes",
     ),
     (_E.BLOCK, _K.COMPLETION): UnbudgetedLoop(
-        "`orchestune complete --result blocked` (in-progress -> blocked); "
+        "`orchestune complete --apply --result blocked` (in-progress -> blocked); "
         "promoted again like any other blocked task",
         "budget repeated launch failures / blocked outcomes",
     ),

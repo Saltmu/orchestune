@@ -39,10 +39,7 @@ def test_no_apply_passes_read_only_request_and_renders_preview(capsys):
     from orchestune.claim.cli import main
 
     with patch("orchestune.claim.cli.claim_task", return_value=_success()) as claim:
-        assert (
-            main(["123", "--no-apply", "--state", "state.json", "--timeout", "2.5"])
-            == 0
-        )
+        assert main(["123", "--state", "state.json", "--timeout", "2.5"]) == 0
 
     request = claim.call_args.args[0]
     assert request.issue_number == 123
@@ -65,7 +62,7 @@ def test_success_renders_claim_details_and_persists_token(tmp_path, capsys):
         patch("orchestune.claim.cli.claim_task", return_value=_success()) as claim,
         patch("orchestune.claim.cli._token_directory", return_value=tmp_path),
     ):
-        assert main(["123"]) == 0
+        assert main(["--apply", "123"]) == 0
 
     output = capsys.readouterr().out
     assert "Issue: #123" in output
@@ -92,7 +89,7 @@ def test_failure_uses_reason_exit_code_and_recovery_diagnostic(capsys):
     )
     outcome = ClaimOutcome(success=False, issue_number=123, failure=failure)
     with patch("orchestune.claim.cli.claim_task", return_value=outcome):
-        assert main(["123"]) == 20
+        assert main(["--apply", "123"]) == 20
 
     stderr = capsys.readouterr().err
     assert "reason=claim_conflict" in stderr
@@ -120,7 +117,7 @@ def test_git_fetch_failure_renders_detail_and_recovery_actions(capsys):
         "claim_task",
         return_value=ClaimOutcome(success=False, issue_number=1719, failure=failure),
     ):
-        assert main(["1719"]) == 30
+        assert main(["--apply", "1719"]) == 30
 
     stderr = capsys.readouterr().err
     assert "reason=git_fetch_failed" in stderr
@@ -136,7 +133,7 @@ def test_unexpected_service_error_is_redacted_without_a_traceback(capsys):
         "orchestune.claim.cli.claim_task",
         side_effect=RuntimeError("owner-token-should-not-be-printed"),
     ):
-        assert main(["123", "--no-apply"]) == 1
+        assert main(["123"]) == 1
 
     stderr = capsys.readouterr().err
     assert "reason=generic_error" in stderr
@@ -153,7 +150,7 @@ def test_unavailable_github_graphql_is_reported_as_forge_unavailable(capsys):
         "orchestune.claim.cli.claim_task",
         side_effect=ForgeGraphQLUnavailableError("owner-token-should-not-be-printed"),
     ):
-        assert main(["123"]) == 35
+        assert main(["--apply", "123"]) == 35
 
     stderr = capsys.readouterr().err
     assert "reason=forge_unavailable" in stderr
@@ -171,9 +168,44 @@ def test_amend_footprint_reports_unavailable_github_graphql(capsys):
         "orchestune.claim.cli.amend_claim_footprint",
         side_effect=ForgeGraphQLUnavailableError("detail"),
     ):
-        assert main(["123", "--amend-footprint"]) == 35
+        assert main(["--apply", "123", "--amend-footprint"]) == 35
 
     assert "reason=forge_unavailable" in capsys.readouterr().err
+
+
+def test_resume_previews_through_claim_service(capsys):
+    from orchestune.claim import cli
+
+    with (
+        patch.object(cli, "_token_directory", return_value=Path(".")),
+        patch.object(cli, "claim_task", return_value=_success()) as claim,
+        patch.object(cli, "resume_claim") as resume,
+    ):
+        assert cli.main(["123", "--resume", "claim-123"]) == 0
+    request = claim.call_args.args[0]
+    assert request.resume_claim_id == "claim-123"
+    assert request.dry_run is True
+    assert claim.call_args.kwargs["apply"] is False
+    resume.assert_not_called()
+    assert "Dry run" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("apply", [False, True])
+def test_adopt_pr_respects_apply_flag(apply):
+    from orchestune.claim import cli
+
+    argv = ["123", "--adopt-pr", "42"]
+    if apply:
+        argv.append("--apply")
+    with (
+        patch.object(cli, "_token_directory", return_value=Path(".")),
+        patch.object(cli, "claim_task", return_value=_success()) as claim,
+    ):
+        assert cli.main(argv) == 0
+    request = claim.call_args.args[0]
+    assert request.adopt_pr == 42
+    assert request.dry_run is not apply
+    assert claim.call_args.kwargs["apply"] is apply
 
 
 def test_resume_uses_protected_token_record(tmp_path, capsys):
@@ -186,7 +218,7 @@ def test_resume_uses_protected_token_record(tmp_path, capsys):
         patch("orchestune.claim.cli._token_directory", return_value=tmp_path),
         patch("orchestune.claim.cli.resume_claim", return_value=_success()) as resume,
     ):
-        assert main(["123", "--resume", "claim-123", "--timeout", "3"]) == 0
+        assert main(["--apply", "123", "--resume", "claim-123", "--timeout", "3"]) == 0
 
     assert resume.call_args.args == ("claim-123", "")
     assert resume.call_args.kwargs["timeout_seconds"] == 3.0
@@ -223,7 +255,7 @@ def test_success_renders_parent_base_when_present(tmp_path, capsys):
         patch("orchestune.claim.cli.claim_task", return_value=parent_outcome),
         patch("orchestune.claim.cli._token_directory", return_value=tmp_path),
     ):
-        assert main(["998"]) == 0
+        assert main(["--apply", "998"]) == 0
 
     output = capsys.readouterr().out
     assert "Base: parent/issue-894" in output
@@ -261,7 +293,7 @@ def test_amend_footprint_reads_token_by_claim_id_and_renders_added_files(
         ) as amend,
         patch("orchestune.claim.cli.claim_task") as claim,
     ):
-        assert main(["123", "--amend-footprint", "--timeout", "2"]) == 0
+        assert main(["--apply", "123", "--amend-footprint", "--timeout", "2"]) == 0
 
     claim.assert_not_called()
     assert amend.call_args.args == (123,)
@@ -287,7 +319,7 @@ def test_amend_footprint_no_apply_is_read_only_preview(tmp_path, capsys):
             return_value=_amended(issue_body_updated=False),
         ) as amend,
     ):
-        assert main(["123", "--amend-footprint", "--no-apply"]) == 0
+        assert main(["123", "--amend-footprint"]) == 0
 
     assert amend.call_args.kwargs["apply"] is False
     output = capsys.readouterr().out
@@ -310,7 +342,7 @@ def test_amend_footprint_failure_uses_reason_exit_code(tmp_path, capsys):
             return_value=_amended(success=False, failure=failure),
         ),
     ):
-        assert main(["123", "--amend-footprint"]) == 20
+        assert main(["--apply", "123", "--amend-footprint"]) == 20
 
     stderr = capsys.readouterr().err
     assert "reason=claim_conflict" in stderr
@@ -323,7 +355,7 @@ def test_amend_footprint_and_resume_are_mutually_exclusive(capsys):
     from orchestune.claim.cli import main
 
     with pytest.raises(SystemExit) as exc:
-        main(["123", "--amend-footprint", "--resume", "claim-123"])
+        main(["--apply", "123", "--amend-footprint", "--resume", "claim-123"])
     assert exc.value.code == 2
 
 
@@ -351,7 +383,7 @@ def test_claim_success_and_preview_print_overlap_warnings_to_stderr(tmp_path, ca
     from orchestune.claim.cli import main
 
     outcome = replace(_success(), warnings=(_OVERLAP,))
-    for argv in (["123"], ["123", "--no-apply"]):
+    for argv in (["123", "--apply"], ["123"]):
         with (
             patch("orchestune.claim.cli.claim_task", return_value=outcome),
             patch("orchestune.claim.cli._token_directory", return_value=tmp_path),
@@ -369,7 +401,7 @@ def test_claim_without_overlap_prints_no_warning(tmp_path, capsys):
         patch("orchestune.claim.cli.claim_task", return_value=_success()),
         patch("orchestune.claim.cli._token_directory", return_value=tmp_path),
     ):
-        assert main(["123"]) == 0
+        assert main(["--apply", "123"]) == 0
     assert "Warning:" not in capsys.readouterr().err
 
 
@@ -389,7 +421,7 @@ def test_amend_success_prints_overlap_warnings_to_stderr(tmp_path, capsys):
         patch("orchestune.claim.cli.amend_claim_footprint", return_value=outcome),
         patch("orchestune.claim.cli._token_directory", return_value=tmp_path),
     ):
-        assert main(["123", "--amend-footprint"]) == 0
+        assert main(["--apply", "123", "--amend-footprint"]) == 0
     _assert_overlap_warning(capsys.readouterr().err)
 
 
@@ -415,6 +447,7 @@ def test_amend_with_add_paths_passes_paths_to_amend_claim_footprint(tmp_path):
         assert (
             main(
                 [
+                    "--apply",
                     "123",
                     "--amend-footprint",
                     "--add-path",
@@ -440,7 +473,7 @@ def test_add_path_without_amend_footprint_is_rejected():
     from orchestune.claim.cli import main
 
     with pytest.raises(SystemExit) as exc:
-        main(["123", "--add-path", "src/foo.py"])
+        main(["--apply", "123", "--add-path", "src/foo.py"])
     assert exc.value.code == 2
 
 
@@ -514,7 +547,7 @@ def test_plain_success_stdout_is_unchanged(tmp_path, capsys):
         patch("orchestune.claim.cli.claim_task", return_value=_success()),
         patch("orchestune.claim.cli._token_directory", return_value=tmp_path),
     ):
-        assert main(["123"]) == 0
+        assert main(["--apply", "123"]) == 0
     captured = capsys.readouterr()
     assert captured.out == _SUCCESS_STDOUT
     assert captured.err == ""
@@ -527,7 +560,7 @@ def test_plain_preview_stdout_is_unchanged(tmp_path, capsys):
         patch("orchestune.claim.cli.claim_task", return_value=_success()),
         patch("orchestune.claim.cli._token_directory", return_value=tmp_path),
     ):
-        assert main(["123", "--no-apply"]) == 0
+        assert main(["123"]) == 0
     captured = capsys.readouterr()
     assert captured.out == _PREVIEW_STDOUT
     assert captured.err == ""
@@ -537,7 +570,7 @@ def test_plain_failure_stays_on_stderr_and_keeps_exit_code(capsys):
     from orchestune.claim.cli import main
 
     with patch("orchestune.claim.cli.claim_task", return_value=_failure_outcome()):
-        assert main(["123"]) == 20
+        assert main(["--apply", "123"]) == 20
     captured = capsys.readouterr()
     assert captured.err == _CONFLICT_STDERR
     assert captured.out == ""
@@ -554,8 +587,8 @@ def test_tty_success_and_preview_keep_every_value_intact(
         patch("orchestune.claim.cli._token_directory", return_value=tmp_path),
     ):
         stream = _use_tty(monkeypatch, columns)
+        assert main(["--apply", "123"]) == 0
         assert main(["123"]) == 0
-        assert main(["123", "--no-apply"]) == 0
     assert stream.getvalue() == _SUCCESS_STDOUT + _PREVIEW_STDOUT
 
 
@@ -564,5 +597,5 @@ def test_tty_failure_keeps_conflicting_values_intact_on_narrow_width(monkeypatch
 
     with patch("orchestune.claim.cli.claim_task", return_value=_failure_outcome()):
         stream = _use_tty(monkeypatch, 30)
-        assert main(["123"]) == 20
+        assert main(["--apply", "123"]) == 20
     assert stream.getvalue() == _CONFLICT_STDERR

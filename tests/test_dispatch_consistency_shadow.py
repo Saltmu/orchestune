@@ -131,7 +131,6 @@ def test_consistency_mode_is_configured_via_toml_and_defaults_off(
                 [
                     "--parent-issue",
                     "100",
-                    "--no-apply",
                 ],
             )
             == 0

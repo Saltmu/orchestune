@@ -42,7 +42,7 @@ def run(
     return {d.code.rsplit(".", 1)[1]: d for d in run_repository_checks(context)}
 
 
-CTL_OK = wf(workflow("orchestune dispatch -p 1"), CTL)
+CTL_OK = wf(workflow("orchestune dispatch --apply -p 1"), CTL)
 
 
 def test_returns_both_codes_in_order() -> None:
@@ -59,14 +59,14 @@ def test_returns_both_codes_in_order() -> None:
     [(GROUP, "warning"), (None, "error"), (LEGACY_GROUP, "error")],
 )
 def test_actions_other_dispatch(group: str | None, expected: str) -> None:
-    other = wf(workflow("orchestune dispatch -p 2", group))
+    other = wf(workflow("orchestune dispatch --apply -p 2", group))
     diag = run("actions", (CTL_OK,), other)["other_entrypoints"]
     assert diag.status == expected
     assert any(OTHER in line for line in diag.evidence)
 
 
 def test_actions_no_apply_other_is_ok() -> None:
-    other = wf(workflow("orchestune dispatch --no-apply", None))
+    other = wf(workflow("orchestune dispatch", None))
     assert run("actions", (CTL_OK,), other)["other_entrypoints"].status == "ok"
 
 
@@ -77,7 +77,7 @@ def test_actions_specified_workflow_is_not_counted() -> None:
 
 
 def test_local_any_dispatch_warns() -> None:
-    diag = run("local", (), wf(workflow("orchestune dispatch", None)))
+    diag = run("local", (), wf(workflow("orchestune dispatch --apply", None)))
     assert diag["other_entrypoints"].status == "warning"
     assert run("local", (), wf(workflow("echo hi")))["other_entrypoints"].status == "ok"
 
@@ -92,10 +92,10 @@ def test_unreadable_workflow_is_evidence_only() -> None:
 @pytest.mark.parametrize(
     ("command", "group", "expected"),
     [
-        ("orchestune gc", GROUP, "ok"),
-        ("orchestune gc", LEGACY_GROUP, "warning"),
+        ("orchestune gc --apply", GROUP, "ok"),
+        ("orchestune gc --apply", LEGACY_GROUP, "warning"),
         ("orchestune recover 12 --apply", None, "warning"),
-        ("orchestune gc --no-apply", None, "ok"),
+        ("orchestune gc", None, "ok"),
         ("orchestune recover 12", None, "ok"),
     ],
 )
@@ -105,7 +105,7 @@ def test_control_entrypoints(command: str, group: str | None, expected: str) -> 
 
 
 def test_control_also_checks_specified_workflow() -> None:
-    ctl = wf(workflow("orchestune gc", None), CTL)
+    ctl = wf(workflow("orchestune gc --apply", None), CTL)
     assert run("actions", (ctl,))["other_control_entrypoints"].status == "warning"
 
 
@@ -115,7 +115,7 @@ def test_control_undetectable_is_not_checked() -> None:
 
 
 def test_control_warning_outranks_undetectable() -> None:
-    other = wf(workflow("orchestune gc", None))
+    other = wf(workflow("orchestune gc --apply", None))
     script = wf(workflow("./scripts/x.sh"), ".github/workflows/s.yml")
     diag = run("actions", (CTL_OK,), other, script)["other_control_entrypoints"]
     assert diag.status == "warning"
@@ -128,8 +128,8 @@ def _write(root: Path, rel: str, text: str) -> None:
 
 
 def test_run_doctor_fails_on_unsafe_other_workflow(tmp_path: Path) -> None:
-    _write(tmp_path, CTL, workflow("orchestune dispatch -p 1"))
-    _write(tmp_path, OTHER, workflow("orchestune dispatch -p 2", LEGACY_GROUP))
+    _write(tmp_path, CTL, workflow("orchestune dispatch --apply -p 1"))
+    _write(tmp_path, OTHER, workflow("orchestune dispatch --apply -p 2", LEGACY_GROUP))
     report = run_doctor(DoctorRequest("actions", tmp_path, (CTL,)))
     by_code = {d.code: d for d in report.diagnostics}
     assert by_code["dispatch.repository.other_entrypoints"].status == "error"
@@ -141,7 +141,7 @@ def test_run_doctor_fails_on_unsafe_other_workflow(tmp_path: Path) -> None:
 
 
 def test_run_doctor_local_mode_warns(tmp_path: Path) -> None:
-    _write(tmp_path, OTHER, workflow("orchestune dispatch", None))
+    _write(tmp_path, OTHER, workflow("orchestune dispatch --apply", None))
     report = run_doctor(DoctorRequest("local", tmp_path))
     by_code = {d.code: d for d in report.diagnostics}
     assert by_code["dispatch.repository.other_entrypoints"].status == "warning"

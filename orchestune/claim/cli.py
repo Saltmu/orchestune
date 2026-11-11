@@ -18,13 +18,16 @@ from orchestune.claim.contracts import (
 from orchestune.claim.service import claim_task, resume_claim
 from orchestune.claim.workspace import resolve_claim_workspace
 from orchestune.forge import ForgeGraphQLUnavailableError
+from orchestune.infra.apply_mode import add_apply_switch
 from orchestune.infra.cli_output import CliOutput, make_output
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Claim an Orchestune task issue.")
     parser.add_argument("issue_number", type=int, help="GitHub Issue number to claim")
-    parser.add_argument("--no-apply", action="store_true", help="validate only")
+    add_apply_switch(
+        parser, help="claim the task and update Git, GitHub, and local state"
+    )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument(
         "--resume", metavar="CLAIM_ID", help="resume an interrupted claim"
@@ -139,7 +142,7 @@ def _print_failure(failure: ClaimFailure) -> None:
 def _resume_or_preview(
     args: argparse.Namespace, token: str, observe_external=None
 ) -> ClaimOutcome:
-    if args.no_apply:
+    if not args.apply:
         request = ClaimRequest(
             issue_number=args.issue_number,
             resume_claim_id=args.resume,
@@ -165,21 +168,19 @@ def _run_claim(
     request = ClaimRequest(
         issue_number=args.issue_number,
         adopt_pr=args.adopt_pr,
-        dry_run=args.no_apply,
+        dry_run=not args.apply,
         timeout_seconds=args.timeout,
         state_path=args.state,
     )
     if observe_external is not None:
-        return claim_task(
-            request, apply=not args.no_apply, observe_external=observe_external
-        )
-    return claim_task(request, apply=not args.no_apply)
+        return claim_task(request, apply=args.apply, observe_external=observe_external)
+    return claim_task(request, apply=args.apply)
 
 
 def _run_amend(args: argparse.Namespace, token_dir: Path) -> FootprintAmendOutcome:
     return amend_claim_footprint(
         args.issue_number,
-        apply=not args.no_apply,
+        apply=args.apply,
         add_paths=tuple(args.add_paths or ()),
         state_path=args.state,
         timeout_seconds=args.timeout,
@@ -273,8 +274,8 @@ def main(argv: Sequence[str] | None = None, *, observe_external=None) -> int:
         )
         return 1
     if args.amend_footprint:
-        return _render_amend(amended, preview=args.no_apply)
-    return _render_outcome(outcome, token_dir, preview=args.no_apply)
+        return _render_amend(amended, preview=not args.apply)
+    return _render_outcome(outcome, token_dir, preview=not args.apply)
 
 
 if __name__ == "__main__":

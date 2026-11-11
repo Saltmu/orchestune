@@ -223,7 +223,7 @@ def _claim(c: WorkflowContext) -> _Observation:
         return _unknown(c.errors["local"], "claim ledger/Git")
     active = c.active
     if active is None:
-        return _unmet("claim_missing", "Run orchestune claim for this Issue")
+        return _unmet("claim_missing", "Run orchestune claim --apply for this Issue")
     if c.issue is None:
         return _unknown("Issue claim identity unavailable", "Issue")
     block = FOOTPRINT_BLOCK_PATTERN.search(c.issue.body)
