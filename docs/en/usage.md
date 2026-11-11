@@ -1297,6 +1297,17 @@ use the operator-confirmed external recovery procedure above.
 
 When `--watch` cannot fit the details, the frame keeps each target, whether attention is needed, and `orchestune status` as the way to read the rest. TTY and plain output carry the same meaning. Status does not gain a JSON mode.
 
+## Blocked-human-review marker census (`orchestune blocked`)
+
+`orchestune blocked` counts known markers on comments of open issues labeled `status:blocked-human-review`. It is read-only. It does not change issues, labels, or comments, and it does not follow related pull requests or parent issues. The counts are not a judgment of why work stopped.
+
+```bash
+orchestune blocked
+orchestune blocked --json
+```
+
+Human output is limited to issue numbers, category names, and counts. An issue with no comments is shown as having no comments and is not added to the counts. When no issue matches, the text says so. `--json` prints only category names and counts, with every category set to 0 when nothing matches. A failed list or comment read, a comment body of the wrong type, or a list that reaches 1,000 issues exits 1 and prints no partial counts.
+
 ---
 
 ## 10. Local autonomous trial (`orchestune trial`)
