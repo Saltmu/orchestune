@@ -131,6 +131,25 @@ Coverage instrumentation is intentionally left out of the default `pytest` run t
 uv run pytest --cov=orchestune --cov-branch --cov-report=term-missing
 ```
 
+While a change is in progress, check that file before the full script. For the local CI isolation test:
+
+```bash
+uv run ruff format --check tests/test_local_ci_env_isolation.py
+uv run ruff check tests/test_local_ci_env_isolation.py
+uv run pytest -n 0 tests/test_local_ci_env_isolation.py
+```
+
+Before commit or push, run the full entry point: `./scripts/local-ci.sh` on POSIX, or `.\scripts\local-ci.ps1` on Windows. Set `ORCHESTUNE_LOCAL_CI_TIMING=1` to print one stderr line per phase. `elapsed_seconds` is a non-negative whole number and may be `0`. Leave the variable unset for a normal run; timing lines are printed only when it is `1`.
+
+```bash
+ORCHESTUNE_LOCAL_CI_TIMING=1 ./scripts/local-ci.sh
+```
+
+```powershell
+$env:ORCHESTUNE_LOCAL_CI_TIMING = "1"
+.\scripts\local-ci.ps1
+```
+
 ### Mocking Internal Symbols
 
 When `unittest.mock.patch(...)` / `patch.object(...)` targets an `orchestune.` or `scripts.` symbol (as opposed to a process/OS boundary such as `subprocess`, `time.time`, or `os.kill`, or a test double such as `FakeForge`), pass `autospec=True` ([#829](https://github.com/Saltmu/orchestune/issues/829)). Without it, `patch(...)` still catches a *renamed or removed* symbol (`AttributeError`), but not a *changed signature*: a mock silently accepts whatever arguments the caller passes, so a positional argument added to, removed from, or reordered on the real function does not fail the test.
@@ -180,6 +199,18 @@ Before committing or pushing your changes, run the local CI script to verify for
   .\scripts\local-ci.ps1
   ```
   On Windows, tests run with 2 parallel workers by default (`-n 2`). You can configure concurrency via the `ORCHESTUNE_TEST_WORKERS` environment variable (e.g. `$env:ORCHESTUNE_TEST_WORKERS = "4"` or `"0"`) or via `PYTEST_ADDOPTS`. The GitHub Actions Windows job uses 4 workers and reports the 30 slowest test durations; the local default remains 2 workers. To shorten its runtime, the Windows job also skips coverage measurement (`--no-cov`; the Linux job enforces the 90% coverage gate) and points `TEMP`/`TMP` at `runner.temp` on the faster D: drive. Local runs of `local-ci.ps1` still measure coverage.
+
+  For a change around the local CI isolation test, the file-scoped commands are `uv run ruff format --check tests/test_local_ci_env_isolation.py`, `uv run ruff check tests/test_local_ci_env_isolation.py`, and `uv run pytest -n 0 tests/test_local_ci_env_isolation.py`. The full scripts above remain the check that runs every gate. To time those gates, set `ORCHESTUNE_LOCAL_CI_TIMING=1` (`elapsed_seconds` is a non-negative whole number and may be `0`). Unset it for a normal run.
+
+  ```bash
+  ORCHESTUNE_LOCAL_CI_TIMING=1 ./scripts/local-ci.sh
+  ```
+
+  ```powershell
+  $env:ORCHESTUNE_LOCAL_CI_TIMING = "1"
+  .\scripts\local-ci.ps1
+  ```
+
 This runs:
 1. **Ruff Format & Lint Check**: `ruff format` and `ruff check`
 2. **Mypy Type Check**: Type hint validation

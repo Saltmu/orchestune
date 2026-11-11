@@ -113,6 +113,25 @@ Windowsの権限やセキュリティ設定を変更することもありませ�
 uv run pytest --cov=orchestune --cov-branch --cov-report=term-missing
 ```
 
+変更の途中では、触ったファイルだけを先に確認します。local CI の隔離テストなら次です。
+
+```bash
+uv run ruff format --check tests/test_local_ci_env_isolation.py
+uv run ruff check tests/test_local_ci_env_isolation.py
+uv run pytest -n 0 tests/test_local_ci_env_isolation.py
+```
+
+コミットまたはプッシュの前は、POSIX なら `./scripts/local-ci.sh`、Windows なら `.\scripts\local-ci.ps1` を実行します。`ORCHESTUNE_LOCAL_CI_TIMING=1` を付けると、工程ごとに標準エラーへ 1 行出ます。`elapsed_seconds` は 0 以上の整数で、1 秒未満は `0` になることがあります。通常実行ではこの変数を置かず、値が `1` のときだけ計測行を出します。
+
+```bash
+ORCHESTUNE_LOCAL_CI_TIMING=1 ./scripts/local-ci.sh
+```
+
+```powershell
+$env:ORCHESTUNE_LOCAL_CI_TIMING = "1"
+.\scripts\local-ci.ps1
+```
+
 ### 内部シンボルのモック化
 
 `unittest.mock.patch(...)` / `patch.object(...)` の対象が `orchestune.` または `scripts.` 配下のシンボルである場合（`subprocess` や `time.time`、`os.kill` のようなプロセス・OS境界、あるいは `FakeForge` のようなテストダブルは対象外）、`autospec=True` を指定してください（[#829](https://github.com/Saltmu/orchestune/issues/829)）。指定しない場合でも、対象シンボルの**改名・削除**は `patch(...)` の既定動作（`AttributeError`）で検知できますが、**シグネチャの変更**（引数の追加・削除・並び替え）は検知できません。モックは呼び出し方に関わらず何でも受け付けてしまうため、実体側の引数が変わってもテストは無反応で通過します。
@@ -158,6 +177,18 @@ UTF-8 のファイルには `open`、`Path.read_text`、`Path.write_text` で
   .\scripts\local-ci.ps1
   ```
   Windows環境では既定で 2 ワーカーによる並列テスト（`-n 2`）が実行されます。環境変数 `ORCHESTUNE_TEST_WORKERS`（例: `$env:ORCHESTUNE_TEST_WORKERS = "4"` や `"0"`）または `PYTEST_ADDOPTS` を設定することで並列度を調整できます。GitHub Actions の Windows ジョブは 4 ワーカーで実行し、遅いテスト上位 30 件の所要時間を出力します。ローカルの既定値は 2 ワーカーのままです。実行時間を短縮するため、Windows ジョブではカバレッジ計測を行わず（`--no-cov`。90% のカバレッジゲートは Linux ジョブで検証します）、`TEMP`/`TMP` を高速な D: ドライブ上の `runner.temp` に向けます。ローカルで `local-ci.ps1` を実行した場合は従来どおりカバレッジを計測します。
+
+  local CI の隔離テスト周辺を変えたときは、`uv run ruff format --check tests/test_local_ci_env_isolation.py`、`uv run ruff check tests/test_local_ci_env_isolation.py`、`uv run pytest -n 0 tests/test_local_ci_env_isolation.py` でそのファイルを確認します。上のスクリプトは全ゲートを実行する入口です。工程ごとの時間を出すには `ORCHESTUNE_LOCAL_CI_TIMING=1` を付けます。`elapsed_seconds` は 0 以上の整数で、1 秒未満は `0` になることがあります。通常実行では変数を置きません。
+
+  ```bash
+  ORCHESTUNE_LOCAL_CI_TIMING=1 ./scripts/local-ci.sh
+  ```
+
+  ```powershell
+  $env:ORCHESTUNE_LOCAL_CI_TIMING = "1"
+  .\scripts\local-ci.ps1
+  ```
+
 このスクリプトは以下のチェックを実行します。
 1. **Ruff フォーマット & Lint チェック**: `ruff format` と `ruff check`
 2. **Mypy 型チェック**: 型注釈の検証
