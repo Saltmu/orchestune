@@ -136,6 +136,12 @@ _COMMAND_SPECS: tuple[_Command, ...] = (
         exit_with_return=True,
     ),
     _Command(
+        "blocked",
+        "Count blocked-human-review markers (read-only)",
+        "orchestune.blocked_cli",
+        exit_with_return=True,
+    ),
+    _Command(
         "review",
         "Inspect, retry or override a Layer-2 semantic review",
         "orchestune.dispatch.review_cli",

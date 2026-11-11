@@ -464,6 +464,7 @@ def test_cli_no_args_exits(capsys):
         "  recover   Inspect or recover one stopped claim (preview by default)\n"
         "  gc        Release handoff-ready task reservations (--apply to release)\n"
         "  doctor    Diagnose dispatch single-executor setup (offline, read-only)\n"
+        "  blocked   Count blocked-human-review markers (read-only)\n"
         "  review    Inspect, retry or override a Layer-2 semantic review\n"
         "  reviewer  Resolve the interactive review bot (read-only)\n"
         "  config    Create or edit orchestune.toml interactively\n"
@@ -515,6 +516,20 @@ def test_cli_invalid_command_exits(capsys):
     assert exc_info.value.code == 1
     captured = capsys.readouterr()
     assert "Unknown command: invalid_cmd" in captured.out
+
+
+def test_cli_delegates_to_blocked_with_its_exit_code():
+    import orchestune.blocked_cli as blocked_cli
+    from orchestune.cli import main
+
+    with (
+        patch("sys.argv", ["orchestune", "blocked", "--json"]),
+        patch.object(blocked_cli, "main", return_value=0) as run,
+        pytest.raises(SystemExit) as error,
+    ):
+        main()
+    assert error.value.code == 0
+    run.assert_called_once_with()
 
 
 def test_cli_delegates_to_workflow():

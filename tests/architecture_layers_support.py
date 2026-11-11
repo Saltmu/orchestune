@@ -3,6 +3,7 @@
 EXPECTED_LAYERS: dict[int, frozenset[str]] = {
     4: frozenset(
         {
+            "blocked_cli",
             "bootstrap",
             "claim.cli",
             "recovery.cli",
@@ -360,6 +361,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "read_dependencies.snapshot_codec",
             "workflow",
             "workflow.contracts",
+            "blocked_report",
             "bounded_limit",
             "branch_naming",
             "merge_evidence",

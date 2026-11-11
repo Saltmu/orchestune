@@ -1243,6 +1243,17 @@ PR/Outcomeの完了判定（MERGED/closed PR、handoff-ready）は成果物の�
 
 `--watch` で詳細が画面に収まらないときは、対象と要対応の有無を残し、詳細の入口として `orchestune status` を示します。TTY でも plain でも案内の意味は同じです。status に JSON 出力は追加しません。
 
+## 人手レビュー停止のマーカー集計（`orchestune blocked`）
+
+`orchestune blocked` は、オープンかつ `status:blocked-human-review` の Issue コメントに現れた既知マーカーを数えます。読み取り専用です。Issue、ラベル、コメントは変更しません。関連する PR や親 Issue は辿りません。マーカーの件数は停止理由の判定には使いません。
+
+```bash
+orchestune blocked
+orchestune blocked --json
+```
+
+人向けの表示は Issue 番号、分類名、件数だけです。コメントが無い Issue は「コメントなし」と出し、件数には加えません。対象の Issue が無いときはその旨を出します。`--json` は分類名と件数だけのオブジェクトで、対象が無くても全分類を 0 で返します。一覧やコメントの取得失敗、コメント本文の型の異常、一覧が 1,000 件に達したときは終了コード 1 で、途中の件数は出しません。
+
 ---
 
 ## 10. ローカル自律試行 (`orchestune trial`)
