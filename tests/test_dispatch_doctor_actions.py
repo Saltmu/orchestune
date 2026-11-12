@@ -75,6 +75,8 @@ def test_passing_workflow_is_all_ok() -> None:
         "credentials",
     ]
     assert {d.status for d in result.values()} == {"ok"}
+    assert result["target"].remediation == ""
+    assert result["credentials"].remediation == ""
 
 
 def test_no_readable_workflow_is_not_checked() -> None:
@@ -85,6 +87,12 @@ def test_no_readable_workflow_is_not_checked() -> None:
     assert len(diags) == 6
     assert {d.status for d in diags} == {"not_checked"}
     assert diags[0].evidence == ("no readable workflow",)
+    by_code = {d.code: d.remediation for d in diags}
+    assert (
+        "docs/ja/setup.md「GitHub Actionsでの構成要件」"
+        in by_code["dispatch.actions.target"]
+    )
+    assert "missing" in by_code["dispatch.actions.credentials"]
 
 
 @pytest.mark.parametrize(
@@ -186,7 +194,11 @@ def test_local_process_target_argument_is_error(target: str) -> None:
     text = make_workflow(
         command=f"orchestune dispatch --apply --dispatch-target {target}"
     )
-    assert status(text, "target") == "error"
+    result = checks(text)
+    assert result["target"].status == "error"
+    fix = result["target"].remediation
+    assert "docs/ja/setup.md「GitHub Actionsでの構成要件」" in fix
+    assert 'docs/en/setup.md "Requirements for GitHub Actions"' in fix
 
 
 def test_target_from_config_then_actions_default() -> None:
@@ -214,7 +226,13 @@ def test_dynamic_target_and_invalid_config_are_not_checked() -> None:
 
 def test_credentials_missing_token_is_error() -> None:
     text = make_workflow(step_env="          ORCHESTUNE_ROUTINE_ID: x")
-    assert status(text, "credentials") == "error"
+    result = checks(text)
+    assert result["credentials"].status == "error"
+    fix = result["credentials"].remediation
+    assert "missing" in fix
+    assert "env:" in fix
+    assert "docs/ja/setup.md「GitHub Actionsでの構成要件」" in fix
+    assert 'docs/en/setup.md "Requirements for GitHub Actions"' in fix
 
 
 def test_credentials_routine_id_from_config() -> None:
@@ -244,7 +262,10 @@ def test_credentials_at_workflow_and_job_level() -> None:
 
 def test_credentials_env_expression_is_not_checked() -> None:
     text = make_workflow(step_env="", job_env="    env: ${{ fromJSON(vars.X) }}\n")
-    assert status(text, "credentials") == "not_checked"
+    result = checks(text)
+    assert result["credentials"].status == "not_checked"
+    assert "missing" in result["credentials"].remediation
+    assert "env:" in result["credentials"].remediation
 
 
 def test_credentials_codex_cloud() -> None:

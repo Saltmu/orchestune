@@ -45,6 +45,10 @@ ACTIONS_DEFAULT_TARGET = resolve_default_dispatch_target_name(
     {"GITHUB_ACTIONS": "true"}
 )
 MIGRATION_DOC_REF = 'docs/ja/setup.md「既存導入先の移行」/ docs/en/setup.md "Migrating Existing Installations"'
+_ACTIONS_REQUIREMENTS_DOC_REF = (
+    "docs/ja/setup.md「GitHub Actionsでの構成要件」/ "
+    'docs/en/setup.md "Requirements for GitHub Actions"'
+)
 
 _EXPR_RE = re.compile(r"\$\{\{\s*(.*?)\s*\}\}")
 _CANCEL_KEY = "cancel-in-progress"
@@ -358,12 +362,15 @@ _CHECKS: tuple[tuple[str, str, str], ...] = (
     (
         CODE_ACTIONS_TARGET,
         "Dispatch target",
-        "Use an external target (cloud-routine or codex-cloud) in Actions.",
+        "Use an external target (cloud-routine or codex-cloud) in Actions. "
+        f"See {_ACTIONS_REQUIREMENTS_DOC_REF}.",
     ),
     (
         CODE_ACTIONS_CREDENTIALS,
         "Target credentials",
-        "Pass the required ORCHESTUNE_* variables via env: on the workflow, job or step.",
+        "Pass the required ORCHESTUNE_* variables via env: on the workflow, job or step. "
+        "Compare each missing name in the evidence with that env:. "
+        f"See {_ACTIONS_REQUIREMENTS_DOC_REF}.",
     ),
 )
 

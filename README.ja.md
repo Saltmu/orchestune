@@ -38,31 +38,13 @@ orchestune dag --plan "<saved-plan-path>"
 
 ### ローカル初回体験（GitHub設定不要）
 
-GitHub認証、リモートリポジトリ、ラベル設定を行わずにOrchestuneのサイクルを試したい場合、`orchestune trial` で単一タスクをローカル完走できます。
+試用に必要なのは Orchestune、Git、`python` として実行できる対応 Python、PATH 上の認証済み Codex CLI または Claude Code です。モデル通信はオンラインです。GitHub の認証、`gh`、remote、ラベル、dispatch 用の設定は試用には使いません。これらは既存プロジェクトへ GitHub 連携を入れるときの前提です。
 
-```bash
-# 1. 依頼内容をリポジトリ外のファイルに記述
-echo "テストの修正や機能追加の依頼" > ../trial-request.txt
+試用で確認できるのは、サンプルの計画を承認し、同じ head の CI と別セッションのレビューが通った差分を見て、保持するか採用するかを決めるところまでです。
 
-# 2. ローカル試行を開始（分離worktreeで計画を生成し承認待ち）
-orchestune trial start --request-file ../trial-request.txt
+手順は同言語の[セットアップガイド](docs/ja/setup.md#ローカル初回体験のセットアップ)にあります。コマンドの詳細は[利用手引き](docs/ja/usage.md#10-ローカル自律試行-orchestune-trial)にもあります。
 
-# 3. 承認ダイジェストを指定して実装・検証を再開
-orchestune trial resume <TRIAL_ID> --approve-plan <PLAN_DIGEST>
-
-# 4. 実行状況とレビュー結果を確認
-orchestune trial status <TRIAL_ID>
-
-# 5. 差分を確認し、手動で作業ブランチへ採用
-git merge --ff-only trial/<TRIAL_ID>
-orchestune trial result <TRIAL_ID> --decision adopted
-```
-
-> [!NOTE]
-> ローカル試行はローカルのClaude Code (`claude`) またはCodex CLI (`codex`) を使用します。LLMとのモデル通信はオンラインですが、GitHubリモートやIssue・ラベルは一切変更しません。レビューは同一製品の別セッション・別worktreeで行われます。独立ベンダー間レビューに比べ品質チェックの限界はありますが、GitHub不要で一連の動作を確認できます。
-> 詳細は[セットアップガイド](docs/ja/setup.md#ローカル初回体験のセットアップ)および[利用手引き](docs/ja/usage.md#10-ローカル自律試行-orchestune-trial)を参照してください。
-
-実行前に[セットアップガイド](docs/ja/setup.md)で導入先リポジトリの前提条件を確認してください。他のインストール方法やエージェントの設定は、後述の[インストール方法](#インストール方法)を参照してください。
+既存プロジェクトでは、上のコマンドの前に[セットアップガイド](docs/ja/setup.md)の GitHub 導入の前提を確認してください。他のインストール方法やエージェントの設定は、後述の[インストール方法](#インストール方法)を参照してください。
 
 ⚠️ **β版**: 主要ワークフローは利用可能ですが、安定版までにAPI、CLIコマンド、ワークフローが変更される可能性があります。
 
