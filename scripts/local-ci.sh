@@ -7,10 +7,35 @@ cd "$(dirname "$0")/.."
 # Unset Git internal environment variables that may leak from git hooks
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_PREFIX GIT_GRAFT_FILE GIT_SUPER_PREFIX
 
+ci_phase=""
+ci_phase_mark=$SECONDS
+
+ci_phase_begin() {
+  ci_phase="$1"
+  ci_phase_mark=$SECONDS
+}
+
+ci_phase_end() {
+  local code="$1"
+  if [ -z "${ci_phase}" ]; then
+    return 0
+  fi
+  local elapsed=$((SECONDS - ci_phase_mark))
+  local phase="${ci_phase}"
+  ci_phase=""
+  if [ "${ORCHESTUNE_LOCAL_CI_TIMING:-}" = "1" ]; then
+    echo "[local-ci-timing] phase=${phase} elapsed_seconds=${elapsed} exit_code=${code}" >&2 || true
+  fi
+}
+
+# Save $? before any timing write, then keep that code if the write fails.
+trap 'ci_exit_code=$?; ci_phase_end "${ci_exit_code}" || true; exit "${ci_exit_code}"' EXIT
+
 echo "========================================="
 echo "Running Orchestune Local CI Check..."
 echo "========================================="
 
+ci_phase_begin preflight
 # Invalidate prior evidence before any prerequisite checks or setup
 if [ -n "${ORCHESTUNE_CI_EVIDENCE_PATH:-}" ]; then
   EVIDENCE_FILE="${ORCHESTUNE_CI_EVIDENCE_PATH}"
@@ -68,24 +93,37 @@ else
   fi
 fi
 uv run --no-sync python -m orchestune.complete.ci_evidence invalidate 2>/dev/null || true
+ci_phase_end 0
 
+ci_phase_begin python_dependencies
 # Ensure virtual environment and dependencies are installed
 if ! uv run python -c "import pytest, ruff, mypy, yaml, xdist, pytest_cov" >/dev/null 2>&1; then
   echo "Virtual environment or dependencies not found; running uv sync..."
   uv sync
 fi
+ci_phase_end 0
 
+ci_phase_begin ruff_format
 echo "[1/7] Checking code format (ruff format)..."
 uv run ruff format --check
+ci_phase_end 0
 
+ci_phase_begin ruff_lint
 echo "[2/7] Running lint (ruff check)..."
 uv run ruff check
+ci_phase_end 0
 
+ci_phase_begin mypy
 echo "[3/7] Checking types (mypy)..."
 uv run mypy orchestune tests
+ci_phase_end 0
 
+ci_phase_begin quint_toolchain
 echo "[4/7] Installing and verifying the pinned Quint toolchain (Node.js)..."
 ./scripts/quint-check.sh
+ci_phase_end 0
+
+ci_phase_begin pytest
 # One session directory per run: the bounded exploration writes its traces and
 # summary here and the replay reads them back (see tests/quint_replay.py).
 QUINT_REPLAY_DIR="$(./scripts/create-session-dir.sh quint-replay 1276)"
@@ -95,6 +133,8 @@ echo "[5/7] Running tests with coverage (pytest)..."
 (
   # Tests create independent Git repositories; completion's CI context belongs only
   # to this worktree and must not become those repositories' evidence defaults.
+  # Drop the phase trap so this subshell does not emit a second timing line.
+  trap - EXIT
   unset ORCHESTUNE_EXPECTED_HEAD ORCHESTUNE_EXPECTED_TREE
   unset ORCHESTUNE_BASE_SHA ORCHESTUNE_BASE_REF ORCHESTUNE_STATE_PATH
   unset ORCHESTUNE_ISSUE_NUMBER ORCHESTUNE_CI_EVIDENCE_PATH
@@ -112,10 +152,14 @@ if [ ! -s "${QUINT_SUMMARY}" ]; then
 fi
 echo "Quint exploration (seed, bounds, tool versions, replayed counts):"
 cat "${QUINT_SUMMARY}"
+ci_phase_end 0
 
+ci_phase_begin bloat
 echo "[6/7] Detecting new or worsened code and skill bloat..."
 uv run python scripts/detect_bloat.py --baseline .orchestune/bloat-baseline.json
+ci_phase_end 0
 
+ci_phase_begin gitleaks
 echo "[7/7] Scanning for secrets and local paths (gitleaks)..."
 GITLEAKS_INSTALL_DIR="${GITLEAKS_INSTALL_DIR:-$HOME/.local/bin}"
 export PATH="${GITLEAKS_INSTALL_DIR}:${PATH}"
@@ -132,11 +176,13 @@ else
   echo "Install it before pushing: https://github.com/gitleaks/gitleaks#installing" >&2
   exit 1
 fi
+ci_phase_end 0
 
 echo "========================================="
 echo "✨ Local CI passed successfully!"
 echo "========================================="
 
+ci_phase_begin evidence_record
 RECORD_ARGS=("--started-at" "${CI_START_TIME}")
 if [ -n "${CI_START_HEAD}" ]; then
   RECORD_ARGS+=("--expected-head" "${CI_START_HEAD}")
@@ -161,3 +207,4 @@ if [ -n "${ORCHESTUNE_ISSUE_NUMBER:-}" ]; then
 fi
 
 uv run python -m orchestune.complete.ci_evidence record ${RECORD_ARGS[@]+"${RECORD_ARGS[@]}"}
+ci_phase_end 0

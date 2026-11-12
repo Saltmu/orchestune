@@ -22,10 +22,44 @@ foreach ($var in $GitEnvVars) {
     }
 }
 
+function Start-CiPhase {
+    param([string]$Name)
+    $script:CiPhaseName = $Name
+    $script:CiExplicitExit = $null
+    $script:CiPhaseWatch = [System.Diagnostics.Stopwatch]::StartNew()
+}
+
+function Stop-CiPhase {
+    param([int]$Code)
+    if (-not $script:CiPhaseName) {
+        return
+    }
+    $elapsed = 0
+    if ($null -ne $script:CiPhaseWatch) {
+        $script:CiPhaseWatch.Stop()
+        $elapsed = [int][Math]::Floor($script:CiPhaseWatch.Elapsed.TotalSeconds)
+    }
+    $name = $script:CiPhaseName
+    $script:CiPhaseName = $null
+    $script:CiPhaseWatch = $null
+    if ($env:ORCHESTUNE_LOCAL_CI_TIMING -ne "1") {
+        return
+    }
+    try {
+        [Console]::Error.WriteLine("[local-ci-timing] phase=$name elapsed_seconds=$elapsed exit_code=$Code")
+    } catch {
+    }
+}
+
 Write-Host "========================================="
 Write-Host "Running Orchestune Local CI Check (PowerShell)..."
 Write-Host "========================================="
 
+$script:CiPhaseName = $null
+$script:CiPhaseWatch = $null
+$script:CiExplicitExit = $null
+try {
+Start-CiPhase "preflight"
 # Invalidate prior evidence before any prerequisite checks or setup
 if ($env:ORCHESTUNE_CI_EVIDENCE_PATH) {
     $EvidenceFile = $env:ORCHESTUNE_CI_EVIDENCE_PATH
@@ -36,6 +70,7 @@ if (Test-Path $EvidenceFile) {
     Remove-Item -Force $EvidenceFile -ErrorAction SilentlyContinue
     if (Test-Path $EvidenceFile) {
         Write-Host "ERROR: Failed to remove prior CI evidence at $EvidenceFile." -ForegroundColor Red
+        $script:CiExplicitExit = 1
         exit 1
     }
 }
@@ -46,12 +81,14 @@ if ($EvidenceParent -and (Test-Path $EvidenceParent)) {
 
 if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
     Write-Host "ERROR: uv is required for local CI. Install it from https://docs.astral.sh/uv/." -ForegroundColor Red
+    $script:CiExplicitExit = 2
     exit 2
 }
 
 if (-not (Get-Command node -ErrorAction SilentlyContinue) -or -not (Get-Command npm -ErrorAction SilentlyContinue)) {
     Write-Host "ERROR: Node.js and npm are required for local CI (the Quint dependency-liveness check)." -ForegroundColor Red
     Write-Host 'Install the Node.js major version listed under "engines" in package.json; see CONTRIBUTING.md (Node.js and Quint).' -ForegroundColor Red
+    $script:CiExplicitExit = 2
     exit 2
 }
 
@@ -59,12 +96,14 @@ $CiStartTime = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
 $CiStartHead = (git rev-parse HEAD 2>$null)
 if ($LASTEXITCODE -ne 0 -or -not $CiStartHead) {
     Write-Host "ERROR: Failed to resolve initial HEAD before starting CI." -ForegroundColor Red
+    $script:CiExplicitExit = 1
     exit 1
 }
 $CiStartHead = $CiStartHead.Trim()
 $CiStartTree = (git rev-parse 'HEAD^{tree}' 2>$null)
 if ($LASTEXITCODE -ne 0 -or -not $CiStartTree) {
     Write-Host "ERROR: Failed to resolve initial tree SHA before starting CI." -ForegroundColor Red
+    $script:CiExplicitExit = 1
     exit 1
 }
 $CiStartTree = $CiStartTree.Trim()
@@ -77,12 +116,15 @@ if (-not $CiStartBase) {
     $resolvedBase = (uv run --no-sync python -m orchestune.complete.ci_evidence resolve-base @BaseResolveArgs 2>$null)
     if ($LASTEXITCODE -ne 0 -or -not $resolvedBase) {
         Write-Host "ERROR: Failed to resolve initial base SHA before starting CI." -ForegroundColor Red
+        $script:CiExplicitExit = 1
         exit 1
     }
     $CiStartBase = $resolvedBase.Trim()
 }
 uv run --no-sync python -m orchestune.complete.ci_evidence invalidate 2>$null
+Stop-CiPhase 0
 
+Start-CiPhase "python_dependencies"
 # Ensure virtual environment and dependencies are installed
 & uv run python -c "import pytest, ruff, mypy, yaml, xdist, pytest_cov" 2>$null
 if ($LASTEXITCODE -ne 0) {
@@ -90,29 +132,56 @@ if ($LASTEXITCODE -ne 0) {
     uv sync
     if ($LASTEXITCODE -ne 0) {
         Write-Host "ERROR: uv sync failed." -ForegroundColor Red
+        $script:CiExplicitExit = $LASTEXITCODE
         exit $LASTEXITCODE
     }
 }
+Stop-CiPhase 0
 
+Start-CiPhase "ruff_format"
 Write-Host "[1/7] Checking code format (ruff format)..."
 uv run ruff format --check
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+if ($LASTEXITCODE -ne 0) {
+    $script:CiExplicitExit = $LASTEXITCODE
+    exit $LASTEXITCODE
+}
+Stop-CiPhase 0
 
+Start-CiPhase "ruff_lint"
 Write-Host "[2/7] Running lint (ruff check)..."
 uv run ruff check
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+if ($LASTEXITCODE -ne 0) {
+    $script:CiExplicitExit = $LASTEXITCODE
+    exit $LASTEXITCODE
+}
+Stop-CiPhase 0
 
+Start-CiPhase "mypy"
 Write-Host "[3/7] Checking types (mypy)..."
 uv run mypy orchestune tests
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+if ($LASTEXITCODE -ne 0) {
+    $script:CiExplicitExit = $LASTEXITCODE
+    exit $LASTEXITCODE
+}
+Stop-CiPhase 0
 
+Start-CiPhase "quint_toolchain"
 Write-Host "[4/7] Installing and verifying the pinned Quint toolchain (Node.js)..."
 & (Join-Path $PSScriptRoot "quint-check.ps1")
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+if ($LASTEXITCODE -ne 0) {
+    $script:CiExplicitExit = $LASTEXITCODE
+    exit $LASTEXITCODE
+}
+Stop-CiPhase 0
+
+Start-CiPhase "pytest"
 # One session directory per run: the bounded exploration writes its traces and
 # summary here and the replay reads them back (see tests/quint_replay.py).
 $QuintReplayDir = (& (Join-Path $PSScriptRoot "create-session-dir.ps1") "quint-replay" "1276")
-if ($LASTEXITCODE -ne 0 -or -not $QuintReplayDir) { exit 1 }
+if ($LASTEXITCODE -ne 0 -or -not $QuintReplayDir) {
+    $script:CiExplicitExit = 1
+    exit 1
+}
 $env:ORCHESTUNE_QUINT_REPLAY_DIR = "$QuintReplayDir"
 
 Write-Host "[5/7] Running tests with coverage (pytest)..."
@@ -153,20 +222,31 @@ try {
         Set-Item "Env:$var" $SavedCiContext[$var]
     }
 }
-if ($PytestExitCode -ne 0) { exit $PytestExitCode }
+if ($PytestExitCode -ne 0) {
+    $script:CiExplicitExit = $PytestExitCode
+    exit $PytestExitCode
+}
 
 $QuintSummary = Join-Path $QuintReplayDir "test_bounded_exploration_replays_on_production/exploration-summary.json"
 if (-not (Test-Path $QuintSummary) -or (Get-Item $QuintSummary).Length -eq 0) {
     Write-Host "ERROR: the Quint exploration did not run (no $QuintSummary)." -ForegroundColor Red
+    $script:CiExplicitExit = 1
     exit 1
 }
 Write-Host "Quint exploration (seed, bounds, tool versions, replayed counts):"
 Get-Content -Raw $QuintSummary
+Stop-CiPhase 0
 
+Start-CiPhase "bloat"
 Write-Host "[6/7] Detecting new or worsened code and skill bloat..."
 uv run python scripts/detect_bloat.py --baseline .orchestune/bloat-baseline.json
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+if ($LASTEXITCODE -ne 0) {
+    $script:CiExplicitExit = $LASTEXITCODE
+    exit $LASTEXITCODE
+}
+Stop-CiPhase 0
 
+Start-CiPhase "gitleaks"
 Write-Host "[7/7] Scanning for secrets and local paths (gitleaks)..."
 $GitleaksInstallDir = if ($env:GITLEAKS_INSTALL_DIR) { $env:GITLEAKS_INSTALL_DIR } else { Join-Path $HOME ".local\bin" }
 $env:PATH = "$GitleaksInstallDir;$env:PATH"
@@ -182,17 +262,23 @@ if (-not (Get-Command gitleaks -ErrorAction SilentlyContinue)) {
 
 if (Get-Command gitleaks -ErrorAction SilentlyContinue) {
     gitleaks detect --source . --redact -v
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    if ($LASTEXITCODE -ne 0) {
+        $script:CiExplicitExit = $LASTEXITCODE
+        exit $LASTEXITCODE
+    }
 } else {
     Write-Host "ERROR: gitleaks is not installed locally and automatic installation failed." -ForegroundColor Red
     Write-Host "Install it before pushing: https://github.com/gitleaks/gitleaks#installing" -ForegroundColor Red
+    $script:CiExplicitExit = 1
     exit 1
 }
+Stop-CiPhase 0
 
 Write-Host "========================================="
 Write-Host "✨ Local CI passed successfully!"
 Write-Host "========================================="
 
+Start-CiPhase "evidence_record"
 $RecordArgs = @("--started-at", $CiStartTime)
 if ($CiStartHead) {
     $RecordArgs += @("--expected-head", $CiStartHead)
@@ -216,4 +302,20 @@ if ($env:ORCHESTUNE_ISSUE_NUMBER) {
     $RecordArgs += @("--issue", $env:ORCHESTUNE_ISSUE_NUMBER)
 }
 uv run python -m orchestune.complete.ci_evidence record @RecordArgs
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+if ($LASTEXITCODE -ne 0) {
+    $script:CiExplicitExit = $LASTEXITCODE
+    exit $LASTEXITCODE
+}
+Stop-CiPhase 0
+} finally {
+    if ($script:CiPhaseName) {
+        $code = 1
+        if ($null -ne $script:CiExplicitExit) {
+            $code = [int]$script:CiExplicitExit
+        }
+        try {
+            Stop-CiPhase $code
+        } catch {
+        }
+    }
+}
