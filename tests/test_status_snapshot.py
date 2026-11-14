@@ -871,6 +871,17 @@ class TestParentIntegrationStatus:
                 "review_gate_blocked",
                 [{"kind": "child_review_gate", "reason": "stale_read_gate: stale"}],
             ),
+            _parent_payload(["review_gate_blocked"], []),
+            _parent_payload(
+                "review_gate_blocked",
+                [
+                    {
+                        "kind": "child_review_gate",
+                        "reason": ["absent"],
+                        "issue_number": 10,
+                    }
+                ],
+            ),
         ],
     )
     def test_unusable_observations_stay_unknown(self, payload):

@@ -653,7 +653,8 @@ def _parent_record_matches(
         return False
     if not isinstance(record.get("observed_at"), str) or not record["observed_at"]:
         return False
-    return record.get("status") in _PARENT_STATUSES
+    status = record.get("status")
+    return isinstance(status, str) and status in _PARENT_STATUSES
 
 
 def _known_parent_text(
@@ -679,7 +680,8 @@ def _recorded_reasons(record: dict[str, Any]) -> tuple[str, ...]:
     return tuple(
         str(item["reason"])
         for item in _child_failures(record)
-        if item.get("reason") in _CHILD_REVIEW_REASONS
+        if isinstance(item.get("reason"), str)
+        and item["reason"] in _CHILD_REVIEW_REASONS
     )
 
 
@@ -692,7 +694,8 @@ def _child_failures(record: dict[str, Any]) -> list[dict[str, Any]]:
         for item in raw
         if isinstance(item, dict)
         and item.get("kind") == "child_review_gate"
-        and item.get("reason") in _CHILD_REVIEW_REASONS
+        and isinstance(item.get("reason"), str)
+        and item["reason"] in _CHILD_REVIEW_REASONS
     ]
 
 
@@ -769,7 +772,10 @@ def _parent_outlook(record: dict[str, Any]) -> _Outlook:
 
 def _review_outlook(failures: list[dict[str, Any]]) -> _Outlook:
     actions: list[GuidanceAction] = []
-    if any(item.get("reason") in _EVIDENCE_REASONS for item in failures):
+    if any(
+        isinstance(item.get("reason"), str) and item["reason"] in _EVIDENCE_REASONS
+        for item in failures
+    ):
         actions.append(
             GuidanceAction(
                 description="記録された子 Issue と SHA のレビュー証跡を確認してください。"
