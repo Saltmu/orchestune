@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -19,7 +20,9 @@ from orchestune.status_snapshot import (
     WorktreeStatus,
     build_status_snapshot,
     compact_status_attention,
+    format_parent_integration,
     format_status_report,
+    observe_repository_id,
 )
 
 _STATUS_HEADERS = ("State", "Issue", "Subtask", "Elapsed", "Branch")
@@ -78,6 +81,18 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         type=_positive_int,
         default=3,
         help="--watch指定時の自動更新間隔（秒、既定3秒、1以上の整数）",
+    )
+    parser.add_argument(
+        "--parent-issue",
+        type=_positive_int,
+        default=None,
+        help="親統合の最後の観測を表示する親 Issue 番号",
+    )
+    parser.add_argument(
+        "--dispatch-report",
+        type=Path,
+        default=None,
+        help="dispatch が保存した結果 JSON。--parent-issue とセットで指定する",
     )
     return parser
 
@@ -222,6 +237,23 @@ def _fits_screen(out: CliOutput, renderable: RenderableType) -> bool:
     return len(lines) < console.height
 
 
+def _emit_parent_integration(args: argparse.Namespace, out: CliOutput) -> int:
+    """Print one saved parent observation. This path does not write or launch work."""
+    path = args.dispatch_report
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        payload = None
+    text = format_parent_integration(
+        payload,
+        parent_issue=args.parent_issue,
+        repository_id=observe_repository_id(Path.cwd()),
+        evidence_path=str(path),
+    )
+    out.emit(out.text_block(text))
+    return 0
+
+
 def main(
     argv: list[str] | None = None,
     *,
@@ -230,8 +262,18 @@ def main(
     clock: Callable[[], float] | None = None,
     sleep: Callable[[float], None] | None = None,
 ) -> int:
-    args = _build_arg_parser().parse_args(argv)
+    parser = _build_arg_parser()
+    args = parser.parse_args(argv)
+    if (args.parent_issue is None) != (args.dispatch_report is None) or (
+        args.parent_issue is not None and args.watch
+    ):
+        parser.error(
+            "--parent-issue と --dispatch-report は同時に指定してください。"
+            "--watch とは併用できません"
+        )
     out = output if output is not None else make_output()
+    if args.parent_issue is not None:
+        return _emit_parent_integration(args, out)
     now_fn = clock if clock is not None else time.time
     sleep_fn = sleep if sleep is not None else time.sleep
     label_cache: dict[int, tuple[float, tuple[str, ...]]] = {}

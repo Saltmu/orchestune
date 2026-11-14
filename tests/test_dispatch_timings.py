@@ -2,6 +2,8 @@
 
 import json
 import subprocess
+from datetime import UTC, datetime
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
@@ -76,6 +78,9 @@ def test_metrics_failure_preserves_cli_exit_and_saved_json(
     from orchestune.dispatch.config.model import DispatcherConfig
     from orchestune.dispatch.reporting.report import _report_to_dict
     from orchestune.dispatch.result import PhaseResult, PhaseStatus
+    from orchestune.status_snapshot import observe_repository_id
+
+    observed = datetime(2026, 11, 14, 7, 0, tzinfo=UTC)
 
     config = DispatcherConfig(
         parent_issue_number=1164,
@@ -109,6 +114,7 @@ def test_metrics_failure_preserves_cli_exit_and_saved_json(
             return_value=[("post", lambda: phase, True)],
         ),
         patch("orchestune.dispatch.dispatcher._emit_dispatcher_report") as emit,
+        patch.object(dispatcher, "_utc_now", return_value=observed),
     ):
         assert dispatcher.main([]) == expected
     saved = json.loads(config.report_path.read_text())
@@ -121,6 +127,13 @@ def test_metrics_failure_preserves_cli_exit_and_saved_json(
         expected_saved["pre_integration_cycle"] = _report_to_dict(
             result.pre_integration_report
         )
+    expected_saved["parent_integration"] = dispatcher.build_parent_integration(
+        repository_id=observe_repository_id(Path.cwd(), config.forge),
+        parent_issue=config.parent_issue_number,
+        observed_at=observed.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        apply=config.apply,
+        integrator_report=result.integrator_run_report,
+    )
     assert saved == expected_saved
     event_entries = [
         json.loads(line)

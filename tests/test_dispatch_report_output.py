@@ -1,6 +1,8 @@
 import json
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 from io import StringIO
+from pathlib import Path
 from threading import Event
 from unittest.mock import Mock, patch
 
@@ -112,8 +114,25 @@ def _report():
     )
 
 
+_OBSERVED_AT = datetime(2026, 11, 14, 7, 0, tzinfo=UTC)
+
+
+def _parent_integration(cfg, *, apply: bool, report=None):
+    from orchestune.dispatch.dispatcher import build_parent_integration
+    from orchestune.status_snapshot import observe_repository_id
+
+    return build_parent_integration(
+        repository_id=observe_repository_id(Path.cwd(), cfg.resolved_forge),
+        parent_issue=cfg.parent_issue_number,
+        observed_at="2026-11-14T07:00:00Z",
+        apply=apply,
+        integrator_report=report,
+    )
+
+
 @pytest.mark.parametrize("apply", [False, True])
 def test_cli_saves_exact_old_schema_and_no_stdout_json(tmp_path, capsys, apply):
+    from orchestune.dispatch import dispatcher as dispatcher_module
     from orchestune.dispatch.dispatcher import main
     from orchestune.dispatch.reporting.report import _report_to_dict
     from orchestune.dispatch.result import PhaseResult, PhaseStatus
@@ -153,12 +172,14 @@ def test_cli_saves_exact_old_schema_and_no_stdout_json(tmp_path, capsys, apply):
         patch(
             "orchestune.dispatch.dispatcher._post_finding_notices", return_value=phase
         ),
+        patch.object(dispatcher_module, "_utc_now", return_value=_OBSERVED_AT),
     ):
         assert main([]) == 0
     expected = _report_to_dict(report)
     expected["post_cycle_results"] = [phase.to_dict()] * 5 if apply else []
     if apply:
         expected["pre_integration_cycle"] = _report_to_dict(report)
+    expected["parent_integration"] = _parent_integration(cfg, apply=apply)
     assert json.loads(cfg.report_path.read_text()) == expected
     stdout = capsys.readouterr().out
     assert '"selected"' not in stdout
@@ -392,6 +413,7 @@ class _TtyStream(StringIO):
 
 
 def _run_main_with_tty_sink(tmp_path, stream, cycle):
+    from orchestune.dispatch import dispatcher as dispatcher_module
     from orchestune.dispatch.dispatcher import main
     from orchestune.dispatch.reporting.progress_output import RichDispatchProgress
 
@@ -403,6 +425,7 @@ def _run_main_with_tty_sink(tmp_path, stream, cycle):
             "orchestune.dispatch.dispatcher.load_and_resolve_config", return_value=cfg
         ),
         patch("orchestune.dispatch.dispatcher.run_dispatch_cycle", side_effect=cycle),
+        patch.object(dispatcher_module, "_utc_now", return_value=_OBSERVED_AT),
     ):
         return cfg, sink, main([])
 
@@ -428,7 +451,11 @@ def test_tty_progress_saves_report_and_never_prints_json(tmp_path, capsys):
     cfg, sink, code = _run_main_with_tty_sink(tmp_path, stream, _phase_then(report))
     assert code == 0
     saved = json.loads(cfg.report_path.read_text())
-    assert saved == {**_report_to_dict(report), "post_cycle_results": []}
+    assert saved == {
+        **_report_to_dict(report),
+        "post_cycle_results": [],
+        "parent_integration": _parent_integration(cfg, apply=False),
+    }
     text = stream.getvalue()
     assert f"report saved: {cfg.report_path}" in text
     assert "run-tty" in text and "dry-run" in text and "#1070" in text
@@ -448,6 +475,87 @@ def test_broken_tty_progress_still_saves_report(tmp_path, capsys):
     assert code == 0
     assert cfg.report_path.exists()
     assert capsys.readouterr().err.count("progress unavailable") == 1
+
+
+def test_parent_integration_selects_one_parent_and_drops_tails(tmp_path):
+    from orchestune.dispatch.dispatcher import build_parent_integration
+
+    sha = "a" * 40
+    report = {
+        "status": "composite_failure",
+        "details": {
+            "issue_1": {
+                "status": "success",
+                "execution_failures": [{"detail": "other"}],
+            },
+            "issue_2": {
+                "status": "execution_timed_out",
+                "execution_failures": [
+                    {
+                        "cause": "ci_timeout",
+                        "stage": "ci",
+                        "issue_number": 9,
+                        "subtask_id": "task-9",
+                        "source_sha": sha,
+                        "attempt": 2,
+                        "max_attempts": 3,
+                        "next_retry_at": "2026-11-14T08:00:00Z",
+                        "stop_confirmed": True,
+                        "rollback_confirmed": False,
+                        "side_effect_state": "unknown",
+                        "output_tail": "tail",
+                        "detail": "/home/micro/secret",
+                    }
+                ],
+                "child_review_gate_failures": [
+                    {"reason": "stale_read_gate: stale", "issue_number": 9}
+                ],
+            },
+        },
+    }
+    saved = build_parent_integration(
+        repository_id="Saltmu/orchestune",
+        parent_issue=2,
+        observed_at="2026-11-14T07:00:00Z",
+        apply=True,
+        integrator_report=report,
+    )
+    assert saved["executed"] is True
+    assert saved["status"] == "execution_timed_out"
+    assert saved["failures"] == [
+        {
+            "kind": "execution",
+            "cause": "ci_timeout",
+            "stage": "ci",
+            "attempt": 2,
+            "max_attempts": 3,
+            "next_retry_at": "2026-11-14T08:00:00Z",
+            "stop_confirmed": True,
+            "rollback_confirmed": False,
+            "side_effect_state": "unknown",
+            "target": {"issue_number": 9, "subtask_id": "task-9", "source_sha": sha},
+        }
+    ]
+    assert "other" not in json.dumps(saved)
+    missing = build_parent_integration(
+        repository_id=None,
+        parent_issue=3,
+        observed_at="2026-11-14T07:00:00Z",
+        apply=True,
+        integrator_report=report,
+    )
+    assert missing["executed"] is False
+    assert missing["status"] is None
+    idle = build_parent_integration(
+        repository_id="Saltmu/orchestune",
+        parent_issue=2,
+        observed_at="2026-11-14T07:00:00Z",
+        apply=False,
+        integrator_report=None,
+    )
+    assert idle["mode"] == "preview"
+    assert idle["status"] is None
+    assert idle["executed"] is False
 
 
 @pytest.mark.parametrize(
