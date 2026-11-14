@@ -862,7 +862,7 @@ def _unique(values: list[str]) -> list[str]:
 def _target_line(item: dict[str, Any]) -> str:
     target = item.get("target")
     if not isinstance(target, dict):
-        return ""
+        target = {}
     parts: list[str] = []
     number = target.get("issue_number")
     if isinstance(number, int) and not isinstance(number, bool):
@@ -871,10 +871,12 @@ def _target_line(item: dict[str, Any]) -> str:
     if isinstance(subtask, str) and subtask and not subtask.startswith("/"):
         parts.append(subtask)
     stage = item.get("stage")
-    if isinstance(stage, str) and stage:
+    if isinstance(stage, str) and stage and not stage.startswith("/"):
         parts.append(f"段階:{stage}")
     if not parts:
         return ""
+    if parts[0].startswith("段階:"):
+        return parts[0]
     return "対象: " + " / ".join(parts)
 
 

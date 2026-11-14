@@ -813,6 +813,16 @@ class TestParentIntegrationStatus:
         assert "自動再試行" not in text
         assert "次回可能日時" not in text
 
+    def test_recorded_stage_is_shown_without_a_child_target(self):
+        text = _parent_text(
+            _parent_payload(
+                "execution_indeterminate",
+                [{"kind": "execution", "stage": "PrepareTasksStep"}],
+            )
+        )
+        assert "段階:PrepareTasksStep" in text
+        assert "Issue #" not in text
+
     @pytest.mark.parametrize(
         "status",
         ["execution_cleanup_failed", "execution_indeterminate"],
