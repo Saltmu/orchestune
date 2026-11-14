@@ -25,6 +25,7 @@ from orchestune.status_snapshot import (
     _read_log_tail,
     build_status_snapshot,
     compact_status_attention,
+    format_parent_integration,
     format_status_report,
     guidance_from_status,
 )
@@ -704,3 +705,178 @@ class TestBuildStatusSnapshotReadsNestedViews(_FakeForgeTest):
         assert actual == expected
         assert actual.worktrees[0].external_id == "cloud-1"
         assert actual.worktrees[0].elapsed_seconds == 100.0
+
+
+def _parent_payload(status, failures, **overrides):
+    record = {
+        "version": 1,
+        "repository_id": "Saltmu/orchestune",
+        "parent_issue": 100,
+        "observed_at": "2020-01-01T00:00:00Z",
+        "mode": "apply",
+        "executed": True,
+        "status": status,
+        "failures": failures,
+    }
+    record.update(overrides)
+    return {"parent_integration": record}
+
+
+def _parent_text(payload, **kwargs):
+    values = {
+        "parent_issue": 100,
+        "repository_id": "Saltmu/orchestune",
+        "evidence_path": "result.json",
+    }
+    values.update(kwargs)
+    return format_parent_integration(payload, **values)
+
+
+def test_display_reasons_match_the_saved_child_review_set():
+    from orchestune.integrator.types import CHILD_REVIEW_REPORT_REASONS
+    from orchestune.status_snapshot import _CHILD_REVIEW_REASONS
+
+    assert _CHILD_REVIEW_REASONS == CHILD_REVIEW_REPORT_REASONS
+
+
+class TestParentIntegrationStatus:
+    def test_review_shortage_names_recorded_child_and_sha(self):
+        text = _parent_text(
+            _parent_payload(
+                "review_gate_blocked",
+                [
+                    {
+                        "kind": "child_review_gate",
+                        "reason": "sha_mismatch",
+                        "issue_number": 10,
+                        "expected_sha": "abc",
+                        "integration_pr_number": 55,
+                    }
+                ],
+            )
+        )
+        assert "観測: 最後の観測" in text
+        assert "確認済みの子 Issue: #10" in text
+        assert "対象 SHA: abc" in text
+        assert "統合 PR: #55" in text
+        assert "レビュー証跡を確認してください" in text
+        assert "--child-review-gate" not in text
+        assert "差し替え" not in text
+        assert "解消しました" not in text
+
+    def test_lookup_unknown_does_not_claim_missing_evidence(self):
+        text = _parent_text(
+            _parent_payload(
+                "review_gate_blocked",
+                [{"kind": "child_review_gate", "reason": "lookup_unknown"}],
+            )
+        )
+        assert "API を再確認してください" in text
+        assert "証跡不足" not in text
+        assert "確認済みの子 Issue" not in text
+        assert "統合 PR" not in text
+
+    def test_retryable_timeout_shows_the_recorded_next_time(self):
+        text = _parent_text(
+            _parent_payload(
+                "execution_timed_out",
+                [
+                    {
+                        "kind": "execution",
+                        "cause": "ci_timeout",
+                        "stage": "ci",
+                        "next_retry_at": "2026-11-14T08:00:00Z",
+                        "target": {"issue_number": 9, "subtask_id": "task-9"},
+                    }
+                ],
+            )
+        )
+        assert "次回可能日時: 2026-11-14T08:00:00Z" in text
+        assert "再試行条件が成立した場合" in text
+        assert "対象: Issue #9 / task-9 / 段階:ci" in text
+        assert "再試行しました" not in text
+
+    def test_exhausted_retry_asks_the_operator_to_check_the_stage(self):
+        text = _parent_text(
+            _parent_payload(
+                "execution_retry_exhausted",
+                [
+                    {
+                        "kind": "execution",
+                        "stage": "merge",
+                        "target": {"subtask_id": "task-9"},
+                    }
+                ],
+            )
+        )
+        assert "失敗段階を確認してください" in text
+        assert "自動再試行" not in text
+        assert "次回可能日時" not in text
+
+    @pytest.mark.parametrize(
+        "status",
+        ["execution_cleanup_failed", "execution_indeterminate"],
+    )
+    def test_unconfirmed_cleanup_names_each_missing_check(self, status):
+        text = _parent_text(
+            _parent_payload(
+                status,
+                [
+                    {
+                        "kind": "execution",
+                        "stop_confirmed": False,
+                        "rollback_confirmed": True,
+                        "side_effect_state": "unknown",
+                    }
+                ],
+            )
+        )
+        assert "停止は未確認" in text
+        assert "書き込みは未確認" in text
+        assert "rollbackは未確認" not in text
+        assert "運用者が状態を照合してください" in text
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {"selected": []},
+            {"parent_integration": {"version": 0}},
+            {"parent_integration": {"version": 2, "mode": "apply", "executed": True}},
+            _parent_payload("review_gate_blocked", [], mode="preview"),
+            _parent_payload("success", []),
+            _parent_payload("review_gate_blocked", [], executed=False),
+            _parent_payload(
+                "review_gate_blocked",
+                [
+                    {
+                        "kind": "child_review_gate",
+                        "reason": "sha_mismatch",
+                        "issue_number": 10,
+                    }
+                ],
+                parent_issue=8,
+            ),
+            _parent_payload(
+                "review_gate_blocked",
+                [
+                    {
+                        "kind": "child_review_gate",
+                        "reason": "sha_mismatch",
+                        "issue_number": 10,
+                    }
+                ],
+                repository_id="other/repo",
+            ),
+            _parent_payload(
+                "review_gate_blocked",
+                [{"kind": "child_review_gate", "reason": "stale_read_gate: stale"}],
+            ),
+        ],
+    )
+    def test_unusable_observations_stay_unknown(self, payload):
+        text = _parent_text(payload)
+        assert "現在の状態は不明" in text
+        assert "対象親の apply 結果を確認してください。" in text
+        assert "最後の観測" not in text
+        assert "確認済みの子 Issue" not in text
+        assert "対象 SHA" not in text

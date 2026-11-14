@@ -9,6 +9,8 @@ status`（`monitor.py`）が表示する`StatusSnapshot`を構築する。CLI配
 
 from __future__ import annotations
 
+import re
+import subprocess
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -18,6 +20,7 @@ from typing import Any
 from orchestune.branch_naming import parse_task_branch_name
 from orchestune.forge import Forge, GitHubForge
 from orchestune.infra.cli_guidance import render_guidance
+from orchestune.infra.git_cli import run_git
 from orchestune.infra.process_utils import is_process_alive
 from orchestune.labels import StatusLabel
 from orchestune.ledger.run_state import load_run_state
@@ -521,3 +524,361 @@ _OUTLOOK = {
     MonitorState.MANUAL_MERGE_REQUIRED: _read_logs,
     MonitorState.UNKNOWN: _unknown_state,
 }
+
+_OWNER_REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_LOOKUP_UNKNOWN = "lookup_unknown"
+_CHILD_REVIEW_REASONS = frozenset(
+    {
+        "legacy",
+        "skipped",
+        "not_pass",
+        "sha_mismatch",
+        "absent",
+        "lookup_unknown",
+        "integration_evidence_missing",
+    }
+)
+_EVIDENCE_REASONS = _CHILD_REVIEW_REASONS - {_LOOKUP_UNKNOWN}
+_EXECUTION_STATUSES = frozenset(
+    {
+        "execution_timed_out",
+        "execution_retry_exhausted",
+        "execution_cleanup_failed",
+        "execution_indeterminate",
+    }
+)
+_PARENT_STATUSES = frozenset({"review_gate_blocked", *_EXECUTION_STATUSES})
+
+
+def observe_repository_id(cwd: Path | None = None, forge: Any = None) -> str | None:
+    """owner/repo for this checkout, or the Forge slug when origin cannot be read."""
+    slug = _slug_from_origin(cwd)
+    if slug is not None:
+        return slug
+    return _slug_from_forge(forge)
+
+
+def format_parent_integration(
+    payload: object,
+    *,
+    parent_issue: int,
+    repository_id: str | None,
+    evidence_path: str,
+) -> str:
+    """Text for one saved parent integration. TTY and plain use the same string."""
+    record = _usable_parent_record(
+        payload, parent_issue=parent_issue, repository_id=repository_id
+    )
+    if record is None:
+        return _unknown_parent_text(parent_issue, evidence_path)
+    return _known_parent_text(
+        record, parent_issue=parent_issue, evidence_path=evidence_path
+    )
+
+
+def _slug_from_origin(cwd: Path | None) -> str | None:
+    try:
+        result = run_git(["remote", "get-url", "origin"], cwd=cwd, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    return _parse_github_slug(result.stdout.strip())
+
+
+def _parse_github_slug(url: str) -> str | None:
+    text = url.strip()
+    if text.endswith(".git"):
+        text = text[: -len(".git")]
+    index = text.lower().find("github.com")
+    if index < 0:
+        return None
+    parts = [
+        part
+        for part in text[index + len("github.com") :].lstrip(":/").split("/")
+        if part
+    ]
+    if len(parts) != 2 or not _OWNER_REPO.fullmatch(f"{parts[0]}/{parts[1]}"):
+        return None
+    return f"{parts[0]}/{parts[1]}"
+
+
+def _slug_from_forge(forge: Any) -> str | None:
+    if forge is None or not callable(getattr(type(forge), "get_repository_slug", None)):
+        return None
+    try:
+        value = forge.get_repository_slug()
+    except Exception:  # noqa: BLE001 - boundary: an unreadable Forge identity stays unknown
+        return None
+    if isinstance(value, str) and _OWNER_REPO.fullmatch(value):
+        return value
+    return None
+
+
+def _unknown_parent_text(parent_issue: int, evidence_path: str) -> str:
+    return "\n".join(
+        (
+            f"親 Issue: #{parent_issue}",
+            "現在の状態は不明",
+            "対象親の apply 結果を確認してください。",
+            f"証拠ファイル: {evidence_path}",
+        )
+    )
+
+
+def _usable_parent_record(
+    payload: object, *, parent_issue: int, repository_id: str | None
+) -> dict[str, Any] | None:
+    if not isinstance(payload, dict):
+        return None
+    record = payload.get("parent_integration")
+    if not _parent_record_matches(record, parent_issue, repository_id):
+        return None
+    assert isinstance(record, dict)
+    if record["status"] == "review_gate_blocked" and not _child_failures(record):
+        return None
+    return record
+
+
+def _parent_record_matches(
+    record: object, parent_issue: int, repository_id: str | None
+) -> bool:
+    if not isinstance(record, dict) or record.get("version") != 1:
+        return False
+    if record.get("mode") != "apply" or record.get("executed") is not True:
+        return False
+    if not repository_id or record.get("repository_id") != repository_id:
+        return False
+    if record.get("parent_issue") != parent_issue:
+        return False
+    if not isinstance(record.get("observed_at"), str) or not record["observed_at"]:
+        return False
+    return record.get("status") in _PARENT_STATUSES
+
+
+def _known_parent_text(
+    record: dict[str, Any], *, parent_issue: int, evidence_path: str
+) -> str:
+    reasons = _recorded_reasons(record)
+    lines = [
+        f"親 Issue: #{parent_issue}",
+        "観測: 最後の観測",
+        f"観測時刻: {record['observed_at']}",
+        "モード: apply",
+        f"記録上の理由: {', '.join(reasons)}",
+        *_confirmed_lines(record),
+        render_guidance(_parent_guidance(record, parent_issue, reasons)),
+        f"証拠ファイル: {evidence_path}",
+    ]
+    return "\n".join(lines)
+
+
+def _recorded_reasons(record: dict[str, Any]) -> tuple[str, ...]:
+    if record["status"] != "review_gate_blocked":
+        return (str(record["status"]),)
+    return tuple(
+        str(item["reason"])
+        for item in _child_failures(record)
+        if item.get("reason") in _CHILD_REVIEW_REASONS
+    )
+
+
+def _child_failures(record: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = record.get("failures")
+    if not isinstance(raw, list):
+        return []
+    return [
+        item
+        for item in raw
+        if isinstance(item, dict)
+        and item.get("kind") == "child_review_gate"
+        and item.get("reason") in _CHILD_REVIEW_REASONS
+    ]
+
+
+def _execution_failures(record: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = record.get("failures")
+    if not isinstance(raw, list):
+        return []
+    return [
+        item
+        for item in raw
+        if isinstance(item, dict) and item.get("kind") == "execution"
+    ]
+
+
+def _confirmed_lines(record: dict[str, Any]) -> list[str]:
+    if record["status"] == "review_gate_blocked":
+        return _review_fact_lines(_child_failures(record))
+    return _execution_fact_lines(_execution_failures(record))
+
+
+def _review_fact_lines(failures: list[dict[str, Any]]) -> list[str]:
+    issues = _unique(_labeled_numbers(failures, "issue_number"))
+    shas = _unique(_strings(failures, "expected_sha"))
+    prs = _unique(_labeled_numbers(failures, "integration_pr_number"))
+    lines: list[str] = []
+    if issues:
+        lines.append("確認済みの子 Issue: " + ", ".join(issues))
+    if shas:
+        lines.append("対象 SHA: " + ", ".join(shas))
+    if prs:
+        lines.append("統合 PR: " + ", ".join(prs))
+    return lines
+
+
+def _execution_fact_lines(failures: list[dict[str, Any]]) -> list[str]:
+    lines = [_target_line(item) for item in failures]
+    lines.extend(
+        f"次回可能日時: {when}" for when in _unique(_strings(failures, "next_retry_at"))
+    )
+    lines.extend(_unconfirmed_lines(failures))
+    return [line for line in lines if line]
+
+
+def _parent_guidance(
+    record: dict[str, Any], parent_issue: int, reasons: tuple[str, ...]
+) -> OperatorGuidance:
+    status = str(record["status"])
+    owner, progress, condition, explanation, actions = _parent_outlook(record)
+    return OperatorGuidance(
+        target=f"parent issue #{parent_issue}",
+        stage=status,
+        reason_codes=reasons,
+        explanation=explanation,
+        next_owner=owner,
+        progress=progress,
+        progress_condition=condition,
+        actions=actions,
+        references=(),
+        evidence_state=EvidenceState.CURRENT,
+        evidence_note="最後の観測です。経過時間では再試行済みや解消済みとは判断しません",
+    )
+
+
+def _parent_outlook(record: dict[str, Any]) -> _Outlook:
+    status = record["status"]
+    if status == "review_gate_blocked":
+        return _review_outlook(_child_failures(record))
+    if status == "execution_timed_out":
+        return _timed_out_outlook()
+    if status == "execution_retry_exhausted":
+        return _exhausted_outlook()
+    return _cleanup_outlook()
+
+
+def _review_outlook(failures: list[dict[str, Any]]) -> _Outlook:
+    actions: list[GuidanceAction] = []
+    if any(item.get("reason") in _EVIDENCE_REASONS for item in failures):
+        actions.append(
+            GuidanceAction(
+                description="記録された子 Issue と SHA のレビュー証跡を確認してください。"
+            )
+        )
+    if any(item.get("reason") == _LOOKUP_UNKNOWN for item in failures):
+        actions.append(GuidanceAction(description="API を再確認してください。"))
+    return (
+        NextOwner.USER,
+        ProgressOutlook.MANUAL,
+        None,
+        "記録された子レビュー証跡の結果です",
+        tuple(actions),
+    )
+
+
+def _timed_out_outlook() -> _Outlook:
+    return (
+        NextOwner.ENGINE,
+        ProgressOutlook.CONDITIONAL,
+        "dispatcher が稼働し、再試行条件が成立した場合",
+        "dispatcher が稼働し、再試行条件が成立した場合に進みます",
+        (
+            GuidanceAction(
+                description="dispatcher が稼働し、再試行条件が成立した場合に進みます。"
+            ),
+        ),
+    )
+
+
+def _exhausted_outlook() -> _Outlook:
+    return (
+        NextOwner.USER,
+        ProgressOutlook.MANUAL,
+        None,
+        "記録された対象と失敗段階の確認が必要です",
+        (GuidanceAction(description="記録された対象と失敗段階を確認してください。"),),
+    )
+
+
+def _cleanup_outlook() -> _Outlook:
+    return (
+        NextOwner.USER,
+        ProgressOutlook.MANUAL,
+        None,
+        "停止・rollback・書き込みの確認状態を照合してください",
+        (GuidanceAction(description="運用者が状態を照合してください。"),),
+    )
+
+
+def _labeled_numbers(failures: list[dict[str, Any]], key: str) -> list[str]:
+    labels: list[str] = []
+    for item in failures:
+        value = item.get(key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            labels.append(f"#{value}")
+    return labels
+
+
+def _strings(failures: list[dict[str, Any]], key: str) -> list[str]:
+    values: list[str] = []
+    for item in failures:
+        value = item.get(key)
+        if (
+            isinstance(value, str)
+            and value
+            and "\\" not in value
+            and not value.startswith("/")
+        ):
+            values.append(value)
+    return values
+
+
+def _unique(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for value in values:
+        if value not in seen:
+            seen.add(value)
+            ordered.append(value)
+    return ordered
+
+
+def _target_line(item: dict[str, Any]) -> str:
+    target = item.get("target")
+    if not isinstance(target, dict):
+        return ""
+    parts: list[str] = []
+    number = target.get("issue_number")
+    if isinstance(number, int) and not isinstance(number, bool):
+        parts.append(f"Issue #{number}")
+    subtask = target.get("subtask_id")
+    if isinstance(subtask, str) and subtask and not subtask.startswith("/"):
+        parts.append(subtask)
+    stage = item.get("stage")
+    if isinstance(stage, str) and stage:
+        parts.append(f"段階:{stage}")
+    if not parts:
+        return ""
+    return "対象: " + " / ".join(parts)
+
+
+def _unconfirmed_lines(failures: list[dict[str, Any]]) -> list[str]:
+    notes: list[str] = []
+    for item in failures:
+        if item.get("stop_confirmed") is not True:
+            notes.append("停止は未確認")
+        if item.get("rollback_confirmed") is not True:
+            notes.append("rollbackは未確認")
+        if item.get("side_effect_state") != "none":
+            notes.append("書き込みは未確認")
+    return _unique(notes)

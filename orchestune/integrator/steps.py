@@ -71,6 +71,7 @@ from orchestune.integrator.types import (
     IntegrationContext,
     IntegrationReport,
     IntegrationStatus,
+    project_child_review_gate_report,
 )
 from orchestune.integrator.worktree import IntegrationWorktree
 from orchestune.labels import StatusLabel
@@ -333,7 +334,7 @@ class PushTempBranchStep(IntegrationComponent):
         decision = _decide_child_review_gate(ctx)
         if not decision.passed:
             AutoMergeChildIntegrationStep().handle_review_gate_block(ctx, decision)
-            return {"status": IntegrationStatus.REVIEW_GATE_BLOCKED}
+            return project_child_review_gate_report(ctx, decision)
         if ctx.attempt_identity is None:
             return {
                 "status": IntegrationStatus.FAILED_TO_PUSH_TEMP_BRANCH,
@@ -410,7 +411,7 @@ class SemanticReviewStep(IntegrationComponent):
         decision = _decide_child_review_gate(ctx)
         if not decision.passed:
             AutoMergeChildIntegrationStep().handle_review_gate_block(ctx, decision)
-            return {"status": IntegrationStatus.REVIEW_GATE_BLOCKED}
+            return project_child_review_gate_report(ctx, decision)
 
         if ctx.semantic_review_state is not None:
             error = validate_read_finalization(ctx)
@@ -651,10 +652,7 @@ class AutoMergeChildIntegrationStep(IntegrationComponent):
             return None
 
         self.handle_review_gate_block(ctx, decision)
-        return {
-            "status": IntegrationStatus.REVIEW_GATE_BLOCKED,
-            "auto_merged": False,
-        }
+        return project_child_review_gate_report(ctx, decision)
 
     def _build_child_review_gate_inputs(
         self, ctx: IntegrationContext
