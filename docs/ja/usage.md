@@ -1243,6 +1243,18 @@ PR/Outcomeの完了判定（MERGED/closed PR、handoff-ready）は成果物の�
 
 `--watch` で詳細が画面に収まらないときは、対象と要対応の有無を残し、詳細の入口として `orchestune status` を示します。TTY でも plain でも案内の意味は同じです。status に JSON 出力は追加しません。
 
+### 親統合の最後の観測
+
+`orchestune status --parent-issue <N> --dispatch-report <result.json>` は、dispatch が保存した一つの結果ファイルから、その親の統合停止理由と次の操作を表示します。結果ファイルは dispatch の stdout に出る `report saved:` の絶対パスです。`--report-path` を省略したときの既定は `.orchestune/reports/dispatch/parent-<N>/<run-id>/result.json` です。
+
+```text
+orchestune status --parent-issue 100 --dispatch-report .orchestune/reports/dispatch/parent-100/<run-id>/result.json
+```
+
+`--parent-issue` と `--dispatch-report` はセットです。片方だけ、または `--watch` との併用は引数エラーです。従来の `orchestune status` と `orchestune status --watch` は active worktree の表示のままです。
+
+この表示は最後の観測です。経過時間だけでは再試行済みや解消済みとは判断しません。active worktree が無くても結果ファイルだけで判断します。子 Issue 番号、対象 SHA、統合 PR、次回可能日時が記録に無ければ、表示もしません。preview、別の親、別のリポジトリ、旧形式、未知の版、破損、統合未実行、対象外の理由は「現在の状態は不明」とし、その親の apply 結果を確認するよう案内します。読み取りは Issue を更新せず、復旧もワーカー起動も状態保存もしません。
+
 ## 人手レビュー停止のマーカー集計（`orchestune blocked`）
 
 `orchestune blocked` は、オープンかつ `status:blocked-human-review` の Issue コメントに現れた既知マーカーを数えます。読み取り専用です。Issue、ラベル、コメントは変更しません。関連する PR や親 Issue は辿りません。マーカーの件数は停止理由の判定には使いません。

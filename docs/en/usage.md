@@ -1297,6 +1297,18 @@ use the operator-confirmed external recovery procedure above.
 
 When `--watch` cannot fit the details, the frame keeps each target, whether attention is needed, and `orchestune status` as the way to read the rest. TTY and plain output carry the same meaning. Status does not gain a JSON mode.
 
+### Last observation of a parent integration
+
+`orchestune status --parent-issue <N> --dispatch-report <result.json>` reads one result file that dispatch saved and shows why that parent's integration stopped and what to do next. The result file is the absolute path printed as `report saved:` on dispatch stdout. When `--report-path` is omitted, the default is `.orchestune/reports/dispatch/parent-<N>/<run-id>/result.json`.
+
+```text
+orchestune status --parent-issue 100 --dispatch-report .orchestune/reports/dispatch/parent-100/<run-id>/result.json
+```
+
+`--parent-issue` and `--dispatch-report` are a pair. Passing only one, or combining either with `--watch`, is an argument error. Plain `orchestune status` and `orchestune status --watch` still show active worktrees.
+
+The text is the last observation. Elapsed time alone does not mean a retry already ran or the block is cleared. The file is enough when no worktree is active. A child Issue number, target SHA, integration PR, or next retry time that is absent from the record is left off the screen. Preview, another parent, another repository, an old file, an unknown version, a corrupt file, an integration that did not run, and a reason outside this view all say the current state is unknown and point at that parent's apply result. The read does not update Issues, recover state, start workers, or save state.
+
 ## Blocked-human-review marker census (`orchestune blocked`)
 
 `orchestune blocked` counts known markers on comments of open issues labeled `status:blocked-human-review`. It is read-only. It does not change issues, labels, or comments, and it does not follow related pull requests or parent issues. The counts are not a judgment of why work stopped.

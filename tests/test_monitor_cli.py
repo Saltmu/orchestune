@@ -7,10 +7,11 @@
 """
 
 import io
+import json
 import os
 import re
 import time
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -655,3 +656,143 @@ def _worktree_status(started_at: float):
         log_tail=[],
         state=MonitorState.RUNNING,
     )
+
+
+def _saved_parent_report(path, repository_id):
+    path.write_text(
+        json.dumps(
+            {
+                "selected": [],
+                "parent_integration": {
+                    "version": 1,
+                    "repository_id": repository_id,
+                    "parent_issue": 100,
+                    "observed_at": "2020-01-01T00:00:00Z",
+                    "mode": "apply",
+                    "executed": True,
+                    "status": "review_gate_blocked",
+                    "failures": [
+                        {
+                            "kind": "child_review_gate",
+                            "reason": "absent",
+                            "issue_number": 10,
+                            "expected_sha": "abc",
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+class TestParentIntegrationCli:
+    def test_flags_must_be_paired_and_cannot_watch(self, tmp_path):
+        path = tmp_path / "result.json"
+        path.write_text("{}", encoding="utf-8")
+        with pytest.raises(SystemExit) as alone:
+            main(["--parent-issue", "100"])
+        assert alone.value.code == 2
+        with pytest.raises(SystemExit) as report_only:
+            main(["--dispatch-report", str(path)])
+        assert report_only.value.code == 2
+        with pytest.raises(SystemExit) as watched:
+            main(
+                [
+                    "--parent-issue",
+                    "100",
+                    "--dispatch-report",
+                    str(path),
+                    "--watch",
+                ]
+            )
+        assert watched.value.code == 2
+
+    def test_tty_and_plain_print_the_same_observation(
+        self, tmp_path, _stub_get_issue_labels
+    ):
+        from orchestune.status_snapshot import observe_repository_id
+
+        path = tmp_path / "result.json"
+        before = None
+        _saved_parent_report(path, observe_repository_id())
+        before = path.read_bytes()
+        args = ["--parent-issue", "100", "--dispatch-report", str(path)]
+        plain, plain_stream = _output(tty=False)
+        rich, rich_stream = _output(tty=True)
+        assert main(args, forge=_stub_get_issue_labels, output=plain) == 0
+        assert main(args, forge=_stub_get_issue_labels, output=rich) == 0
+        plain_text = plain_stream.getvalue()
+        rich_text = ANSI.sub("", rich_stream.getvalue())
+        assert "確認済みの子 Issue: #10" in plain_text
+        assert plain_text.strip() == rich_text.strip()
+        assert path.read_bytes() == before
+        _stub_get_issue_labels.add_comment.assert_not_called()
+        _stub_get_issue_labels.add_label.assert_not_called()
+        _stub_get_issue_labels.get_issue_labels.assert_not_called()
+
+    def test_corrupt_report_is_unknown_and_does_not_write(self, tmp_path, capsys):
+        path = tmp_path / "result.json"
+        path.write_text("{", encoding="utf-8")
+        assert main(["--parent-issue", "100", "--dispatch-report", str(path)]) == 0
+        assert "現在の状態は不明" in capsys.readouterr().out
+        assert path.read_text(encoding="utf-8") == "{"
+
+    def test_saved_dispatch_report_reaches_the_root_cli(self, tmp_path, capsys):
+        from datetime import UTC, datetime
+
+        from orchestune.cli import main as root_main
+        from orchestune.dispatch import dispatcher as dispatcher_module
+        from orchestune.dispatch.dispatcher import (
+            _DispatcherRunResult,
+            _execute_and_save,
+        )
+        from orchestune.dispatch.reporting.report_output import reserve_report
+        from orchestune.status_snapshot import observe_repository_id
+        from tests.test_dispatch_report_output import _report, config
+
+        cfg = config(tmp_path, tmp_path / "result.json")
+        cfg.apply = True
+        result = _DispatcherRunResult(
+            report=_report(),
+            post_cycle_results=[],
+            integrator_run_report={
+                "status": "review_gate_blocked",
+                "child_review_gate_failures": [
+                    {
+                        "reason": "sha_mismatch",
+                        "issue_number": 10,
+                        "expected_sha": "abc",
+                    }
+                ],
+            },
+        )
+        with (
+            patch.object(dispatcher_module, "_run_dispatcher", return_value=result),
+            patch.object(dispatcher_module, "_emit_dispatcher_report"),
+            patch.object(
+                dispatcher_module,
+                "_utc_now",
+                return_value=datetime(2026, 11, 14, 7, 0, tzinfo=UTC),
+            ),
+            reserve_report(cfg, "run") as output,
+        ):
+            assert _execute_and_save(cfg, output) == 0
+        saved = json.loads(output.path.read_text(encoding="utf-8"))
+        assert "selected" in saved
+        assert saved["parent_integration"]["repository_id"] == observe_repository_id()
+        import sys
+
+        sys.argv = [
+            "orchestune",
+            "status",
+            "--parent-issue",
+            "1070",
+            "--dispatch-report",
+            str(output.path),
+        ]
+        root_main()
+        text = capsys.readouterr().out
+        assert "確認済みの子 Issue: #10" in text
+        assert "対象 SHA: abc" in text
+        assert json.loads(output.path.read_text(encoding="utf-8")) == saved

@@ -5,6 +5,7 @@ import os
 from collections.abc import Callable
 from contextlib import ExitStack
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -59,6 +60,8 @@ from orchestune.dispatch.targets import (
 from orchestune.forge import ForgeAuthError
 from orchestune.infra.process_utils import platform_ci_script_relative
 from orchestune.infra.repository_config import find_and_load_config_file
+from orchestune.integrator.types import CHILD_REVIEW_REPORT_REASONS
+from orchestune.status_snapshot import observe_repository_id
 
 _build_arg_parser = build_arg_parser
 load_config_file = find_and_load_config_file
@@ -408,6 +411,166 @@ def _main_with_sink(
         return 1
 
 
+_COMPOSITE_STATUSES = frozenset(
+    {"composite_success", "composite_partial_success", "composite_failure"}
+)
+_EXECUTION_FIELDS = (
+    "cause",
+    "stage",
+    "attempt",
+    "max_attempts",
+    "next_retry_at",
+    "stop_confirmed",
+    "rollback_confirmed",
+    "side_effect_state",
+)
+_TARGET_FIELDS = ("issue_number", "subtask_id", "source_sha")
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+def build_parent_integration(
+    *,
+    repository_id: str | None,
+    parent_issue: int | None,
+    observed_at: str,
+    apply: bool,
+    integrator_report: Any,
+) -> dict[str, Any]:
+    """One parent observation. Missing integration is not stored as success."""
+    selected, executed = _select_parent_report(integrator_report, parent_issue)
+    status = _integration_status(selected) if executed else None
+    failures = _project_saved_failures(selected) if executed and selected else []
+    return {
+        "version": 1,
+        "repository_id": repository_id,
+        "parent_issue": parent_issue,
+        "observed_at": observed_at,
+        "mode": "apply" if apply else "preview",
+        "executed": executed,
+        "status": status,
+        "failures": failures,
+    }
+
+
+def _select_parent_report(
+    report: Any, parent_issue: int | None
+) -> tuple[dict[str, Any] | None, bool]:
+    if not isinstance(report, dict):
+        return None, False
+    status = _status_text(report.get("status"))
+    details = report.get("details")
+    if status not in _COMPOSITE_STATUSES:
+        return report, True
+    if not isinstance(parent_issue, int) or isinstance(parent_issue, bool):
+        return None, False
+    if not isinstance(details, dict):
+        return None, False
+    chosen = details.get(f"issue_{parent_issue}")
+    if not isinstance(chosen, dict):
+        return None, False
+    return chosen, True
+
+
+def _integration_status(report: dict[str, Any] | None) -> str | None:
+    if report is None:
+        return None
+    return _status_text(report.get("status"))
+
+
+def _status_text(status: Any) -> str | None:
+    value = getattr(status, "value", status)
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
+def _project_saved_failures(report: dict[str, Any]) -> list[dict[str, Any]]:
+    items = [
+        _child_review_item(report, raw)
+        for raw in _dict_list(report, "child_review_gate_failures")
+    ]
+    items.extend(
+        _execution_item(raw) for raw in _dict_list(report, "execution_failures")
+    )
+    return [item for item in items if item]
+
+
+def _dict_list(report: dict[str, Any], key: str) -> list[dict[str, Any]]:
+    raw = report.get(key)
+    if not isinstance(raw, list):
+        return []
+    return [item for item in raw if isinstance(item, dict)]
+
+
+def _child_review_item(report: dict[str, Any], raw: dict[str, Any]) -> dict[str, Any]:
+    reason = raw.get("reason")
+    if reason not in CHILD_REVIEW_REPORT_REASONS:
+        return {}
+    item: dict[str, Any] = {"kind": "child_review_gate", "reason": reason}
+    number = _positive_int(raw.get("issue_number"))
+    if number is not None:
+        item["issue_number"] = number
+    sha = _plain_token(raw.get("expected_sha"))
+    if sha is not None:
+        item["expected_sha"] = sha
+    pr_number = _positive_int(report.get("integration_pr_number"))
+    if pr_number is not None:
+        item["integration_pr_number"] = pr_number
+    return item
+
+
+def _execution_item(raw: dict[str, Any]) -> dict[str, Any]:
+    item: dict[str, Any] = {"kind": "execution"}
+    for key in _EXECUTION_FIELDS:
+        if key not in raw:
+            continue
+        value = raw[key]
+        if (
+            isinstance(value, bool)
+            or value is None
+            or _plain_token(value)
+            or _whole_number(value)
+        ):
+            item[key] = value
+    target = _execution_target(raw)
+    if target:
+        item["target"] = target
+    return item
+
+
+def _execution_target(raw: dict[str, Any]) -> dict[str, Any]:
+    target: dict[str, Any] = {}
+    number = _positive_int(raw.get("issue_number"))
+    if number is not None:
+        target["issue_number"] = number
+    for key in _TARGET_FIELDS[1:]:
+        token = _plain_token(raw.get(key))
+        if token is not None:
+            target[key] = token
+    return target
+
+
+def _positive_int(value: Any) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return None
+
+
+def _whole_number(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _plain_token(value: Any) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    if "/" in value or "\\" in value or value.startswith("."):
+        return None
+    return value
+
+
 def _execute_and_save(config: DispatcherConfig, output: ReportOutput) -> int:
     try:
         result = _run_dispatcher(config)
@@ -434,6 +597,13 @@ def _execute_and_save(config: DispatcherConfig, output: ReportOutput) -> int:
             final_dict["post_cycle_results"] = [
                 phase.to_dict() for phase in result.post_cycle_results
             ]
+            final_dict["parent_integration"] = build_parent_integration(
+                repository_id=observe_repository_id(Path.cwd(), config.resolved_forge),
+                parent_issue=config.parent_issue_number,
+                observed_at=_utc_now().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                apply=config.apply,
+                integrator_report=result.integrator_run_report,
+            )
             output.save(final_dict)
         config.progress.emit(
             "report", "completed", reason=f"report saved: {output.path}"

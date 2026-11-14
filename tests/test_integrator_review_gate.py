@@ -423,3 +423,115 @@ class TestFetchChildReviewGateOutcome:
         result = fetch_child_review_gate_outcome(forge, 10)
         assert result.state == OutcomeLookupState.UNKNOWN
         assert result.record is None
+
+
+def _review_gate_context(tmp_path, forge, *, pr_number):
+    from orchestune.integrator.types import IntegrationContext, IntegratorConfig
+    from orchestune.models import Task
+    from orchestune.task_branch_resolution import ResolutionSource, TaskMergeReceipt
+
+    config = IntegratorConfig(
+        parent_issue_number=100,
+        repository_root=tmp_path,
+        apply=True,
+        forge=forge,
+        child_review_gate="required",
+    )
+    task = Task(
+        issue_number=10,
+        subtask_id="task-1",
+        footprint=(),
+        symbols=(),
+        risk=False,
+        priority="P0",
+        progress_partial=False,
+        status_labels=("status:done",),
+        created_at="2026-01-01T00:00:00Z",
+    )
+    receipt = TaskMergeReceipt(
+        issue_number=10,
+        branch_name="claude/issue-10-review",
+        fetched_commit_oid="a" * 40,
+        source=ResolutionSource.CANONICAL,
+    )
+    return IntegrationContext(
+        config=config,
+        repository_root=tmp_path,
+        original_root=tmp_path,
+        base_branch=config.base_branch,
+        temp_branch=config.temp_branch,
+        merged_tasks=["task-1"],
+        active_done_tasks=[task],
+        task_merge_receipts={10: receipt},
+        integration_pr_number=pr_number,
+    )
+
+
+class TestChildReviewProjection:
+    def test_three_paths_store_the_same_known_failure(self, tmp_path):
+        from orchestune.integrator.steps import (
+            AutoMergeChildIntegrationStep,
+            PushTempBranchStep,
+            SemanticReviewStep,
+        )
+        from orchestune.integrator.types import IntegrationStatus
+
+        forge = MagicMock()
+        forge.list_comments.return_value = []
+        forge.get_issue_labels.return_value = ()
+        expected = {
+            "reason": "absent",
+            "issue_number": 10,
+            "expected_sha": "a" * 40,
+        }
+        steps = (
+            PushTempBranchStep(),
+            SemanticReviewStep(),
+            AutoMergeChildIntegrationStep(),
+        )
+        for step in steps:
+            ctx = _review_gate_context(tmp_path, forge, pr_number=55)
+            report = step.execute(ctx)
+            assert report["status"] == IntegrationStatus.REVIEW_GATE_BLOCKED
+            assert report["child_review_gate_failures"] == [expected]
+            assert report["integration_pr_number"] == 55
+
+    def test_omits_pr_and_issue_when_they_were_not_recorded(self, tmp_path):
+        from orchestune.integrator.steps import PushTempBranchStep
+
+        forge = MagicMock()
+        forge.list_comments.return_value = []
+        forge.get_issue_labels.return_value = ()
+        ctx = _review_gate_context(tmp_path, forge, pr_number=None)
+        ctx.merged_tasks = ["missing-task"]
+        ctx.active_done_tasks = []
+        ctx.task_merge_receipts = {}
+        report = PushTempBranchStep().execute(ctx)
+        assert report["child_review_gate_failures"] == [
+            {"reason": "integration_evidence_missing"}
+        ]
+        assert "integration_pr_number" not in report
+        assert "issue_number" not in report["child_review_gate_failures"][0]
+
+    def test_stale_read_block_is_not_a_child_review_failure(self, tmp_path):
+        from orchestune.integrator.steps import AutoMergeChildIntegrationStep
+        from orchestune.integrator.types import IntegrationContext, IntegratorConfig
+
+        forge = MagicMock()
+        forge.list_comments.return_value = []
+        forge.get_issue_labels.return_value = ()
+        config = IntegratorConfig(
+            parent_issue_number=100,
+            repository_root=tmp_path,
+            apply=True,
+            forge=forge,
+        )
+        ctx = IntegrationContext(
+            config=config,
+            repository_root=tmp_path,
+            original_root=tmp_path,
+            base_branch=config.base_branch,
+            temp_branch=config.temp_branch,
+        )
+        report = AutoMergeChildIntegrationStep().handle_read_gate_block(ctx, "stale")
+        assert "child_review_gate_failures" not in report

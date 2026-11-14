@@ -21,6 +21,16 @@ from orchestune.infra.managed_process import ProcessRunner
 from orchestune.integrator.coordinator import IntegrationCoordinator
 from orchestune.integrator.execution import ExecutionState
 from orchestune.integrator.proofs import TaskIntegrationProof
+from orchestune.integrator.review_gate import (
+    REASON_ABSENT,
+    REASON_INTEGRATION_EVIDENCE_MISSING,
+    REASON_LEGACY,
+    REASON_LOOKUP_UNKNOWN,
+    REASON_NOT_PASS,
+    REASON_SHA_MISMATCH,
+    REASON_SKIPPED,
+    ChildReviewGateDecision,
+)
 from orchestune.integrator.tasks import DependencyIntegrationStates
 from orchestune.integrator.timeout_policy import (
     DEFAULT_INTEGRATION_CI_TIMEOUT_SECONDS,
@@ -108,7 +118,22 @@ class IntegrationReport(TypedDict, total=False):
     # #820: structured causes (stage, limits, attempt, stop/rollback/write state,
     # output tail) instead of a generic "CI verification failed".
     execution_failures: list[dict[str, Any]]
+    # #1849: known child-review failures only. Stale-read blocks stay off this key.
+    child_review_gate_failures: list[dict[str, Any]]
     details: dict[str, IntegrationReport]
+
+
+CHILD_REVIEW_REPORT_REASONS = frozenset(
+    {
+        REASON_LEGACY,
+        REASON_SKIPPED,
+        REASON_NOT_PASS,
+        REASON_SHA_MISMATCH,
+        REASON_ABSENT,
+        REASON_LOOKUP_UNKNOWN,
+        REASON_INTEGRATION_EVIDENCE_MISSING,
+    }
+)
 
 
 @dataclass(kw_only=True)
@@ -244,6 +269,30 @@ class IntegrationContext:
     def forge(self) -> Forge:
         assert self.config.forge is not None
         return self.config.forge
+
+
+def project_child_review_gate_report(
+    ctx: IntegrationContext, decision: ChildReviewGateDecision
+) -> IntegrationReport:
+    """Copy known child-review failures onto the blocked integration report."""
+    failures: list[dict[str, Any]] = []
+    for failure in decision.failures:
+        if failure.reason not in CHILD_REVIEW_REPORT_REASONS:
+            continue
+        item: dict[str, Any] = {"reason": failure.reason}
+        if failure.issue_number is not None:
+            item["issue_number"] = failure.issue_number
+        if failure.expected_sha:
+            item["expected_sha"] = failure.expected_sha
+        failures.append(item)
+    report: IntegrationReport = {
+        "status": IntegrationStatus.REVIEW_GATE_BLOCKED,
+        "auto_merged": False,
+        "child_review_gate_failures": failures,
+    }
+    if ctx.integration_pr_number is not None:
+        report["integration_pr_number"] = ctx.integration_pr_number
+    return report
 
 
 class IntegrationComponent(ABC):
