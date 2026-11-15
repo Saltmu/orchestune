@@ -9,7 +9,16 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
-from read_dependency_test_support import EMPTY_DECLARATION, SHA_HEAD
+from read_dependency_test_support import (
+    CLAIM_B,
+    EMPTY_DECLARATION,
+    MODIFY,
+    READER,
+    SHA_HEAD,
+    SHA_OTHER,
+    TWO_VERSIONS,
+)
+from read_dependency_test_support import REPOSITORY as READ_REPOSITORY
 
 from orchestune.context.contracts import (
     CORRECTION_MARKER,
@@ -436,58 +445,103 @@ def test_absent_and_unknown_fetches_stay_distinct() -> None:
     assert bad_repository.state is OutcomeLookupState.UNKNOWN
 
 
-def test_read_evidence_alone_is_not_stale_and_judgments_must_match() -> None:
+def _forward_candidate_report() -> tuple[str, str, str]:
+    """Return a real report digest, its head, and the reader evidence digest."""
+    from orchestune.read_dependencies.contracts import (
+        ReadContextInputs,
+        ReaderInput,
+        StaleVerdict,
+        WriterChanges,
+    )
+    from orchestune.read_dependencies.detection import detect_stale_reads
+
+    report = detect_stale_reads(
+        ReadContextInputs(
+            repository=READ_REPOSITORY,
+            parent_issue_number=1230,
+            parent_sha=SHA_OTHER,
+            candidate_head_sha=SHA_HEAD,
+            readers=(ReaderInput(identity=READER, evidence=TWO_VERSIONS),),
+            writers=(
+                WriterChanges(issue_number=11, claim_id=CLAIM_B, changes=(MODIFY,)),
+            ),
+        )
+    )
+    evidence_digest = TWO_VERSIONS.digest
+    assert report.digest is not None
+    assert evidence_digest is not None
+    assert report.digest != evidence_digest
+    assert report.verdict is StaleVerdict.CANDIDATE_STALE
+    assert report.readers[0].evidence_digest == evidence_digest
+    return report.digest, report.candidate_head_sha, evidence_digest
+
+
+def test_read_evidence_alone_is_not_stale() -> None:
     body = _outcome(
         head_sha=SHA_HEAD,
         claim_id="claim-reader",
         completion_id="completion-1",
         read_evidence=EMPTY_DECLARATION,
     )
-    digest = EMPTY_DECLARATION.digest
-    assert digest is not None
+    artifact = extract_shared_artifacts(_request((_comment("1", body),))).artifacts[0]
+
+    assert artifact.evidence_refs.read_evidence_digest == EMPTY_DECLARATION.digest
+    assert artifact.stale_status is ArtifactStaleStatus.UNKNOWN
+    assert artifact.proves_current_dependencies() is False
+
+
+def test_stale_status_follows_the_report_and_its_evidence() -> None:
+    report_digest, head, evidence_digest = _forward_candidate_report()
+    body = _outcome(
+        head_sha=SHA_HEAD,
+        claim_id="claim-reader",
+        completion_id="completion-1",
+        read_evidence=TWO_VERSIONS,
+    )
     comments = (_comment("1", body),)
     candidate = StaleJudgment(
-        target_commit=SHA_HEAD,
-        report_digest=digest,
+        target_commit=head,
+        report_digest=report_digest,
+        evidence_digest=evidence_digest,
         status=ArtifactStaleStatus.CANDIDATE_STALE,
     )
     confirmed = StaleJudgment(
-        target_commit=SHA_HEAD,
-        report_digest=digest,
+        target_commit=head,
+        report_digest=report_digest,
+        evidence_digest=evidence_digest,
         status=ArtifactStaleStatus.CONFIRMED_STALE,
+    )
+    swapped = StaleJudgment(
+        target_commit=head,
+        report_digest=evidence_digest,
+        evidence_digest=report_digest,
+        status=ArtifactStaleStatus.CANDIDATE_STALE,
     )
     wrong_head = StaleJudgment(
         target_commit="a" * 40,
-        report_digest=digest,
+        report_digest=report_digest,
+        evidence_digest=evidence_digest,
         status=ArtifactStaleStatus.CONFIRMED_STALE,
     )
-    wrong_digest = StaleJudgment(
-        target_commit=SHA_HEAD,
-        report_digest="f" * 64,
-        status=ArtifactStaleStatus.CANDIDATE_STALE,
-    )
 
-    alone = extract_shared_artifacts(_request(comments)).artifacts[0]
     marked = extract_shared_artifacts(
         _request(comments, stale_judgments=(candidate,))
     ).artifacts[0]
     accepted = extract_shared_artifacts(
         _request(comments, stale_judgments=(confirmed, confirmed))
     ).artifacts[0]
-    mismatched = extract_shared_artifacts(
-        _request(comments, stale_judgments=(wrong_head, wrong_digest))
+    masked = extract_shared_artifacts(
+        _request(comments, stale_judgments=(swapped, wrong_head))
     ).artifacts[0]
     conflict = extract_shared_artifacts(
         _request(comments, stale_judgments=(candidate, confirmed))
     ).artifacts[0]
 
-    assert alone.evidence_refs.read_evidence_digest == digest
-    assert alone.stale_status is ArtifactStaleStatus.UNKNOWN
+    assert marked.evidence_refs.read_evidence_digest == evidence_digest
     assert marked.stale_status is ArtifactStaleStatus.CANDIDATE_STALE
     assert accepted.stale_status is ArtifactStaleStatus.CONFIRMED_STALE
-    assert mismatched.stale_status is ArtifactStaleStatus.UNKNOWN
+    assert masked.stale_status is ArtifactStaleStatus.UNKNOWN
     assert conflict.stale_status is ArtifactStaleStatus.UNKNOWN
-    assert alone.proves_current_dependencies() is False
 
 
 def test_malformed_notes_and_bad_identity_do_not_invent_records() -> None:

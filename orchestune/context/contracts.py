@@ -145,10 +145,15 @@ class PlanMetadataSnapshot:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class StaleJudgment:
-    """A detection or validation result already matched to a head and digest."""
+    """A passed detection or validation result for one reader.
+
+    ``report_digest`` is the report hash. ``evidence_digest`` names the reader
+    evidence that report covers. Those hashes are different payloads.
+    """
 
     target_commit: str
     report_digest: str
+    evidence_digest: str
     status: ArtifactStaleStatus
 
 

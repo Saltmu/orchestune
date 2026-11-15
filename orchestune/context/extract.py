@@ -278,21 +278,32 @@ def _key_order(key: SharedArtifactKey) -> tuple[str, int, str, str]:
 
 def _stale_status(
     target_commit: str | None,
-    report_digest: str | None,
+    evidence_digest: str | None,
     judgments: Sequence[StaleJudgment],
 ) -> ArtifactStaleStatus:
-    if not target_commit or not report_digest:
+    if not target_commit or not evidence_digest:
         return ArtifactStaleStatus.UNKNOWN
     matched = [
         judgment.status
         for judgment in judgments
-        if judgment.target_commit == target_commit
-        and judgment.report_digest == report_digest
-        and isinstance(judgment.status, ArtifactStaleStatus)
+        if _judgment_applies(judgment, target_commit, evidence_digest)
     ]
     if not matched or any(status != matched[0] for status in matched):
         return ArtifactStaleStatus.UNKNOWN
     return matched[0]
+
+
+def _judgment_applies(
+    judgment: StaleJudgment, target_commit: str, evidence_digest: str
+) -> bool:
+    """Apply a judgment when its report names this head and this evidence."""
+    return bool(
+        judgment.target_commit == target_commit
+        and judgment.evidence_digest == evidence_digest
+        and judgment.report_digest
+        and isinstance(judgment.status, ArtifactStaleStatus)
+        and judgment.status is not ArtifactStaleStatus.UNKNOWN
+    )
 
 
 @dataclass(frozen=True, slots=True)
