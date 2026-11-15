@@ -10,6 +10,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "complete.cli",
             "cli",
             "config_wizard.cli",
+            "context.cli",
             "dag.cli",
             "dispatch.dispatcher",
             "dispatch.doctor.cli",
@@ -319,6 +320,8 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
     ),
     1: frozenset(
         {
+            "context.fetch",
+            "context.storage",
             "forge",
             "forge.admin",
             "forge.graphql_fallback",
@@ -375,8 +378,10 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "consistency.models",
             "consistency.vocabulary",
             "context",
+            "context.budget",
             "context.contracts",
             "context.extract",
+            "context.search",
             "dag",
             "dag.models",
             "config_contracts",

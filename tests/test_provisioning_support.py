@@ -184,6 +184,15 @@ class FakeForge:
     ) -> list[IssueRecord]:
         raise NotImplementedError
 
+    def list_issues_in_range(
+        self,
+        *,
+        since: str | None = None,
+        state: str = "open",
+        max_pages: int | None = None,
+    ) -> tuple[list[IssueRecord], bool]:
+        raise NotImplementedError
+
     def add_label(self, issue_number: int | str, label: str) -> None:
         raise NotImplementedError
 

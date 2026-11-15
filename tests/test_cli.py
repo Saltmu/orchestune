@@ -471,6 +471,7 @@ def test_cli_no_args_exits(capsys):
         "  skills    Install and manage Orchestune skills for AI assistants\n"
         "  scratch   Create scratch session directories for task artifacts\n"
         "  workflow  Check read-only advisory workflow gates\n"
+        "  context   Rebuild and export the local context index\n"
     )
 
 

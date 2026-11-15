@@ -372,6 +372,7 @@ class TestForgeProtocols:
             "update_issue_title",
             "close_issue",
             "list_issues_by_label",
+            "list_issues_in_range",
             "find_open_issues_by_exact_title",
             "find_issues_by_parent_metadata",
             "get_issue_reference",
