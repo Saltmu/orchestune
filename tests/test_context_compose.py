@@ -358,6 +358,49 @@ def test_no_parent_number_leaves_parent_sections_empty(tmp_path: Path) -> None:
     assert composed.tier1.dependencies == ()
 
 
+def test_provisioning_template_headings_fill_purpose_and_acceptance(
+    tmp_path: Path,
+) -> None:
+    templates = (
+        Path(".github/issue_template.md"),
+        Path("skills/orchestune-provision/resources/issue_template.md"),
+    )
+    for path in templates:
+        text = path.read_text(encoding="utf-8")
+        assert "## 概要 (Overview)" in text
+        assert "## 受け入れ基準 (Acceptance Criteria)" in text
+    body = """
+## 概要 (Overview)
+テンプレートの目的
+
+## 変更内容 (Proposed Changes)
+変更
+
+## 受け入れ基準 (Acceptance Criteria)
+テンプレートの受け入れ
+
+## Footprint
+```yaml
+subtask_id: child
+footprint:
+  - orchestune/context/compose.py
+symbols:
+  - compose_launch_context
+depends_on: []
+```
+"""
+    composed = compose_launch_context(
+        _Forge({1: _issue(1, body)}),
+        1,
+        index_path=tmp_path / "missing.sqlite3",
+    )
+
+    assert composed.context_status == "ready"
+    assert composed.tier1 is not None
+    assert composed.tier1.purpose == "テンプレートの目的"
+    assert composed.tier1.acceptance == "テンプレートの受け入れ"
+
+
 def test_corrupt_index_keeps_tier1(tmp_path: Path) -> None:
     index = tmp_path / "context-index.sqlite3"
     index.write_bytes(b"this is not a database")

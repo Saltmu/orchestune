@@ -307,13 +307,22 @@ def _heading_section(body: str, names: frozenset[str]) -> str:
         return ""
     matches = list(_HEADING.finditer(body))
     for index, match in enumerate(matches):
-        title = match.group(2).strip().casefold().rstrip(":：")
-        if title not in names:
+        if _heading_keys(match.group(2)).isdisjoint(names):
             continue
         start = match.end()
         end = matches[index + 1].start() if index + 1 < len(matches) else len(body)
         return body[start:end].strip()
     return ""
+
+
+def _heading_keys(title: str) -> frozenset[str]:
+    folded = title.strip().casefold().rstrip(":：")
+    keys = {folded}
+    if folded.endswith(")") and " (" in folded:
+        left, right = folded.rsplit(" (", 1)
+        keys.add(left.strip())
+        keys.add(right[:-1].strip())
+    return frozenset(keys)
 
 
 def _resolve_dependencies(
