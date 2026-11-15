@@ -217,6 +217,23 @@ def test_failed_integrity_check_keeps_the_old_index(
     assert list(tmp_path.glob("*.building")) == []
 
 
+def test_abandoned_building_file_is_replaced(tmp_path: Path) -> None:
+    path = tmp_path / "context-index.sqlite3"
+    abandoned = Path(f"{path}.building")
+    connection = sqlite3.connect(abandoned)
+    connection.execute("CREATE TABLE index_meta (id INTEGER PRIMARY KEY)")
+    connection.commit()
+    connection.close()
+
+    result = rebuild_context_index(
+        path, _snapshot(_artifact(1, "索引検索")), indexed_at="2026-01-02T00:00:00Z"
+    )
+
+    assert result.published is True
+    assert not abandoned.exists()
+    assert open_context_index(path).artifacts[0].title == "索引検索"
+
+
 def test_published_index_has_no_fts5_table(tmp_path: Path) -> None:
     path = tmp_path / "context-index.sqlite3"
     rebuild_context_index(

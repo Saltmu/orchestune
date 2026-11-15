@@ -292,6 +292,7 @@ def _publish(
     before_replace: Callable[[], None] | None,
 ) -> RebuildResult:
     temporary = Path(f"{database}.building")
+    temporary.unlink(missing_ok=True)
     try:
         _write_database(temporary, snapshot, indexed_at)
         if not _built_ok(temporary):
