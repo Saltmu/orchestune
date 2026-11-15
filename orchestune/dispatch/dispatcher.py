@@ -326,9 +326,17 @@ def _emit_human_summary(report: CycleReport) -> None:
     繋がる場合に備え、`summary`側のテキスト経路はASCIIのみで組んである。
     """
     try:
-        lines = render_skipped_text(
-            merge_skips(report.skips, report.scheduling_decisions)
-        ) + render_forge_warnings_text(report.forge_warnings)
+        lines: list[str] = []
+        if not report.applied:
+            lines.append(
+                "[orchestune:preview] Dry-run mode (--apply not set): "
+                "launches, completion handoff/GC, and integration are skipped. "
+                "Re-run with --apply to apply changes."
+            )
+        lines.extend(
+            render_skipped_text(merge_skips(report.skips, report.scheduling_decisions))
+            + render_forge_warnings_text(report.forge_warnings)
+        )
         for line in lines:
             safe_stderr(line)
     except Exception as e:  # noqa: BLE001 - 要約はベストエフォート
