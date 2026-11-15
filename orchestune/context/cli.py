@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sqlite3
+import subprocess
 import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -21,7 +22,13 @@ from orchestune.forge import GitHubForge
 
 _DESCRIPTION = "rebuild and export the local context index."
 _DEFAULT_DATABASE = Path(".orchestune/context-index.sqlite3")
-_OPERATION_ERRORS = (OSError, ValueError, RuntimeError, sqlite3.Error)
+_OPERATION_ERRORS = (
+    OSError,
+    ValueError,
+    RuntimeError,
+    sqlite3.Error,
+    subprocess.SubprocessError,
+)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

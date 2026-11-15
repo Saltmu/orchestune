@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import subprocess
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -23,7 +24,7 @@ from orchestune.context.storage import CollectionSnapshot, IndexedRecord
 from orchestune.models import IssueRecord
 
 _YAML_FENCE = re.compile(r"```yaml\n(.*?)```", re.DOTALL)
-_READ_FAILURES = (OSError, ValueError, RuntimeError)
+_READ_FAILURES = (OSError, ValueError, RuntimeError, subprocess.SubprocessError)
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,7 +134,7 @@ def _add_range(
         since=request.since, state="all", max_pages=request.max_pages
     )
     for issue in issues:
-        selected[issue.number] = issue
+        selected.setdefault(issue.number, issue)
     return not exhausted
 
 

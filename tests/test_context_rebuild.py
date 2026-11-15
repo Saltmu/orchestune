@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -148,6 +149,73 @@ def test_comment_page_failure_keeps_the_previous_records(tmp_path: Path) -> None
     assert "page 2 failed" in (view.manifest or {})["reason"]
     assert view.coverage_status == "partial"
     assert _keys(path) == before
+
+
+def test_subprocess_failure_stays_inside_the_snapshot(tmp_path: Path) -> None:
+    forge = _forge(_issue(1, "索引検索"))
+    path = _publish(tmp_path, forge, issue_numbers=(1,))
+    before = _keys(path)
+
+    class Broken(FakeForge):
+        def list_all_issue_comments(self, issue_number: int | str) -> list[dict]:
+            if int(issue_number) == 2:
+                raise subprocess.CalledProcessError(1, ["gh", "api"])
+            return super().list_all_issue_comments(issue_number)
+
+    broken = Broken()
+    broken.issues = dict(forge.issues)
+    broken.issues[2] = _issue(2, "途中失敗")
+    broken.event_comments.extend(forge.event_comments)
+    fetched = fetch_context(
+        broken, FetchRequest(repository="Saltmu/orchestune", issue_numbers=(1, 2))
+    )
+    result = rebuild_context_index(path, fetched, indexed_at="2026-01-06T00:00:00Z")
+
+    assert fetched.publish is False
+    assert fetched.coverage_status == "partial"
+    assert "non-zero" in (fetched.reason or "")
+    assert result.preserved_existing is True
+    assert _keys(path) == before
+
+
+def test_range_listing_keeps_a_parent_already_loaded(tmp_path: Path) -> None:
+    child = _issue(11, "子", parent=10)
+    forge = _forge(_issue(10, "親"), child)
+    ranged = IssueRecord(
+        number=11,
+        title=child.title,
+        body=child.body,
+        labels=(),
+        created_at=child.created_at,
+        parent=None,
+        blocked_by=(),
+    )
+
+    class RangeWithoutParent(FakeForge):
+        def list_issues_in_range(
+            self, **kwargs: object
+        ) -> tuple[list[IssueRecord], bool]:
+            return [ranged], True
+
+    listed = RangeWithoutParent()
+    listed.issues = dict(forge.issues)
+    listed.event_comments.extend(forge.event_comments)
+    fetched = fetch_context(
+        listed,
+        FetchRequest(
+            repository="Saltmu/orchestune",
+            parent_issue=10,
+            since="2026-01-01T00:00:00Z",
+        ),
+    )
+    path = tmp_path / "context-index.sqlite3"
+    rebuild_context_index(path, fetched, indexed_at="2026-01-05T00:00:00Z")
+    stored = {
+        record.artifact.issue_number: record.artifact.parent_issue
+        for record in open_context_index(path).artifacts
+    }
+
+    assert stored[11] == 10
 
 
 def test_listing_failure_with_no_prior_index_stays_unavailable(tmp_path: Path) -> None:

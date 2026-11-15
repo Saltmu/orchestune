@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -97,6 +98,30 @@ def test_export_of_a_missing_index_is_unavailable(
     assert status == 0
     assert payload["status"] == "unavailable"
     assert payload["artifacts"] == []
+
+
+def test_rebuild_exits_when_fetch_raises_subprocess_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fail(forge: object, request: object) -> object:
+        raise subprocess.CalledProcessError(1, ["gh", "api"])
+
+    monkeypatch.setattr(context_cli, "fetch_context", fail)
+
+    status = main(
+        [
+            "rebuild",
+            "--repository",
+            "Saltmu/orchestune",
+            "--issue",
+            "7",
+            "--db",
+            str(tmp_path / "context-index.sqlite3"),
+        ]
+    )
+
+    assert status == 1
+    assert "non-zero" in capsys.readouterr().err
 
 
 def test_rebuild_requires_a_selector(capsys: pytest.CaptureFixture[str]) -> None:
