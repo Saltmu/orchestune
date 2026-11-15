@@ -936,6 +936,34 @@ class TestEmitHumanSummary:
         _emit_dispatcher_report(self._result(self._report()))
         assert capsys.readouterr().err == ""
 
+    def test_emits_preview_notice_when_not_applied(self, capsys):
+        _emit_dispatcher_report(self._result(self._report(applied=False)))
+
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "[orchestune:preview]" in captured.err
+        assert "dry-run" in captured.err.lower()
+        assert "--apply" in captured.err
+        captured.err.encode("ascii")
+
+    def test_omits_preview_notice_when_applied(self, capsys):
+        report = self._report(
+            applied=True,
+            skips=[
+                SkipRecord(
+                    issue_number=695,
+                    subtask_id="task-695",
+                    reason=REASON_EXTERNAL_LOCK,
+                    detail="fix/issue-777 [tests/conftest.py]",
+                )
+            ],
+        )
+
+        _emit_dispatcher_report(self._result(report))
+
+        captured = capsys.readouterr()
+        assert "[orchestune:preview]" not in captured.err
+
     def test_a_rendering_failure_does_not_break_the_report(self, capsys):
         """要約はベストエフォート。整形に失敗してもサイクルの結果報告は落とさない。"""
         with patch(
