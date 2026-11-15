@@ -52,6 +52,14 @@ class IssueForge(Protocol):
 
     def list_sub_issues(self, parent_issue_number: int | str) -> list[IssueRecord]: ...
 
+    def list_issues_in_range(
+        self,
+        *,
+        since: str | None = None,
+        state: str = "open",
+        max_pages: int | None = None,
+    ) -> tuple[list[IssueRecord], bool]: ...
+
     def add_label(self, issue_number: int | str, label: str) -> None: ...
 
     def remove_label(self, issue_number: int | str, label: str) -> None: ...
