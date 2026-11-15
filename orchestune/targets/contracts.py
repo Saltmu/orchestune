@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import inspect
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal, cast
 
 from orchestune.forge import Forge
 from orchestune.models import Usage
@@ -13,6 +15,18 @@ from orchestune.task_metadata import TaskMetadata
 
 ReviewerBot = Literal["claude", "codex"]
 ReviewerBotSetting = Literal["auto", "claude", "codex"]
+
+
+def _accepts_keyword(method: object, name: str) -> bool:
+    """Return whether ``method`` can receive ``name`` as a keyword."""
+    try:
+        signature = inspect.signature(cast(Callable[..., object], method))
+    except (TypeError, ValueError):
+        return False
+    return name in signature.parameters or any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in signature.parameters.values()
+    )
 
 
 @dataclass(frozen=True)
@@ -76,8 +90,14 @@ class DispatchTarget(ABC):
         force_push: bool = False,
         execution_selection: ExecutionSelection | None = None,
         base_branch: str | None = None,
+        launch_context: object | None = None,
     ) -> DispatchHandle:
         """Launch once; idempotent providers override this to use attempt_id as a key."""
+        kwargs: dict[str, Any] = {}
+        if launch_context is not None and _accepts_keyword(
+            self.launch, "launch_context"
+        ):
+            kwargs["launch_context"] = launch_context
         return self.launch(
             task,
             branch_name,
@@ -85,6 +105,7 @@ class DispatchTarget(ABC):
             force_push=force_push,
             execution_selection=execution_selection,
             base_branch=base_branch,
+            **kwargs,
         )
 
     @abstractmethod
@@ -97,6 +118,7 @@ class DispatchTarget(ABC):
         force_push: bool = False,
         execution_selection: ExecutionSelection | None = None,
         base_branch: str | None = None,
+        launch_context: object | None = None,
     ) -> DispatchHandle:
         """タスクに対応するエージェントを起動し、追跡用ハンドルを返す。
 

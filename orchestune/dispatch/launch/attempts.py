@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import inspect
 import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from hashlib import sha256
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 from uuid import uuid4
 
 from orchestune.claim.ownership import with_claim
@@ -380,13 +381,15 @@ class JournaledDispatchTarget(DispatchTarget):
         force_push: bool = False,
         execution_selection: ExecutionSelection | None = None,
         base_branch: str | None = None,
+        launch_context: object | None = None,
     ) -> DispatchHandle:
         unknown = replace(self.attempt, phase="unknown", started_at=time.time())
         # A write may have committed even if its response was lost. Preserve quota.
         self.commit()
         try:
             write_attempt(self.forge, task.issue_number, unknown, expected=self.attempt)
-            handle = self.target.launch_attempt(
+            handle = _invoke_launch_attempt(
+                self.target,
                 unknown.attempt_id,
                 task,
                 branch_name,
@@ -394,6 +397,7 @@ class JournaledDispatchTarget(DispatchTarget):
                 force_push=force_push,
                 execution_selection=execution_selection,
                 base_branch=base_branch,
+                launch_context=launch_context,
             )
             if not handle.external_id:
                 raise ValueError("provider returned no execution handle")
@@ -420,6 +424,42 @@ class JournaledDispatchTarget(DispatchTarget):
         self, handle: DispatchHandle
     ) -> Literal["running", "stopped", "unknown"]:
         return self.target.execution_status(handle)
+
+
+def _invoke_launch_attempt(
+    target: DispatchTarget,
+    attempt_id: str,
+    task: TaskMetadata,
+    branch_name: str,
+    worktree_path: Path,
+    *,
+    force_push: bool,
+    execution_selection: ExecutionSelection | None,
+    base_branch: str | None,
+    launch_context: object | None,
+) -> DispatchHandle:
+    kwargs: dict[str, Any] = {
+        "force_push": force_push,
+        "execution_selection": execution_selection,
+        "base_branch": base_branch,
+    }
+    if launch_context is not None and _attempt_accepts_launch_context(target):
+        kwargs["launch_context"] = launch_context
+    return target.launch_attempt(attempt_id, task, branch_name, worktree_path, **kwargs)
+
+
+def _attempt_accepts_launch_context(target: DispatchTarget) -> bool:
+    try:
+        signature = inspect.signature(
+            cast(Callable[..., object], target.launch_attempt)
+        )
+    except (TypeError, ValueError):
+        return False
+    parameter = signature.parameters.get("launch_context")
+    return parameter is not None or any(
+        item.kind is inspect.Parameter.VAR_KEYWORD
+        for item in signature.parameters.values()
+    )
 
 
 def prepare_journaled_target(

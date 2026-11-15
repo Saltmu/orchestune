@@ -175,3 +175,74 @@ class ExtractionResult:
 
     state: OutcomeLookupState
     artifacts: tuple[SharedArtifactV1, ...]
+
+
+LAUNCH_CONTEXT_SCHEMA = "launch-context-v1"
+CONTEXT_READY = "ready"
+CONTEXT_OVER_BUDGET = "over_budget"
+CONTEXT_UNAVAILABLE = "unavailable"
+TIER2_READY = "ready"
+TIER2_REDUCED = "reduced"
+TIER2_UNAVAILABLE = "unavailable"
+TIER2_EMPTY = "empty"
+REDUCTION_TIER1_EXCEEDS_BUDGET = "tier1_exceeds_budget"
+REDUCTION_TIER2_TAIL_DROPPED = "tier2_tail_dropped"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class DependencyContext:
+    """Confirmed outcome of one direct dependency, or an unresolved result."""
+
+    issue_number: int | None = None
+    subtask_id: str | None = None
+    result: str | None = None
+    summary: str | None = None
+    pr: int | None = None
+    reason: str | None = None
+    base_sha: str | None = None
+    head_sha: str | None = None
+    claim_id: str | None = None
+    completion_id: str | None = None
+    attempt: int | None = None
+    ci: str | None = None
+    review_verdict: str | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Tier1Context:
+    """Required launch facts. Rank and byte budget never drop these fields."""
+
+    purpose: str
+    acceptance: str
+    footprint: tuple[str, ...]
+    symbols: tuple[str, ...]
+    parent_purpose: str
+    parent_acceptance: str
+    dependencies: tuple[DependencyContext, ...] = ()
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class Tier2Hit:
+    """One ranked artifact kept inside the launch budget."""
+
+    issue_number: int
+    title: str
+    summary: str | None
+    source_url: str | None = None
+    pr_url: str | None = None
+    comment_url: str | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class LaunchContext:
+    """Tiered launch payload. ``size_bytes`` is measured without itself."""
+
+    schema_version: str
+    context_status: str
+    tier2_status: str
+    reduction_reason: str | None
+    tier1: Tier1Context | None
+    tier2: tuple[Tier2Hit, ...]
+    tier3_urls: tuple[str, ...]
+    size_bytes: int
+    max_bytes: int
