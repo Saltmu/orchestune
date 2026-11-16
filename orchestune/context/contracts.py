@@ -246,3 +246,10 @@ class LaunchContext:
     tier3_urls: tuple[str, ...]
     size_bytes: int
     max_bytes: int
+
+
+def string_tuple(value: object) -> tuple[str, ...]:
+    """Return ``value`` as a tuple of strings, or an empty tuple otherwise."""
+    if isinstance(value, list) and all(isinstance(item, str) for item in value):
+        return tuple(value)
+    return ()

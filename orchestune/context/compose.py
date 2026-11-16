@@ -37,6 +37,7 @@ from orchestune.context.contracts import (
     LaunchContext,
     Tier1Context,
     Tier2Hit,
+    string_tuple,
 )
 from orchestune.context.search import search_artifacts
 from orchestune.context.storage import open_context_index
@@ -246,8 +247,8 @@ def _tier1_from(
     return Tier1Context(
         purpose=_heading_section(issue.body, _PURPOSE),
         acceptance=_heading_section(issue.body, _ACCEPTANCE),
-        footprint=_string_list(loaded.get("footprint")),
-        symbols=_string_list(loaded.get("symbols")),
+        footprint=string_tuple(loaded.get("footprint")),
+        symbols=string_tuple(loaded.get("symbols")),
         parent_purpose=_heading_section(parent_body, _PURPOSE),
         parent_acceptance=_heading_section(parent_body, _ACCEPTANCE),
         dependencies=_resolve_dependencies(
@@ -269,12 +270,6 @@ def _yaml_mapping(body: str) -> dict[str, Any] | None:
     if isinstance(loaded, dict):
         return loaded
     return None
-
-
-def _string_list(value: object) -> tuple[str, ...]:
-    if isinstance(value, list) and all(isinstance(item, str) for item in value):
-        return tuple(value)
-    return ()
 
 
 def _dependency_refs(body: str) -> tuple[str, ...]:

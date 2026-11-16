@@ -18,6 +18,7 @@ from orchestune.context.contracts import (
     ExtractionRequest,
     PlanMetadataSnapshot,
     PlanSubtaskMetadata,
+    string_tuple,
 )
 from orchestune.context.extract import extract_shared_artifacts
 from orchestune.context.storage import CollectionSnapshot, IndexedRecord
@@ -226,19 +227,13 @@ def _plan_snapshot(issue: IssueRecord) -> PlanMetadataSnapshot | None:
             PlanSubtaskMetadata(
                 subtask_id=subtask_id,
                 issue_number=issue.number,
-                depends_on=_string_tuple(loaded.get("depends_on")),
-                footprint=_string_tuple(loaded.get("footprint")),
-                symbols=_string_tuple(loaded.get("symbols")),
+                depends_on=string_tuple(loaded.get("depends_on")),
+                footprint=string_tuple(loaded.get("footprint")),
+                symbols=string_tuple(loaded.get("symbols")),
                 task_kind=task_kind if isinstance(task_kind, str) else None,
             ),
         ),
     )
-
-
-def _string_tuple(value: object) -> tuple[str, ...]:
-    if isinstance(value, list) and all(isinstance(item, str) for item in value):
-        return tuple(value)
-    return ()
 
 
 def _parent_number(issue: IssueRecord) -> int | None:
