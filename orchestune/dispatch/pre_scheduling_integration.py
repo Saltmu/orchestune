@@ -141,6 +141,7 @@ def _build_integrator_config(
         integration_command_timeout_seconds=config.integration_command_timeout_seconds,
         max_integration_timeout_retries=config.max_integration_timeout_retries,
         integration_timeout_backoff_seconds=config.integration_timeout_backoff_seconds,
+        progress=config.progress,
     )
     if config.semantic_review_mode == "required":
         integrator_config.enable_semantic_review = True

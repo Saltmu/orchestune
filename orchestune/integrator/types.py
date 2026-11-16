@@ -9,7 +9,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any, Protocol, TypedDict
 
 from orchestune.config_schema import (
     VALID_STALE_READ_GATE_MODES,
@@ -136,6 +136,19 @@ CHILD_REVIEW_REPORT_REASONS = frozenset(
 )
 
 
+class IntegrationProgressSink(Protocol):
+    """Structural progress-sink contract accepted by ``IntegratorConfig``."""
+
+    def emit(
+        self,
+        phase: str,
+        event: str,
+        *,
+        task_issue: int | None = None,
+        reason: str | None = None,
+    ) -> None: ...
+
+
 @dataclass(kw_only=True)
 class IntegratorConfig:
     parent_issue_number: int
@@ -178,6 +191,7 @@ class IntegratorConfig:
     )
     # Injection seam for the process runner (default: the owning managed runner).
     process_runner: ProcessRunner | None = None
+    progress: IntegrationProgressSink | None = None
 
     def __post_init__(self) -> None:
         if self.child_review_gate not in VALID_CHILD_REVIEW_GATE_MODES:

@@ -109,36 +109,81 @@ class IntegrationPipeline(IntegrationComponent):
 
     def _run_steps(self, ctx: IntegrationContext, report: IntegrationReport) -> None:
         for step in self.steps:
+            step_name = type(step).__name__
+            self._emit_step_progress(ctx, step_name, "started")
             try:
                 self._guard_deadline(ctx, step)
                 result = step.execute(ctx)
             except IntegrationExecutionAbort as abort:
                 self._record_abort(ctx, abort)
+                self._emit_step_progress(
+                    ctx, step_name, "failed", reason=ctx.status.value
+                )
                 break
             except _EXECUTION_TIMEOUTS as error:
                 if ctx.execution is None:
+                    self._emit_step_progress(
+                        ctx, step_name, "failed", reason=type(error).__name__
+                    )
                     raise
                 self._record_abort(
                     ctx,
                     ctx.execution.timeout_abort(
                         error,
-                        type(step).__name__,
-                        write_step=type(step).__name__ in _WRITE_STEPS,
+                        step_name,
+                        write_step=step_name in _WRITE_STEPS,
                         before_start=isinstance(error, ExecutionDeadlineExceeded)
-                        and (
-                            error.before_step
-                            or type(step).__name__ in _SINGLE_WRITE_STEPS
-                        ),
+                        and (error.before_step or step_name in _SINGLE_WRITE_STEPS),
                     ),
                 )
+                self._emit_step_progress(
+                    ctx, step_name, "failed", reason=ctx.status.value
+                )
                 break
+            except Exception as error:
+                self._emit_step_progress(
+                    ctx, step_name, "failed", reason=type(error).__name__
+                )
+                raise
             report.update(result)
             if "status" in result:
                 ctx.status = result["status"]
             if "error" in result:
                 ctx.error = result["error"]
+            event, reason = self._step_terminal_event(ctx.status)
+            self._emit_step_progress(ctx, step_name, event, reason=reason)
             if ctx.status != IntegrationStatus.SUCCESS:
                 break
+
+    @staticmethod
+    def _emit_step_progress(
+        ctx: IntegrationContext,
+        step_name: str,
+        event: str,
+        *,
+        reason: str | None = None,
+    ) -> None:
+        progress = ctx.config.progress
+        if progress is not None:
+            progress.emit(step_name, event, reason=reason)
+
+    @staticmethod
+    def _step_terminal_event(status: IntegrationStatus) -> tuple[str, str | None]:
+        if status == IntegrationStatus.SUCCESS:
+            return "completed", None
+        if status in (
+            IntegrationStatus.NO_DONE_TASKS,
+            IntegrationStatus.SEMANTIC_REVIEW_PENDING,
+        ):
+            return "completed", status.value
+        if status in (
+            IntegrationStatus.REVIEW_GATE_BLOCKED,
+            IntegrationStatus.EXECUTION_CLEANUP_FAILED,
+            IntegrationStatus.EXECUTION_RETRY_EXHAUSTED,
+            IntegrationStatus.EXECUTION_INDETERMINATE,
+        ):
+            return "warning", status.value
+        return "failed", status.value
 
     @staticmethod
     def _guard_deadline(ctx: IntegrationContext, step: IntegrationComponent) -> None:
@@ -244,10 +289,16 @@ class MultiIssueIntegrator(IntegrationComponent):
         failure_count = 0
 
         for integrator in self.integrators:
-            sub_ctx = copy.deepcopy(ctx)
+            progress = ctx.config.progress
+            ctx.config.progress = None
+            try:
+                sub_ctx = copy.deepcopy(ctx)
+            finally:
+                ctx.config.progress = progress
             # #313レビュー対応: 注入されたForge（可変な内部状態やlock/clientを
             # 保持しうる）をdeepcopyで複製・破壊しないよう、元の参照を維持する。
             sub_ctx.config.forge = ctx.config.forge
+            sub_ctx.config.progress = progress
             parent_issue = getattr(integrator, "parent_issue", None)
             key = (
                 f"issue_{parent_issue}"
