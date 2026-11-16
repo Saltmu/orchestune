@@ -972,3 +972,61 @@ class TestPreviewApplyQuickReference:
             _DAILY_FLOW_HEADINGS[lang],
         ):
             assert 0 <= text.find(heading) < first_numbered.start()
+
+
+# --- #1854: context tiers and degradation in usage.md ---
+
+_CONTEXT_HEADINGS = {
+    "ja": "## 起動コンテキスト（`orchestune context`）",
+    "en": "## Launch context (`orchestune context`)",
+}
+
+
+def _context_section(lang: str) -> str:
+    text = _read_usage(lang)
+    heading = _CONTEXT_HEADINGS[lang]
+    assert heading in text, lang
+    return text.split(heading, 1)[1].split("\n## ", 1)[0]
+
+
+def _context_contract(lang: str) -> str:
+    match = re.search(r"```text\n(.*?)```", _context_section(lang), re.DOTALL)
+    assert match is not None, lang
+    return match.group(1)
+
+
+def test_context_contract_block_matches_across_languages():
+    assert _context_contract("ja") == _context_contract("en")
+
+
+@pytest.mark.parametrize("lang", ["ja", "en"])
+def test_context_usage_states_tiers_and_degradation(lang):
+    from orchestune.context.budget import (
+        DEFAULT_CLOUD_PROMPT_MAX_BYTES,
+        DEFAULT_LOCAL_CONTEXT_MAX_BYTES,
+        DEFAULT_TIER2_LIMIT,
+    )
+
+    section = _context_section(lang)
+    contract = _context_contract(lang)
+    for marker in (
+        "orchestune context rebuild",
+        "orchestune context export",
+        "Tier 1",
+        "Tier 2",
+        "Tier 3",
+        "--apply",
+        "--no-apply",
+        "--dry-run",
+        "context.json",
+    ):
+        assert marker in section, (lang, marker)
+    for value in (
+        DEFAULT_TIER2_LIMIT,
+        DEFAULT_LOCAL_CONTEXT_MAX_BYTES,
+        DEFAULT_CLOUD_PROMPT_MAX_BYTES,
+    ):
+        assert str(value) in contract, (lang, value)
+    preview = _read_usage(lang).split(_QUICK_REFERENCE_HEADINGS[lang], 1)[1]
+    preview = preview.split("\n## ", 1)[0]
+    assert "orchestune context" not in preview
