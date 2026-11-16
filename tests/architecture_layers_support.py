@@ -83,6 +83,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "local_trial.workspace",
             "config_wizard",
             "config_schema",
+            "context.compose",
             "execution_profiles",
             "config_wizard.document",
             "config_wizard.ci_candidates",

@@ -162,6 +162,7 @@ class TestBranchStacking:
             ANY,
             "claude/issue-1-task-1",
             execution_selection=ANY,
+            launch_context=ANY,
         )
         mock_remove_label.assert_any_call(2, "status:blocked")
 
@@ -301,6 +302,7 @@ class TestBranchStacking:
             ANY,
             "claude/issue-1-task-1",
             execution_selection=ANY,
+            launch_context=ANY,
         )
 
     def test_auto_rebase_success(self, tmp_path):
@@ -764,6 +766,7 @@ class TestBranchStacking:
             ANY,
             "claude/issue-2-task-2",
             execution_selection=ANY,
+            launch_context=ANY,
         )
 
         mock_remove_label.assert_any_call(3, "status:blocked")

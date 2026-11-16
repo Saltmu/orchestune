@@ -10,6 +10,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Literal
 
+from orchestune.context.compose import append_cloud_context
 from orchestune.forge import Forge
 from orchestune.targets.contracts import (
     DispatchHandle,
@@ -63,11 +64,16 @@ class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
         self._reviewer_bot = reviewer_bot
 
     def _build_text(
-        self, task: TaskMetadata, branch_name: str, base_branch: str | None = None
+        self,
+        task: TaskMetadata,
+        branch_name: str,
+        base_branch: str | None = None,
+        *,
+        launch_context: object | None = None,
     ) -> str:
         footprint = ", ".join(task.footprint) if task.footprint else "(未指定)"
         base_branch_val = resolve_base_branch_val(base_branch)
-        return (
+        text = (
             f"GitHub Issue #{task.issue_number}"
             f"（サブタスク: {task.subtask_id or '不明'}）を"
             "標準開発ワークフローに従って実装してください。\n"
@@ -83,6 +89,7 @@ class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
             f"PR作成時は必ずベースブランチに `{base_branch_val}` を指定してください（`gh pr create --base {base_branch_val}`）。\n"
             f"{noninteractive_instruction(self._reviewer_bot)}\n"
         )
+        return append_cloud_context(text, launch_context)
 
     def _fire(
         self, text: str, model: str | None = None, *, retry: bool = True
@@ -118,6 +125,7 @@ class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
         force_push: bool = False,
         execution_selection: ExecutionSelection | None = None,
         base_branch: str | None = None,
+        launch_context: object | None = None,
     ) -> DispatchHandle:
         # #244: fireより先にpush・到達性検証を行い、確認できなければfireしない。
         _push_branch_and_verify(branch_name, worktree_path, force=force_push)
@@ -131,7 +139,12 @@ class ClaudeCodeCloudRoutineDispatchTarget(DispatchTarget):
                 reasoning_effort,
             )
         payload = self._fire(
-            self._build_text(task, branch_name, base_branch=base_branch),
+            self._build_text(
+                task,
+                branch_name,
+                base_branch=base_branch,
+                launch_context=launch_context,
+            ),
             model=model,
             retry=False,
         )
