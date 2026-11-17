@@ -988,3 +988,46 @@ def test_local_and_cloud_actual_utf8_byte_budget_and_over_budget(
     assert local_payload["context_status"] == "over_budget"
     assert local_payload["reduction_reason"] == "tier1_exceeds_budget"
     assert "context.json" in cmd[2]
+
+
+def test_numeric_depends_on_scalar_depends_on_and_repo_mismatch(
+    tmp_path: Path,
+) -> None:
+    numeric_child = _issue(
+        1,
+        "## 目的\n目的\n\n## Footprint\n```yaml\nsubtask_id: c1\nfootprint:\n  - a.py\ndepends_on:\n  - 50\n```\n",
+    )
+    scalar_child = _issue(
+        2,
+        "## 目的\n目的\n\n## Footprint\n```yaml\nsubtask_id: c2\nfootprint:\n  - a.py\ndepends_on: dep-a\n```\n",
+    )
+    dep = _issue(50, _DEP, title="依存")
+
+    class _RepoForge(_Forge):
+        def get_repository_slug(self) -> str:
+            return "Saltmu/orchestune"
+
+    forge = _RepoForge(
+        {1: numeric_child, 2: scalar_child, 50: dep}, {50: [_done_comment("数値完了")]}
+    )
+    numeric_res = compose_launch_context(
+        forge, 1, index_path=tmp_path / "missing.sqlite3"
+    )
+    scalar_res = compose_launch_context(
+        forge, 2, index_path=tmp_path / "missing.sqlite3"
+    )
+    mismatch_res = compose_launch_context(
+        forge,
+        1,
+        index_path=tmp_path / "missing.sqlite3",
+        repository="OtherOrg/other",
+    )
+
+    assert numeric_res.context_status == "ready"
+    assert numeric_res.tier1 is not None
+    assert numeric_res.tier1.dependencies[0].issue_number == 50
+    assert numeric_res.tier1.dependencies[0].summary == "数値完了"
+    assert scalar_res.context_status == "unavailable"
+    assert mismatch_res.context_status == "unavailable"
+    assert mismatch_res.unavailable_reason is not None
+    assert "repository mismatch" in mismatch_res.unavailable_reason

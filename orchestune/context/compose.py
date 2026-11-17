@@ -14,6 +14,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
+import yaml
+
 from orchestune.context.budget import (
     DEFAULT_CLOUD_PROMPT_MAX_BYTES,
     DEFAULT_LOCAL_CONTEXT_MAX_BYTES,
@@ -41,6 +43,7 @@ from orchestune.context.search import search_artifacts
 from orchestune.context.storage import open_context_index
 from orchestune.dependencies.resolution import resolve_task_dependencies
 from orchestune.issue_parsing import (
+    FOOTPRINT_BLOCK_PATTERN,
     decomposition_plan_from_parent_body,
     parse_task_from_issue,
 )
@@ -255,6 +258,9 @@ def _compose_checked(
     repository: str | None,
     intro_bytes: int,
 ) -> LaunchContext:
+    forge_repo = _forge_repository(forge)
+    if repository is not None and forge_repo is not None and forge_repo != repository:
+        raise _Unavailable(f"repository mismatch: {forge_repo} != {repository}")
     issue = _require_issue(forge, issue_number)
     if not isinstance(issue.body, str) or not issue.body.strip():
         raise _Unavailable(f"issue #{issue.number}: body missing")
@@ -265,7 +271,7 @@ def _compose_checked(
     ):
         raise _Unavailable(f"parent #{parent.number}: body missing")
     tier1 = _tier1_from(forge, issue, parent, parent_number)
-    repo = repository or _forge_repository(forge)
+    repo = repository or forge_repo
     search_state, hits = _search_tier2(
         issue, tier1, index_path, tier2_limit, repository=repo
     )
@@ -331,6 +337,7 @@ def _tier1_from(
     parent: IssueRecord | None,
     parent_number: int | None,
 ) -> Tier1Context:
+    _validate_raw_footprint_depends_on(issue)
     task = parse_task_from_issue(issue)
     if task.yaml_error:
         raise _Unavailable(f"issue #{issue.number}: invalid footprint yaml")
@@ -345,6 +352,18 @@ def _tier1_from(
         parent_acceptance=_heading_section(parent_body, _ACCEPTANCE),
         dependencies=_resolve_dependencies(forge, issue, task, parent_number),
     )
+
+
+def _validate_raw_footprint_depends_on(issue: IssueRecord) -> None:
+    match = FOOTPRINT_BLOCK_PATTERN.search(issue.body)
+    if match is None:
+        return
+    try:
+        data = yaml.safe_load(match.group(1))
+    except yaml.YAMLError as exc:
+        raise _Unavailable(f"issue #{issue.number}: invalid footprint yaml") from exc
+    if isinstance(data, dict) and "depends_on" in data:
+        _ref_tuple(data.get("depends_on"))
 
 
 def _check_parent_plan_dependencies(
@@ -419,6 +438,15 @@ def _heading_keys(title: str) -> frozenset[str]:
     return frozenset(keys)
 
 
+def _with_numeric_body_dependencies(task: Task) -> Task:
+    numeric = tuple(int(ref) for ref in task.depends_on if ref.isdigit())
+    if not numeric:
+        return task
+    remaining = tuple(ref for ref in task.depends_on if not ref.isdigit())
+    merged_native = tuple(dict.fromkeys((*task.native_depends_on, *numeric)))
+    return replace(task, depends_on=remaining, native_depends_on=merged_native)
+
+
 def _resolve_dependencies(
     forge: object,
     issue: IssueRecord,
@@ -432,6 +460,7 @@ def _resolve_dependencies(
         if parent_number is not None and task.parent_number is None
         else task
     )
+    scoped_task = _with_numeric_body_dependencies(scoped_task)
     tasks_by_issue: dict[int, Task] = {issue.number: scoped_task}
     for child in _children(forge, parent_number, scoped_task):
         child_task = parse_task_from_issue(child)
