@@ -1012,6 +1012,7 @@ def test_context_usage_states_tiers_and_degradation(lang):
     for marker in (
         "orchestune context rebuild",
         "orchestune context export",
+        "orchestune context export --issue",
         "Tier 1",
         "Tier 2",
         "Tier 3",

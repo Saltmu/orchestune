@@ -231,6 +231,11 @@ class Tier2Hit:
     source_url: str | None = None
     pr_url: str | None = None
     comment_url: str | None = None
+    target_commit: str | None = None
+    recorded_at: str | None = None
+    attempt: int | None = None
+    superseded_by: tuple[str, ...] = ()
+    stale_status: str | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -246,6 +251,7 @@ class LaunchContext:
     tier3_urls: tuple[str, ...]
     size_bytes: int
     max_bytes: int
+    unavailable_reason: str | None = None
 
 
 def string_tuple(value: object) -> tuple[str, ...]:

@@ -1421,11 +1421,12 @@ orchestune trial result <TRIAL_ID> --decision keep --repo "<source_root>"
 ```bash
 orchestune context rebuild --repository OWNER/REPO --issue 7
 orchestune context export
+orchestune context export --issue 7
 ```
 
 `--db` defaults to `.orchestune/context-index.sqlite3` for both subcommands. `rebuild` requires `--repository` and one of `--parent-issue`, `--issue` (repeatable), or `--since`. A missing selector exits 2. A fetch or write failure exits 1. When the fetch fails, the command does not replace the index, so the existing file remains. Omit `--indexed-at` to use the current UTC time. `--max-pages` must be at least 1.
 
-`export` prints the published index as JSON on stdout. A missing or unreadable index exits 0 with `status` `unavailable` and an empty `artifacts` list. A corrupt file is moved to `<db>.corrupt.<nanoseconds>`.
+`export` prints the published index as JSON on stdout. When `--issue <N>` (and optional `--parent-issue`, `--tier2-limit`, `--max-bytes`, `--repository`) is given, it writes the bounded Tier 1–3 launch context for that issue using the same composition and budget rules. A missing or unreadable index exits 0 with `status` `unavailable` and an empty `artifacts` list. A corrupt file is moved to `<db>.corrupt.<nanoseconds>`.
 
 ### Tier 1 to Tier 3
 
@@ -1452,5 +1453,5 @@ defaults: tier2_limit=5 local_bytes=32768 cloud_bytes=8192
 - A missing, corrupt, or failed Tier 2 index degrades to 0 hits, as in `Tier 2 missing` above. `context_status` stays `ready` when Tier 1 fits. A readable index with no hits uses `tier2_status` `empty`, which is separate from a missing index.
 - Tail trimming that stays inside the budget uses `tier2_status` `reduced`, `reduction_reason` `tier2_tail_dropped`, and `context_status` `ready`.
 
-In an interactive session, read the JSON from `orchestune context export` before implementation. Do not use it as a substitute for the `context.json` dispatch writes. Keep using `orchestune claim`, completed dependencies, and the stale-read gate.
+In an interactive session, read the JSON from `orchestune context export --issue <issue_number>` before implementation. Do not use it as a substitute for the `context.json` dispatch writes. Keep using `orchestune claim`, completed dependencies, and the stale-read gate.
 

@@ -10,10 +10,9 @@ import json
 import logging
 import re
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
-
-import yaml
 
 from orchestune.context.budget import (
     DEFAULT_CLOUD_PROMPT_MAX_BYTES,
@@ -37,15 +36,20 @@ from orchestune.context.contracts import (
     LaunchContext,
     Tier1Context,
     Tier2Hit,
-    string_tuple,
 )
 from orchestune.context.search import search_artifacts
 from orchestune.context.storage import open_context_index
-from orchestune.models import IssueRecord
+from orchestune.dependencies.resolution import resolve_task_dependencies
+from orchestune.issue_parsing import (
+    decomposition_plan_from_parent_body,
+    parse_task_from_issue,
+)
+from orchestune.models import IssueRecord, Task
 from orchestune.outcome_record import (
     RESULT_DONE,
     RESULT_NOT_NEEDED,
     OutcomeRecord,
+    find_child_outcome_record,
     parse_from_comments,
 )
 
@@ -53,16 +57,27 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_INDEX_PATH = Path(".orchestune/context-index.sqlite3")
 _CONFIRMED = frozenset({RESULT_DONE, RESULT_NOT_NEEDED})
-_YAML_FENCE = re.compile(r"```yaml\n(.*?)```", re.DOTALL)
 _HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
 _PURPOSE = frozenset({"概要", "目的", "overview", "purpose"})
 _ACCEPTANCE = frozenset(
-    {"受け入れ", "受け入れ条件", "acceptance", "acceptance criteria"}
+    {
+        "受け入れ",
+        "受け入れ条件",
+        "受け入れ基準",
+        "受入条件",
+        "受入基準",
+        "acceptance",
+        "acceptance criteria",
+    }
 )
 
 
 class _Unavailable(Exception):
     """Tier 1 could not be read. Callers turn this into a status."""
+
+    def __init__(self, reason: str = "unavailable") -> None:
+        super().__init__(reason)
+        self.reason = reason
 
 
 def truncate_utf8(text: str, max_bytes: int) -> str:
@@ -80,6 +95,8 @@ def compose_launch_context(
     index_path: str | Path | None = None,
     tier2_limit: int = DEFAULT_TIER2_LIMIT,
     max_bytes: int = DEFAULT_LOCAL_CONTEXT_MAX_BYTES,
+    repository: str | None = None,
+    intro_bytes: int = 0,
 ) -> LaunchContext:
     """Return Tier 1 plus as many Tier 2 hits as ``max_bytes`` allows.
 
@@ -94,12 +111,16 @@ def compose_launch_context(
             index_path=index_path,
             tier2_limit=tier2_limit,
             max_bytes=max_bytes,
+            repository=repository,
+            intro_bytes=intro_bytes,
         )
-    except _Unavailable:
-        return _unavailable_context(max_bytes)
+    except _Unavailable as exc:
+        return _unavailable_context(max_bytes, exc.reason)
     except Exception as exc:  # noqa: BLE001 - boundary: launch context must not escape
         logger.warning("launch context degraded to unavailable: %s", type(exc).__name__)
-        return _unavailable_context(max_bytes)
+        return _unavailable_context(
+            max_bytes, f"unexpected error: {type(exc).__name__}"
+        )
 
 
 def compose_for_dispatch(
@@ -110,6 +131,7 @@ def compose_for_dispatch(
     index_path: str | Path | None = None,
     tier2_limit: int = DEFAULT_TIER2_LIMIT,
     max_bytes: int = DEFAULT_LOCAL_CONTEXT_MAX_BYTES,
+    repository: str | None = None,
 ) -> LaunchContext | None:
     """Return a usable context, or None when Tier 1 could not be fetched."""
     composed = compose_launch_context(
@@ -119,6 +141,7 @@ def compose_for_dispatch(
         index_path=index_path,
         tier2_limit=tier2_limit,
         max_bytes=max_bytes,
+        repository=repository,
     )
     if composed.context_status == CONTEXT_UNAVAILABLE:
         return None
@@ -126,18 +149,31 @@ def compose_for_dispatch(
 
 
 def format_cloud_context(
-    launch_context: LaunchContext, *, max_bytes: int = DEFAULT_CLOUD_PROMPT_MAX_BYTES
+    launch_context: LaunchContext,
+    *,
+    max_bytes: int = DEFAULT_CLOUD_PROMPT_MAX_BYTES,
+    base_prompt: str = "",
 ) -> str:
-    """Render Tier 1 whole, then fill leftover bytes with Tier 2 and URLs."""
-    if launch_context.tier1 is None:
+    """Format Tier 1 plus as many whole Tier 2 hits with provenance as fit."""
+    if (
+        launch_context.context_status == CONTEXT_UNAVAILABLE
+        or launch_context.tier1 is None
+    ):
         return ""
-    tier1 = _cloud_tier1(launch_context.tier1)
-    if len(tier1.encode("utf-8")) > max_bytes:
-        return tier1
-    extra = _cloud_extra(launch_context, max_bytes - len(tier1.encode("utf-8")))
-    if not extra:
-        return tier1
-    return f"{tier1}\n{extra}"
+    prefix_bytes = _cloud_prefix_bytes(base_prompt)
+    tier1_text = _cloud_tier1(launch_context.tier1)
+    kept = list(launch_context.tier2)
+    while True:
+        body = _render_cloud_body(
+            tier1_text,
+            kept,
+            over_budget=False,
+        )
+        if fit_context_budget(body, max_bytes=max_bytes - prefix_bytes).fits:
+            return body
+        if not kept:
+            return _render_cloud_body(tier1_text, (), over_budget=True)
+        kept.pop()
 
 
 def append_cloud_context(
@@ -146,12 +182,14 @@ def append_cloud_context(
     *,
     max_bytes: int = DEFAULT_CLOUD_PROMPT_MAX_BYTES,
 ) -> str:
-    """Append a cloud context block. ``None`` leaves ``prompt`` unchanged."""
+    """Append bounded Tier 1/2/3 context after the existing cloud prompt."""
     if not isinstance(launch_context, LaunchContext) or launch_context.tier1 is None:
         return prompt
     if launch_context.context_status == CONTEXT_UNAVAILABLE:
         return prompt
-    extra = format_cloud_context(launch_context, max_bytes=max_bytes)
+    extra = format_cloud_context(
+        launch_context, max_bytes=max_bytes, base_prompt=prompt
+    )
     if not extra:
         return prompt
     if prompt.endswith("\n"):
@@ -162,6 +200,31 @@ def append_cloud_context(
 def local_prompt_reference(relative_path: str) -> str:
     """Short prompt note that points at a worktree ``context.json``."""
     return f" 起動コンテキストは `{relative_path}` を参照してください。"
+
+
+def fit_local_context(
+    launch_context: LaunchContext,
+    *,
+    intro_bytes: int = 0,
+) -> LaunchContext:
+    """Re-fit an existing ``LaunchContext`` against actual local file + intro bytes."""
+    if (
+        launch_context.context_status == CONTEXT_UNAVAILABLE
+        or launch_context.tier1 is None
+    ):
+        return launch_context
+    search_state = (
+        TIER2_UNAVAILABLE
+        if launch_context.tier2_status == TIER2_UNAVAILABLE
+        else TIER2_READY
+    )
+    return _fit(
+        launch_context.tier1,
+        search_state,
+        launch_context.tier2,
+        launch_context.max_bytes,
+        intro_bytes=intro_bytes,
+    )
 
 
 def local_context_document(launch_context: LaunchContext) -> dict[str, Any]:
@@ -176,6 +239,8 @@ def local_context_document(launch_context: LaunchContext) -> dict[str, Any]:
     stored = dict(document)
     stored["size_bytes"] = launch_context.size_bytes
     stored["max_bytes"] = launch_context.max_bytes
+    if launch_context.unavailable_reason is not None:
+        stored["unavailable_reason"] = launch_context.unavailable_reason
     return stored
 
 
@@ -187,21 +252,32 @@ def _compose_checked(
     index_path: str | Path | None,
     tier2_limit: int,
     max_bytes: int,
+    repository: str | None,
+    intro_bytes: int,
 ) -> LaunchContext:
     issue = _require_issue(forge, issue_number)
+    if not isinstance(issue.body, str) or not issue.body.strip():
+        raise _Unavailable(f"issue #{issue.number}: body missing")
     parent_number = _parent_number(issue, parent_issue_number)
     parent = _parent_issue(forge, parent_number)
+    if parent is not None and (
+        not isinstance(parent.body, str) or not parent.body.strip()
+    ):
+        raise _Unavailable(f"parent #{parent.number}: body missing")
     tier1 = _tier1_from(forge, issue, parent, parent_number)
-    search_state, hits = _search_tier2(issue, tier1, index_path, tier2_limit)
-    return _fit(tier1, search_state, hits, max_bytes)
+    repo = repository or _forge_repository(forge)
+    search_state, hits = _search_tier2(
+        issue, tier1, index_path, tier2_limit, repository=repo
+    )
+    return _fit(tier1, search_state, hits, max_bytes, intro_bytes=intro_bytes)
 
 
 def _require_issue(forge: object, issue_number: int) -> IssueRecord:
     if isinstance(issue_number, bool) or not isinstance(issue_number, int):
-        raise _Unavailable
+        raise _Unavailable("invalid issue number")
     loaded = _invoke(forge, "get_issue", issue_number)
     if not isinstance(loaded, IssueRecord):
-        raise _Unavailable
+        raise _Unavailable(f"issue #{issue_number}: not found")
     return loaded
 
 
@@ -222,18 +298,31 @@ def _parent_issue(forge: object, number: int | None) -> IssueRecord | None:
         return None
     loaded = _invoke(forge, "get_issue", number)
     if not isinstance(loaded, IssueRecord):
-        raise _Unavailable
+        raise _Unavailable(f"parent #{number}: not found")
     return loaded
 
 
 def _invoke(forge: object, name: str, number: int) -> object:
     method = getattr(forge, name, None)
     if not callable(method):
-        raise _Unavailable
+        raise _Unavailable(f"forge.{name} unavailable")
     try:
         return cast(object, method(number))
     except Exception as exc:  # noqa: BLE001 - boundary: forge reads degrade together
-        raise _Unavailable from exc
+        raise _Unavailable(f"forge.{name}({number}) failed") from exc
+
+
+def _forge_repository(forge: object) -> str | None:
+    getter = getattr(forge, "get_repository_slug", None)
+    if not callable(getter):
+        return None
+    try:
+        slug = getter()
+    except Exception:  # noqa: BLE001 - boundary: repo lookup must not escape
+        return None
+    if isinstance(slug, str) and "/" in slug:
+        return slug
+    return None
 
 
 def _tier1_from(
@@ -242,58 +331,62 @@ def _tier1_from(
     parent: IssueRecord | None,
     parent_number: int | None,
 ) -> Tier1Context:
-    loaded = _yaml_mapping(issue.body) or {}
+    task = parse_task_from_issue(issue)
+    if task.yaml_error:
+        raise _Unavailable(f"issue #{issue.number}: invalid footprint yaml")
+    _check_parent_plan_dependencies(issue, task, parent)
     parent_body = parent.body if parent is not None else ""
     return Tier1Context(
         purpose=_heading_section(issue.body, _PURPOSE),
         acceptance=_heading_section(issue.body, _ACCEPTANCE),
-        footprint=string_tuple(loaded.get("footprint")),
-        symbols=string_tuple(loaded.get("symbols")),
+        footprint=task.footprint,
+        symbols=task.symbols,
         parent_purpose=_heading_section(parent_body, _PURPOSE),
         parent_acceptance=_heading_section(parent_body, _ACCEPTANCE),
-        dependencies=_resolve_dependencies(
-            forge, parent_number, _dependency_refs(issue.body)
-        ),
+        dependencies=_resolve_dependencies(forge, issue, task, parent_number),
     )
 
 
-def _yaml_mapping(body: str) -> dict[str, Any] | None:
-    if not isinstance(body, str):
-        return None
-    match = _YAML_FENCE.search(body)
-    if match is None:
-        return None
-    try:
-        loaded = yaml.safe_load(match.group(1))
-    except yaml.YAMLError:
-        return None
-    if isinstance(loaded, dict):
-        return loaded
-    return None
-
-
-def _dependency_refs(body: str) -> tuple[str, ...]:
-    loaded = _yaml_mapping(body)
-    if loaded is None:
-        return ()
-    return _ref_tuple(loaded.get("depends_on"))
+def _check_parent_plan_dependencies(
+    issue: IssueRecord, task: Task, parent: IssueRecord | None
+) -> None:
+    if parent is None:
+        return
+    plan = decomposition_plan_from_parent_body(parent.body)
+    if not isinstance(plan, dict):
+        return
+    subtasks = plan.get("subtasks")
+    if not isinstance(subtasks, list):
+        return
+    for entry in subtasks:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("issue_number") == issue.number or (
+            task.subtask_id and entry.get("id") == task.subtask_id
+        ):
+            plan_deps = _ref_tuple(entry.get("depends_on"))
+            if set(plan_deps) != set(task.depends_on):
+                raise _Unavailable(
+                    f"issue #{issue.number}: depends_on mismatch with parent plan"
+                )
+            return
 
 
 def _ref_tuple(value: object) -> tuple[str, ...]:
     if value is None:
         return ()
     if not isinstance(value, list):
-        raise _Unavailable
+        raise _Unavailable("depends_on must be a list")
     refs: list[str] = []
     for item in value:
         if isinstance(item, bool):
-            raise _Unavailable
+            raise _Unavailable("depends_on contains bool")
         if isinstance(item, int):
             refs.append(str(item))
         elif isinstance(item, str) and item.strip():
             refs.append(item.strip())
         else:
-            raise _Unavailable
+            raise _Unavailable("depends_on contains invalid item")
     return tuple(refs)
 
 
@@ -302,12 +395,18 @@ def _heading_section(body: str, names: frozenset[str]) -> str:
         return ""
     matches = list(_HEADING.finditer(body))
     for index, match in enumerate(matches):
-        if _heading_keys(match.group(2)).isdisjoint(names):
+        if not _heading_matches(_heading_keys(match.group(2)), names):
             continue
         start = match.end()
         end = matches[index + 1].start() if index + 1 < len(matches) else len(body)
         return body[start:end].strip()
     return ""
+
+
+def _heading_matches(keys: frozenset[str], names: frozenset[str]) -> bool:
+    if not keys.isdisjoint(names):
+        return True
+    return any(key.endswith(name) for key in keys for name in names)
 
 
 def _heading_keys(title: str) -> frozenset[str]:
@@ -321,76 +420,81 @@ def _heading_keys(title: str) -> frozenset[str]:
 
 
 def _resolve_dependencies(
-    forge: object, parent_number: int | None, refs: tuple[str, ...]
+    forge: object,
+    issue: IssueRecord,
+    task: Task,
+    parent_number: int | None,
 ) -> tuple[DependencyContext, ...]:
-    if not refs:
+    if not task.depends_on and not task.native_depends_on:
         return ()
-    children = _children(forge, parent_number, refs)
+    scoped_task = (
+        replace(task, parent_number=parent_number)
+        if parent_number is not None and task.parent_number is None
+        else task
+    )
+    tasks_by_issue: dict[int, Task] = {issue.number: scoped_task}
+    for child in _children(forge, parent_number, scoped_task):
+        child_task = parse_task_from_issue(child)
+        if parent_number is not None and child_task.parent_number is None:
+            child_task = replace(child_task, parent_number=parent_number)
+        tasks_by_issue[child.number] = child_task
+    _load_numeric_dependencies(forge, scoped_task, tasks_by_issue)
+    resolved = resolve_task_dependencies(scoped_task, tasks_by_issue)
+    if resolved.unresolved:
+        first = resolved.unresolved[0]
+        raise _Unavailable(f"dependency {first.raw}: {first.reason}")
     return tuple(
-        _dependency_context(forge, _dependency_issue(forge, ref, children), ref)
-        for ref in refs
+        _dependency_context(forge, dep_num, tasks_by_issue[dep_num])
+        for dep_num in resolved.resolved
     )
 
 
 def _children(
-    forge: object, parent_number: int | None, refs: tuple[str, ...]
+    forge: object, parent_number: int | None, task: Task
 ) -> tuple[IssueRecord, ...]:
-    if parent_number is None or all(ref.isdigit() for ref in refs):
+    if parent_number is None:
+        return ()
+    if not any(not ref.isdigit() for ref in task.depends_on):
         return ()
     loaded = _invoke(forge, "list_sub_issues", parent_number)
     if not isinstance(loaded, list) or any(
         not isinstance(item, IssueRecord) for item in loaded
     ):
-        raise _Unavailable
+        raise _Unavailable(f"parent #{parent_number}: list_sub_issues failed")
     return tuple(loaded)
 
 
-def _dependency_issue(
-    forge: object, ref: str, children: tuple[IssueRecord, ...]
-) -> IssueRecord:
-    if ref.isdigit():
-        loaded = _invoke(forge, "get_issue", int(ref))
-        if isinstance(loaded, IssueRecord):
-            return loaded
-        raise _Unavailable
-    for child in children:
-        if _subtask_id(child.body) == ref:
-            return child
-    raise _Unavailable
-
-
-def _subtask_id(body: str) -> str | None:
-    loaded = _yaml_mapping(body)
-    if loaded is None:
-        return None
-    value = loaded.get("subtask_id")
-    if isinstance(value, str):
-        return value
-    return None
+def _load_numeric_dependencies(
+    forge: object, task: Task, tasks_by_issue: dict[int, Task]
+) -> None:
+    needed: list[int] = list(task.native_depends_on)
+    for ref in task.depends_on:
+        if ref.isdigit():
+            needed.append(int(ref))
+    for number in needed:
+        if number in tasks_by_issue:
+            continue
+        loaded = _invoke(forge, "get_issue", number)
+        if not isinstance(loaded, IssueRecord):
+            raise _Unavailable(f"dependency #{number}: issue unavailable")
+        tasks_by_issue[number] = parse_task_from_issue(loaded)
 
 
 def _dependency_context(
-    forge: object, issue: IssueRecord, ref: str
+    forge: object, dep_number: int, dep_task: Task
 ) -> DependencyContext:
-    found = _confirmed(_comments(forge, issue.number))
-    record = None if found is None else found[0]
-    summary = None if found is None else found[1]
-    subtask_id = _subtask_id(issue.body)
-    if subtask_id is None and not ref.isdigit():
-        subtask_id = ref
-    return _dependency_from_record(issue.number, subtask_id, record, summary)
-
-
-def _dependency_from_record(
-    issue_number: int,
-    subtask_id: str | None,
-    record: OutcomeRecord | None,
-    summary: str | None,
-) -> DependencyContext:
+    comments = _comments(forge, dep_number)
+    record = find_child_outcome_record(comments, dep_number)
     if record is None:
-        return DependencyContext(issue_number=issue_number, subtask_id=subtask_id)
+        raise _Unavailable(f"dependency #{dep_number}: confirmed outcome absent")
+    if record.result not in _CONFIRMED:
+        raise _Unavailable(
+            f"dependency #{dep_number}: outcome {record.result} not confirmed"
+        )
+    summary = _summary_for_record(comments, dep_number, record)
+    subtask_id = dep_task.subtask_id or None
     return DependencyContext(
-        issue_number=issue_number,
+        issue_number=dep_number,
         subtask_id=subtask_id,
         result=record.result,
         summary=summary,
@@ -409,32 +513,34 @@ def _dependency_from_record(
 def _comments(forge: object, number: int) -> list[Mapping[str, Any]]:
     loaded = _invoke(forge, "list_comments", number)
     if not isinstance(loaded, list):
-        raise _Unavailable
+        raise _Unavailable(f"dependency #{number}: comments unavailable")
     comments: list[Mapping[str, Any]] = []
     for item in loaded:
         if not isinstance(item, Mapping):
-            raise _Unavailable
+            raise _Unavailable(f"dependency #{number}: invalid comment payload")
         comments.append(item)
     return comments
 
 
-def _confirmed(
+def _summary_for_record(
     comments: list[Mapping[str, Any]],
-) -> tuple[OutcomeRecord, str | None] | None:
+    dep_number: int,
+    target: OutcomeRecord,
+) -> str | None:
     best_at: str | None = None
-    best: tuple[OutcomeRecord, str | None] | None = None
+    best_summary: str | None = None
     for comment in comments:
         body = comment.get("body")
         if not isinstance(body, str):
             continue
-        record = parse_from_comments((comment,))
-        if record is None or record.result not in _CONFIRMED:
+        parsed = parse_from_comments((comment,))
+        if parsed is None or parsed.issue != dep_number or parsed != target:
             continue
         created = _created_at(comment)
         if best_at is None or created >= best_at:
             best_at = created
-            best = (record, _summary_from_body(body))
-    return best
+            best_summary = _summary_from_body(body)
+    return best_summary
 
 
 def _created_at(comment: Mapping[str, Any]) -> str:
@@ -473,17 +579,41 @@ def _search_tier2(
     tier1: Tier1Context,
     index_path: str | Path | None,
     limit: int,
+    *,
+    repository: str | None,
 ) -> tuple[str, tuple[Tier2Hit, ...]]:
     path = DEFAULT_INDEX_PATH if index_path is None else Path(index_path)
     try:
         view = open_context_index(path)
         if view.status != "ready":
             return TIER2_UNAVAILABLE, ()
-        found = search_artifacts(view.artifacts, _query(issue, tier1), limit=limit)
+        candidates = _filter_by_repository(view.artifacts, repository)
+        if candidates is None:
+            return TIER2_UNAVAILABLE, ()
+        found = search_artifacts(candidates, _query(issue, tier1), limit=limit)
         return TIER2_READY, tuple(_hit(record) for record in found)
     except Exception as exc:  # noqa: BLE001 - boundary: index search keeps Tier 1
         logger.warning("tier2 search unavailable: %s", type(exc).__name__)
         return TIER2_UNAVAILABLE, ()
+
+
+def _filter_by_repository(
+    artifacts: tuple[Any, ...], repository: str | None
+) -> tuple[Any, ...] | None:
+    if repository is not None:
+        return tuple(
+            record
+            for record in artifacts
+            if getattr(getattr(record, "artifact", record), "repository", None)
+            == repository
+        )
+    repos = {
+        getattr(getattr(record, "artifact", record), "repository", None)
+        for record in artifacts
+    }
+    if len(repos) > 1:
+        return None
+    return artifacts
 
 
 def _query(issue: IssueRecord, tier1: Tier1Context) -> str:
@@ -495,6 +625,11 @@ def _hit(record: object) -> Tier2Hit:
     evidence = getattr(artifact, "evidence_refs", None)
     summary = getattr(artifact, "summary", None)
     source_url = getattr(artifact, "source_url", None)
+    stale = getattr(artifact, "stale_status", None)
+    stale_text = getattr(stale, "value", stale)
+    superseded_raw = getattr(artifact, "superseded_by", ()) or ()
+    superseded = tuple(_format_artifact_key(item) for item in superseded_raw)
+    attempt = getattr(artifact, "attempt", None)
     return Tier2Hit(
         issue_number=int(getattr(artifact, "issue_number", 0)),
         title=str(getattr(record, "title", "")),
@@ -502,7 +637,21 @@ def _hit(record: object) -> Tier2Hit:
         source_url=source_url if isinstance(source_url, str) else None,
         pr_url=_optional_text(getattr(evidence, "pr_url", None)),
         comment_url=_optional_text(getattr(evidence, "comment_url", None)),
+        target_commit=_optional_text(getattr(artifact, "target_commit", None)),
+        recorded_at=_optional_text(getattr(artifact, "recorded_at", None)),
+        attempt=attempt
+        if isinstance(attempt, int) and not isinstance(attempt, bool)
+        else None,
+        superseded_by=superseded,
+        stale_status=stale_text if isinstance(stale_text, str) and stale_text else None,
     )
+
+
+def _format_artifact_key(key: object) -> str:
+    repo = getattr(key, "repository", "")
+    issue = getattr(key, "issue_number", "")
+    comment = getattr(key, "source_comment_id", "")
+    return f"{repo}#{issue}:{comment}"
 
 
 def _optional_text(value: object) -> str | None:
@@ -511,11 +660,29 @@ def _optional_text(value: object) -> str | None:
     return None
 
 
+def _measure_local_bytes(
+    document: dict[str, Any], max_bytes: int, intro_bytes: int
+) -> int:
+    size = 0
+    for _ in range(3):
+        stored = dict(document)
+        stored["size_bytes"] = size
+        stored["max_bytes"] = max_bytes
+        rendered = json.dumps(stored, ensure_ascii=False, indent=2) + "\n"
+        measured = len(rendered.encode("utf-8")) + intro_bytes
+        if measured == size:
+            return measured
+        size = measured
+    return size
+
+
 def _fit(
     tier1: Tier1Context,
     search_state: str,
     hits: tuple[Tier2Hit, ...],
     max_bytes: int,
+    *,
+    intro_bytes: int = 0,
 ) -> LaunchContext:
     kept = list(hits)
     dropped = False
@@ -524,13 +691,13 @@ def _fit(
             search_state, hits, kept, dropped, over=False
         )
         document = _document_for(status, tier2_status, reason, tier1, kept)
-        fit = fit_context_budget(document, max_bytes=max_bytes)
-        if fit.fits:
-            return _context(
-                status, tier2_status, reason, tier1, kept, fit.size_bytes, max_bytes
-            )
+        size = _measure_local_bytes(document, max_bytes, intro_bytes)
+        if size <= max_bytes:
+            return _context(status, tier2_status, reason, tier1, kept, size, max_bytes)
         if search_state != TIER2_READY or not kept:
-            return _over_budget(tier1, search_state, hits, dropped, max_bytes)
+            return _over_budget(
+                tier1, search_state, hits, dropped, max_bytes, intro_bytes
+            )
         kept.pop()
         dropped = True
 
@@ -541,6 +708,7 @@ def _over_budget(
     hits: tuple[Tier2Hit, ...],
     dropped: bool,
     max_bytes: int,
+    intro_bytes: int,
 ) -> LaunchContext:
     _status, tier2_status, _reason = _statuses(
         search_state, hits, [], dropped, over=True
@@ -552,7 +720,7 @@ def _over_budget(
         tier1,
         [],
     )
-    size = fit_context_budget(document, max_bytes=max_bytes).size_bytes
+    size = _measure_local_bytes(document, max_bytes, intro_bytes)
     return _context(
         CONTEXT_OVER_BUDGET,
         tier2_status,
@@ -600,6 +768,7 @@ def _context(
     hits: list[Tier2Hit],
     size_bytes: int,
     max_bytes: int,
+    unavailable_reason: str | None = None,
 ) -> LaunchContext:
     kept = tuple(hits)
     return LaunchContext(
@@ -612,14 +781,24 @@ def _context(
         tier3_urls=tuple(_tier3(kept)),
         size_bytes=size_bytes,
         max_bytes=max_bytes,
+        unavailable_reason=unavailable_reason,
     )
 
 
-def _unavailable_context(max_bytes: int) -> LaunchContext:
+def _unavailable_context(max_bytes: int, reason: str | None = None) -> LaunchContext:
     document = _document_for(CONTEXT_UNAVAILABLE, TIER2_UNAVAILABLE, None, None, [])
-    size = fit_context_budget(document, max_bytes=max_bytes).size_bytes
+    if reason is not None:
+        document["unavailable_reason"] = reason
+    size = _measure_local_bytes(document, max_bytes, 0)
     return _context(
-        CONTEXT_UNAVAILABLE, TIER2_UNAVAILABLE, None, None, [], size, max_bytes
+        CONTEXT_UNAVAILABLE,
+        TIER2_UNAVAILABLE,
+        None,
+        None,
+        [],
+        size,
+        max_bytes,
+        unavailable_reason=reason,
     )
 
 
@@ -680,6 +859,13 @@ def _tier2_payload(hit: Tier2Hit) -> dict[str, Any]:
         "title": hit.title,
         "summary": hit.summary,
         "source_url": hit.source_url,
+        "pr_url": hit.pr_url,
+        "comment_url": hit.comment_url,
+        "target_commit": hit.target_commit,
+        "recorded_at": hit.recorded_at,
+        "attempt": hit.attempt,
+        "superseded_by": list(hit.superseded_by),
+        "stale_status": hit.stale_status,
     }
 
 
@@ -692,6 +878,46 @@ def _tier3(hits: tuple[Tier2Hit, ...]) -> list[str]:
                 seen.add(url)
                 urls.append(url)
     return urls
+
+
+def _cloud_prefix_bytes(base_prompt: str) -> int:
+    if not base_prompt:
+        return 0
+    sep = 0 if base_prompt.endswith("\n") else 1
+    return len(base_prompt.encode("utf-8")) + sep
+
+
+def _render_cloud_body(
+    tier1_text: str,
+    hits: list[Tier2Hit] | tuple[Tier2Hit, ...],
+    *,
+    over_budget: bool,
+) -> str:
+    parts = [tier1_text]
+    if over_budget:
+        parts.append(
+            f"context_status={CONTEXT_OVER_BUDGET} reduction_reason={REDUCTION_TIER1_EXCEEDS_BUDGET}"
+        )
+    for hit in hits:
+        parts.append(_cloud_hit_block(hit))
+    return "\n".join(parts)
+
+
+def _cloud_hit_block(hit: Tier2Hit) -> str:
+    superseded = ",".join(hit.superseded_by) if hit.superseded_by else "none"
+    attempt = str(hit.attempt) if hit.attempt is not None else "none"
+    header = f"関連: #{hit.issue_number} {hit.title} {hit.summary or ''}".rstrip()
+    provenance = (
+        f"出典: source_url={hit.source_url or 'none'} "
+        f"pr_url={hit.pr_url or 'none'} "
+        f"comment_url={hit.comment_url or 'none'} "
+        f"target_commit={hit.target_commit or 'none'} "
+        f"recorded_at={hit.recorded_at or 'none'} "
+        f"attempt={attempt} "
+        f"superseded_by={superseded} "
+        f"stale_status={hit.stale_status or 'none'}"
+    )
+    return f"{header}\n{provenance}"
 
 
 def _cloud_tier1(tier1: Tier1Context) -> str:
@@ -721,41 +947,3 @@ def _cloud_dependency_lines(tier1: Tier1Context) -> list[str]:
             f"依存: {label} result={dep.result or ''} summary={dep.summary or ''}"
         )
     return lines
-
-
-def _cloud_extra(context: LaunchContext, remaining: int) -> str:
-    if remaining <= 1:
-        return ""
-    budget = remaining - 1
-    tier2 = truncate_utf8(_tier2_block(context), budget)
-    if tier2 and len(tier2.encode("utf-8")) >= budget:
-        return tier2
-    return _join_tier2_and_urls(tier2, context.tier3_urls, budget)
-
-
-def _join_tier2_and_urls(tier2: str, urls: tuple[str, ...], budget: int) -> str:
-    used = len(tier2.encode("utf-8"))
-    separator = 1 if tier2 else 0
-    fitted = _fit_urls(urls, budget - used - separator)
-    if tier2 and fitted:
-        return f"{tier2}\n{fitted}"
-    return tier2 or fitted
-
-
-def _tier2_block(context: LaunchContext) -> str:
-    return "\n".join(
-        f"関連: #{hit.issue_number} {hit.title} {hit.summary or ''}".rstrip()
-        for hit in context.tier2
-    )
-
-
-def _fit_urls(urls: tuple[str, ...], max_bytes: int) -> str:
-    if max_bytes <= 0:
-        return ""
-    kept: list[str] = []
-    for url in urls:
-        candidate = url if not kept else "\n".join((*kept, url))
-        if len(candidate.encode("utf-8")) > max_bytes:
-            break
-        kept.append(url)
-    return "\n".join(kept)

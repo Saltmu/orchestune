@@ -11,6 +11,14 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
+from orchestune.context.budget import (
+    DEFAULT_LOCAL_CONTEXT_MAX_BYTES,
+    DEFAULT_TIER2_LIMIT,
+)
+from orchestune.context.compose import (
+    compose_launch_context,
+    local_context_document,
+)
 from orchestune.context.fetch import FetchRequest, fetch_context
 from orchestune.context.storage import (
     IndexedRecord,
@@ -36,7 +44,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
     if args.command == "export":
-        return _export(args.db)
+        return _export(args)
     return _rebuild(args)
 
 
@@ -49,6 +57,13 @@ def _parser() -> argparse.ArgumentParser:
     export = commands.add_parser("export", help="export", description=_DESCRIPTION)
     _add_database(rebuild)
     _add_database(export)
+    export.add_argument("--issue", type=int)
+    export.add_argument("--parent-issue", type=int)
+    export.add_argument("--repository")
+    export.add_argument("--tier2-limit", type=int, default=DEFAULT_TIER2_LIMIT)
+    export.add_argument(
+        "--max-bytes", type=int, default=DEFAULT_LOCAL_CONTEXT_MAX_BYTES
+    )
     rebuild.add_argument("--repository", required=True)
     rebuild.add_argument("--parent-issue", type=int)
     rebuild.add_argument("--issue", action="append", type=int)
@@ -109,9 +124,25 @@ def _request(args: argparse.Namespace) -> FetchRequest:
     )
 
 
-def _export(database: Path) -> int:
+def _export(args: argparse.Namespace) -> int:
+    if args.issue is not None:
+        try:
+            launch_context = compose_launch_context(
+                GitHubForge(),
+                args.issue,
+                parent_issue_number=args.parent_issue,
+                index_path=args.db,
+                tier2_limit=args.tier2_limit,
+                max_bytes=args.max_bytes,
+                repository=args.repository,
+            )
+        except _OPERATION_ERRORS as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        _print(local_context_document(launch_context))
+        return 0
     try:
-        view = open_context_index(database)
+        view = open_context_index(args.db)
     except _OPERATION_ERRORS as exc:
         print(str(exc), file=sys.stderr)
         return 1

@@ -22,6 +22,7 @@ from typing import Any, Literal
 
 from orchestune.context.compose import (
     append_cloud_context,
+    fit_local_context,
     local_context_document,
     local_prompt_reference,
 )
@@ -272,7 +273,11 @@ def _is_builtin_local_cmd(
 
 
 def _write_context_file(
-    worktree_path: Path, issue_number: int, launch_context: object | None
+    worktree_path: Path,
+    issue_number: int,
+    launch_context: object | None,
+    *,
+    include_intro: bool = False,
 ) -> str | None:
     if not isinstance(launch_context, LaunchContext):
         return None
@@ -282,12 +287,16 @@ def _write_context_file(
         "context", str(issue_number), project_dir=worktree_path
     )
     path = session_dir / "context.json"
+    relative = path.relative_to(worktree_path).as_posix()
+    intro_bytes = (
+        len(local_prompt_reference(relative).encode("utf-8")) if include_intro else 0
+    )
+    fitted = fit_local_context(launch_context, intro_bytes=intro_bytes)
     path.write_text(
-        json.dumps(local_context_document(launch_context), ensure_ascii=False, indent=2)
-        + "\n",
+        json.dumps(local_context_document(fitted), ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    return path.relative_to(worktree_path).as_posix()
+    return relative
 
 
 def _append_context_reference(cmd: list[str], relative: str) -> list[str]:
@@ -362,7 +371,18 @@ class LocalProcessDispatchTarget(LocalUsageProvider, DispatchTarget):
     ) -> list[str]:
         if not self._local_cmd:
             return self._command_builder(task, worktree_path)
-        relative = _write_context_file(worktree_path, task.issue_number, launch_context)
+        append_intro = (
+            "{context_json}" not in self._local_cmd
+            and _is_builtin_local_cmd(
+                self._local_cmd, self.target_name, self._reviewer_bot
+            )
+        )
+        relative = _write_context_file(
+            worktree_path,
+            task.issue_number,
+            launch_context,
+            include_intro=append_intro,
+        )
         template = self._local_cmd
         if "{context_json}" in template:
             template = template.replace("{context_json}", relative or "")
@@ -379,13 +399,7 @@ class LocalProcessDispatchTarget(LocalUsageProvider, DispatchTarget):
             self._reviewer_bot,
             base_branch=base_branch,
         )
-        if (
-            relative
-            and "{context_json}" not in self._local_cmd
-            and _is_builtin_local_cmd(
-                self._local_cmd, self.target_name, self._reviewer_bot
-            )
-        ):
+        if relative and append_intro:
             return _append_context_reference(cmd, relative)
         return cmd
 
