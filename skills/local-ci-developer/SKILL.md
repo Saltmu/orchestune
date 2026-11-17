@@ -26,7 +26,7 @@ This skill routes the standard development workflow. [stages.toml](../../orchest
 
 ### Interactive context read
 
-Before implementation in interactive mode, read the JSON from `orchestune context export`. That path is separate from the `context.json` dispatch writes and does not replace `orchestune claim`, completed dependencies, or the stale-read gate.
+Before implementation in interactive mode, read the JSON from `orchestune context export --issue <issue_number>`. That path is separate from the `context.json` dispatch writes and does not replace `orchestune claim`, completed dependencies, or the stale-read gate.
 
 ## Fast-Path for Minor Changes (Typo / Docs)
 For documentation updates or typo fixes that do not alter code logic, **Steps 3–8 (TDD) may be skipped**. However, to prevent secret leaks (gitleaks) and ensure quality, **Step 9 Local CI (`./scripts/local-ci.sh` / `.\\scripts\\local-ci.ps1`) must always be executed** before proceeding to Step 10 (PR creation).

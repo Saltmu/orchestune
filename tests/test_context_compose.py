@@ -290,7 +290,7 @@ def test_tier1_keeps_parent_dependency_outcome_and_summary(tmp_path: Path) -> No
     )
 
 
-def test_blocked_dependency_is_listed_without_a_confirmed_result(
+def test_blocked_dependency_makes_context_unavailable_with_reason(
     tmp_path: Path,
 ) -> None:
     blocked = OutcomeRecord(result="blocked", issue=50, reason="base-branch-red")
@@ -304,9 +304,16 @@ def test_blocked_dependency_is_listed_without_a_confirmed_result(
         forge, 1, parent_issue_number=100, index_path=tmp_path / "missing.sqlite3"
     )
 
-    assert composed.tier1 is not None
-    assert composed.tier1.dependencies[0].result is None
-    assert composed.tier1.dependencies[0].issue_number == 50
+    assert composed.context_status == "unavailable"
+    assert composed.tier1 is None
+    assert composed.unavailable_reason is not None
+    assert "50" in composed.unavailable_reason
+    assert (
+        compose_for_dispatch(
+            forge, 1, parent_issue_number=100, index_path=tmp_path / "missing.sqlite3"
+        )
+        is None
+    )
 
 
 def test_magicmock_and_raising_forge_degrade_without_raising(tmp_path: Path) -> None:
@@ -456,7 +463,7 @@ depends_on: []
     forge = _Forge({8: _issue(8, body, title="索引予算")})
     full = compose_launch_context(forge, 8, index_path=index, max_bytes=10**9)
     shrunk = compose_launch_context(
-        forge, 8, index_path=index, max_bytes=full.size_bytes - 1
+        forge, 8, index_path=index, max_bytes=full.size_bytes - 50
     )
     over = compose_launch_context(forge, 8, index_path=index, max_bytes=1)
 
@@ -485,22 +492,11 @@ def test_truncate_utf8_stops_on_a_character_boundary() -> None:
 
 def test_cloud_format_keeps_tier1_and_drops_whole_urls() -> None:
     context = _context()
-    tier1 = format_cloud_context(_context(tier2=(), tier3_urls=()), max_bytes=10**6)
-    capped = format_cloud_context(context, max_bytes=len(tier1.encode("utf-8")) + 1 + 4)
-    urls_only = _context(tier2=())
-    one = "https://example.test/one"
-    url_cap = len(tier1.encode("utf-8")) + 1 + len(one.encode("utf-8"))
-    with_one_url = format_cloud_context(urls_only, max_bytes=url_cap)
     over = format_cloud_context(context, max_bytes=1)
 
     assert "PURPOSE" in over
+    assert "over_budget" in over
     assert len(over.encode("utf-8")) > 1
-    assert capped.startswith(tier1 + "\n")
-    extra = capped.removeprefix(tier1 + "\n")
-    assert extra == "関"
-    assert "あいう" not in extra
-    assert one in with_one_url
-    assert "https://example.test/two" not in with_one_url
     assert append_cloud_context("元の指示\n", None) == "元の指示\n"
 
 
@@ -740,3 +736,310 @@ def test_journaled_target_forwards_context_only_when_attempt_accepts_it(
 
     assert accepting.seen is context
     assert rejecting.called is True
+
+
+def test_1841_parent_heading_and_missing_bodies_are_handled(tmp_path: Path) -> None:
+    parent_1841 = """
+## 目的
+ScaleMASを参考に限定コンテキストを構成する
+
+## 企画の受入条件
+Tier 1と出典を必ず維持する
+"""
+    child_body = _CHILD.replace("depends_on:\n  - dep-a\n", "depends_on: []\n")
+    composed = compose_launch_context(
+        _Forge({1: _issue(1, child_body), 1841: _issue(1841, parent_1841, title="親")}),
+        1,
+        parent_issue_number=1841,
+        index_path=tmp_path / "missing.sqlite3",
+    )
+    missing_child_body = compose_launch_context(
+        _Forge({1: _issue(1, "   "), 1841: _issue(1841, parent_1841, title="親")}),
+        1,
+        parent_issue_number=1841,
+        index_path=tmp_path / "missing.sqlite3",
+    )
+    missing_parent_body = compose_launch_context(
+        _Forge({1: _issue(1, child_body), 1841: _issue(1841, "", title="親")}),
+        1,
+        parent_issue_number=1841,
+        index_path=tmp_path / "missing.sqlite3",
+    )
+
+    assert composed.context_status == "ready"
+    assert composed.tier1 is not None
+    assert composed.tier1.parent_purpose == "ScaleMASを参考に限定コンテキストを構成する"
+    assert composed.tier1.parent_acceptance == "Tier 1と出典を必ず維持する"
+    assert missing_child_body.context_status == "unavailable"
+    assert missing_child_body.unavailable_reason is not None
+    assert "1" in missing_child_body.unavailable_reason
+    assert missing_parent_body.context_status == "unavailable"
+    assert missing_parent_body.unavailable_reason is not None
+    assert "1841" in missing_parent_body.unavailable_reason
+
+
+def test_native_dependency_and_later_blocked_outcome_and_comment_failure(
+    tmp_path: Path,
+) -> None:
+    child = IssueRecord(
+        number=1,
+        title="子",
+        body="## 目的\n目的\n\n## 受け入れ条件\n受入\n\n## Footprint\n```yaml\nsubtask_id: child\nfootprint:\n  - a.py\ndepends_on: []\n```\n",
+        labels=(),
+        created_at="2026-01-01T00:00:00Z",
+        blocked_by=(50,),
+    )
+    dep = _issue(50, _DEP, title="依存")
+    later_blocked = OutcomeRecord(result="blocked", issue=50, reason="stale-read")
+    forge_later_blocked = _Forge(
+        {1: child, 50: dep},
+        {
+            50: [
+                _done_comment("古い完了"),
+                {"body": later_blocked.render(), "created_at": "2026-01-05T00:00:00Z"},
+            ]
+        },
+    )
+
+    class _CommentFailForge(_Forge):
+        def list_comments(self, number: int) -> list[dict[str, Any]]:
+            raise RuntimeError(f"comments down {number}")
+
+    forge_done = _Forge({1: child, 50: dep}, {50: [_done_comment("native完了")]})
+    ready = compose_launch_context(
+        forge_done, 1, index_path=tmp_path / "missing.sqlite3"
+    )
+    blocked_res = compose_launch_context(
+        forge_later_blocked, 1, index_path=tmp_path / "missing.sqlite3"
+    )
+    failed_res = compose_launch_context(
+        _CommentFailForge({1: child, 50: dep}),
+        1,
+        index_path=tmp_path / "missing.sqlite3",
+    )
+
+    assert ready.context_status == "ready"
+    assert ready.tier1 is not None
+    assert ready.tier1.dependencies[0].issue_number == 50
+    assert ready.tier1.dependencies[0].summary == "native完了"
+    assert blocked_res.context_status == "unavailable"
+    assert blocked_res.unavailable_reason is not None
+    assert "50" in blocked_res.unavailable_reason
+    assert failed_res.context_status == "unavailable"
+    assert failed_res.unavailable_reason is not None
+    assert "50" in failed_res.unavailable_reason
+
+
+def test_tier2_filters_repository_and_preserves_provenance_in_local_and_cloud(
+    tmp_path: Path,
+) -> None:
+    same_repo = _artifact(11, "索引予算 注入する compose_launch_context")
+    other_repo = IndexedRecord(
+        artifact=SharedArtifactV1(
+            schema_version=SCHEMA_VERSION,
+            repository="OtherOrg/other-repo",
+            issue_number=99,
+            source_comment_id="c99",
+            source_revision_digest="ef" * 32,
+            parent_issue=100,
+            subtask_id="other",
+            claim_id=None,
+            attempt=3,
+            completion_id="completion-99",
+            base_sha=None,
+            target_commit="9" * 40,
+            task_kind="feat",
+            result="done",
+            summary="別リポジトリの成果",
+            assumptions=None,
+            evidence_refs=EvidenceRefs(),
+            verification_summary=VerificationSummary(ci="pass"),
+            supersedes=None,
+            superseded_by=(),
+            stale_status=ArtifactStaleStatus.CONFIRMED_STALE,
+            recorded_at="2026-01-03T00:00:00Z",
+            indexed_at=None,
+            source_url="https://example.test/other/99",
+            plan_revision_digest="d" * 64,
+            depends_on=(),
+            footprint=("orchestune/context/compose.py",),
+            symbols=("compose_launch_context",),
+            dependency_issue_numbers=(),
+        ),
+        title="索引予算 注入する compose_launch_context",
+        description="索引予算 注入する compose_launch_context",
+    )
+    index = tmp_path / "context-index.sqlite3"
+    rebuild_context_index(
+        index,
+        CollectionSnapshot(
+            publish=True,
+            coverage_status="complete",
+            reason=None,
+            records=(same_repo, other_repo),
+            manifest={"coverage_status": "complete", "reason": None},
+        ),
+        indexed_at="2026-01-04T00:00:00Z",
+    )
+    body = _CHILD.replace("depends_on:\n  - dep-a\n", "depends_on: []\n")
+
+    class _RepoForge(_Forge):
+        def get_repository_slug(self) -> str:
+            return "Saltmu/orchestune"
+
+    composed = compose_launch_context(
+        _RepoForge({8: _issue(8, body, title="索引予算")}),
+        8,
+        index_path=index,
+    )
+
+    assert [hit.issue_number for hit in composed.tier2] == [11]
+    hit = composed.tier2[0]
+    assert hit.target_commit == "c" * 40
+    assert hit.recorded_at == "2026-01-01T00:00:00Z"
+    assert hit.attempt == 1
+    assert hit.stale_status == "unknown"
+
+    _cmd, written = _capture_launch(tmp_path, GROK_CLI_LOCAL_CMD_TEMPLATE, composed)
+    payload = json.loads(written[0].read_text(encoding="utf-8"))
+    tier2_entry = payload["tier2"][0]
+    assert tier2_entry["target_commit"] == "c" * 40
+    assert tier2_entry["recorded_at"] == "2026-01-01T00:00:00Z"
+    assert tier2_entry["attempt"] == 1
+    assert tier2_entry["stale_status"] == "unknown"
+    assert tier2_entry["source_url"] == "https://example.test/issue/11"
+
+    routine = ClaudeCodeCloudRoutineDispatchTarget("routine", "token")
+    codex = CodexCloudDispatchTarget("env")
+    for prompt in (
+        routine._build_text(_task(), "branch", launch_context=composed),
+        codex._build_prompt(_task(), "branch", launch_context=composed),
+    ):
+        assert "c" * 40 in prompt
+        assert "2026-01-01T00:00:00Z" in prompt
+        assert "https://example.test/issue/11" in prompt
+        assert "unknown" in prompt
+
+
+def test_local_and_cloud_actual_utf8_byte_budget_and_over_budget(
+    tmp_path: Path,
+) -> None:
+    hit1 = Tier2Hit(
+        issue_number=11,
+        title="日本語ヒット1",
+        summary="あ" * 40,
+        source_url="https://example.test/issue/11",
+        target_commit="a" * 40,
+        recorded_at="2026-01-01T00:00:00Z",
+        attempt=1,
+        stale_status="unknown",
+    )
+    hit2 = Tier2Hit(
+        issue_number=12,
+        title="日本語ヒット2",
+        summary="い" * 40,
+        source_url="https://example.test/issue/12",
+        target_commit="b" * 40,
+        recorded_at="2026-01-02T00:00:00Z",
+        attempt=2,
+        stale_status="candidate_stale",
+    )
+    context = _context(
+        tier2=(hit1, hit2),
+        tier3_urls=("https://example.test/issue/11", "https://example.test/issue/12"),
+    )
+
+    routine = ClaudeCodeCloudRoutineDispatchTarget("routine", "token")
+    base_prompt = routine._build_text(_task(), "branch", launch_context=None)
+    one_hit_context = _context(
+        tier2=(hit1,),
+        tier3_urls=("https://example.test/issue/11",),
+    )
+    exact_one_hit = append_cloud_context(base_prompt, one_hit_context, max_bytes=10**6)
+    exact_cap = len(exact_one_hit.encode("utf-8"))
+
+    fitted = append_cloud_context(base_prompt, context, max_bytes=exact_cap)
+    assert len(fitted.encode("utf-8")) <= exact_cap
+    assert "日本語ヒット1" in fitted
+    assert "https://example.test/issue/11" in fitted
+    assert "日本語ヒット2" not in fitted
+    assert "https://example.test/issue/12" not in fitted
+
+    over = append_cloud_context(
+        base_prompt, context, max_bytes=len(base_prompt.encode("utf-8")) + 10
+    )
+    assert "PURPOSE" in over
+    assert "over_budget" in over
+    assert "日本語ヒット1" not in over
+
+    cmd, written = _capture_launch(
+        tmp_path,
+        GROK_CLI_LOCAL_CMD_TEMPLATE,
+        _context(
+            context_status="over_budget",
+            reduction_reason="tier1_exceeds_budget",
+            tier2=(),
+            tier3_urls=(),
+            max_bytes=1,
+        ),
+    )
+    assert written
+    local_payload = json.loads(written[0].read_text(encoding="utf-8"))
+    assert local_payload["context_status"] == "over_budget"
+    assert local_payload["reduction_reason"] == "tier1_exceeds_budget"
+    assert "context.json" in cmd[2]
+
+
+def test_numeric_depends_on_scalar_depends_on_and_repo_mismatch(
+    tmp_path: Path,
+) -> None:
+    numeric_child = _issue(
+        1,
+        "## 目的\n目的\n\n## Footprint\n```yaml\nsubtask_id: c1\nfootprint:\n  - a.py\ndepends_on:\n  - 50\n```\n",
+    )
+    scalar_child = _issue(
+        2,
+        "## 目的\n目的\n\n## Footprint\n```yaml\nsubtask_id: c2\nfootprint:\n  - a.py\ndepends_on: dep-a\n```\n",
+    )
+    dep = _issue(50, _DEP, title="依存")
+
+    class _RepoForge(_Forge):
+        def get_repository_slug(self) -> str:
+            return "Saltmu/orchestune"
+
+    forge = _RepoForge(
+        {1: numeric_child, 2: scalar_child, 50: dep}, {50: [_done_comment("数値完了")]}
+    )
+    numeric_res = compose_launch_context(
+        forge, 1, index_path=tmp_path / "missing.sqlite3"
+    )
+    scalar_res = compose_launch_context(
+        forge, 2, index_path=tmp_path / "missing.sqlite3"
+    )
+    mismatch_res = compose_launch_context(
+        forge,
+        1,
+        index_path=tmp_path / "missing.sqlite3",
+        repository="OtherOrg/other",
+    )
+
+    assert numeric_res.context_status == "ready"
+    assert numeric_res.tier1 is not None
+    assert numeric_res.tier1.dependencies[0].issue_number == 50
+    assert numeric_res.tier1.dependencies[0].summary == "数値完了"
+    assert scalar_res.context_status == "unavailable"
+    assert mismatch_res.context_status == "unavailable"
+    assert mismatch_res.unavailable_reason is not None
+    assert "repository mismatch" in mismatch_res.unavailable_reason
+
+
+def test_fit_local_context_preserves_prior_reduction_state(tmp_path: Path) -> None:
+    reduced = _context(
+        tier2_status="reduced",
+        reduction_reason="tier2_tail_dropped",
+    )
+    _cmd, written = _capture_launch(tmp_path, GROK_CLI_LOCAL_CMD_TEMPLATE, reduced)
+    payload = json.loads(written[0].read_text(encoding="utf-8"))
+
+    assert payload["tier2_status"] == "reduced"
+    assert payload["reduction_reason"] == "tier2_tail_dropped"

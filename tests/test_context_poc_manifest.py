@@ -334,7 +334,7 @@ def test_skill_reads_export_without_replacing_claim() -> None:
         encoding="utf-8"
     )
 
-    assert "orchestune context export" in skill
+    assert "orchestune context export --issue <issue_number>" in skill
     assert "context.json" in skill
     assert "orchestune claim <issue_number> --apply" in skill
     assert "stale-read" in skill

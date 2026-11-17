@@ -129,3 +129,78 @@ def test_rebuild_requires_a_selector(capsys: pytest.CaptureFixture[str]) -> None
 
     assert status == 2
     assert "specify" in capsys.readouterr().err
+
+
+def test_export_with_issue_composes_bounded_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    forge = FakeForge()
+    forge.issues[100] = IssueRecord(
+        number=100,
+        title="親",
+        body="## 目的\n親の目的\n\n## 企画の受入条件\n親の受入\n",
+        labels=(),
+        created_at="2026-01-01T00:00:00Z",
+    )
+    forge.issues[7] = IssueRecord(
+        number=7,
+        title="索引検索",
+        body=(
+            "## 目的\n検索を絞る\n\n## 受け入れ条件\n予算内\n\n"
+            "## Footprint\n```yaml\nsubtask_id: s7\nfootprint:\n  - orchestune/context/cli.py\n"
+            "symbols:\n  - main\ndepends_on: []\n```\n"
+        ),
+        labels=(),
+        created_at="2026-01-01T00:00:00Z",
+        parent={"number": 100},
+    )
+    forge.issues[8] = IssueRecord(
+        number=8,
+        title="無関係な記録",
+        body="無関係\n",
+        labels=(),
+        created_at="2026-01-01T00:00:00Z",
+    )
+    forge.create_issue_comment(
+        7,
+        OutcomeRecord(result="done", issue=7, completion_id="completion-7").render(),
+    )
+    forge.create_issue_comment(
+        8,
+        OutcomeRecord(result="done", issue=8, completion_id="completion-8").render(),
+    )
+    monkeypatch.setattr(context_cli, "GitHubForge", lambda: forge)
+    database = tmp_path / "context-index.sqlite3"
+
+    assert (
+        main(
+            [
+                "rebuild",
+                "--repository",
+                "Saltmu/orchestune",
+                "--issue",
+                "7",
+                "--issue",
+                "8",
+                "--db",
+                str(database),
+                "--indexed-at",
+                "2026-01-05T00:00:00Z",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    status = main(
+        ["export", "--db", str(database), "--issue", "7", "--tier2-limit", "1"]
+    )
+    exported = json.loads(capsys.readouterr().out)
+
+    assert status == 0
+    assert exported["schema_version"] == "launch-context-v1"
+    assert exported["context_status"] == "ready"
+    assert exported["tier1"]["purpose"] == "検索を絞る"
+    assert exported["tier1"]["parent_acceptance"] == "親の受入"
+    assert len(exported["tier2"]) <= 1
+    assert exported["size_bytes"] <= exported["max_bytes"]
