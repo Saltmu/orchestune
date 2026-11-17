@@ -12,10 +12,10 @@
 | 参照履歴対象（13 件） | `#1841, #1851, #1852, #1853, #1854, #1858, #1866, #1868, #1270, #1835, #1836, #1838, #1839` |
 | 自己・事後除外規則 | 各タスク実行時は `issue_number = 対象タスク` および `recorded_at >= 2026-11-17T14:28:10Z` を索引から除外 |
 | 比較 3 条件 | `baseline`（通常の最小起動プロンプトのみ）/ `tier1_only`（`tier2_limit=0`）/ `tier1_plus_tier2`（`tier2_limit=5`, `max_bytes=32768`） |
-| ライブ実行モデル・設定 | `codex-cli 0.169.0`（`codex exec --json --sandbox read-only --ephemeral`）、各試行ごとに独立した detached `git worktree`（`base_sha`）と一時セッションを作成 |
+| ライブ実行モデル・設定 | `codex-cli 0.169.0`、設定モデル `gpt-6.1-sol`、`model_reasoning_effort = "high"`（`-m` / `-c` 上書きなし、`codex exec --json --sandbox read-only --ephemeral`）。各試行ごとに独立した detached `git worktree`（`base_sha`）と一時セッションを作成 |
 
 ### 比較条件の差・制約・欠測ポリシー
-- **モデル選択の理由**: 当初 `claude` CLI を試行したが OAuth セッション期限切れ（`authentication_failed`）のため、同一環境で利用可能な `codex-cli 0.169.0` へ切り替え、全 5 タスク × 3 条件（計 15 試行）を同一モデル・同一サンドボックス設定で揃えた。
+- **モデル選択・推論設定の記録と制約**: 当初 `claude` CLI を試行したが OAuth セッション期限切れ（`authentication_failed`）のため、同一環境で利用可能な `codex-cli 0.169.0` へ切り替え、全 5 タスク × 3 条件（計 15 試行、ログ再利用した `#1858` の 3 試行も同一セッション・同一 `run_live_eval.py` 実行による）を同一の設定（Codex ユーザー設定 `config.toml` の `model = "gpt-6.1-sol"`, `model_reasoning_effort = "high"`）および同一サンドボックス設定で揃えた。なお `codex exec --json` のイベント（`thread.started` / `turn.completed`）は実行時の解決済みモデル ID 文字列を出力しないため、設定ファイル上の固定値として記録する。
 - **トークンとバイト数の分離**: `injected_bytes` はプロンプト／`context.json` の UTF-8 バイト数であり、`input_tokens` / `output_tokens` / `total_tokens` / `cost_usd` の代理指標としては扱わない。
 - **欠測理由**:
   - `cost_usd`: `codex exec --json` が課金額を出力しないため全試行で `null`（理由: `codex exec --json does not emit cost_usd`）。
