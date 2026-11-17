@@ -1358,3 +1358,46 @@ orchestune trial result <TRIAL_ID> --decision adopted --repo "<source_root>"
 orchestune trial result <TRIAL_ID> --decision keep --repo "<source_root>"
 ```
 
+## 起動コンテキスト（`orchestune context`）
+
+`orchestune context` は、ローカル索引を再構築して JSON で書き出します。`--apply`、`--no-apply`、`--dry-run` は無いので、冒頭のプレビューと適用の早見表には入れません。対話セッションへ自動では渡しません。dispatch が worktree に書く `context.json` とは別の経路です。
+
+### 再構築と書き出し
+
+```bash
+orchestune context rebuild --repository OWNER/REPO --issue 7
+orchestune context export
+orchestune context export --issue 7
+```
+
+`--db` の既定は、どちらのサブコマンドも `.orchestune/context-index.sqlite3` です。`rebuild` には `--repository` と、`--parent-issue`、`--issue`（繰り返し可）、`--since` のいずれかが必要です。セレクタが無いときは終了コード 2 です。取得または書き込みに失敗したときは終了コード 1 です。取得に失敗したときは索引の置き換えを呼ばないので、既存ファイルは残ります。`--indexed-at` を省くと、実行時の UTC 時刻を使います。`--max-pages` は 1 以上です。
+
+`export` は、公開済みの索引を JSON で標準出力へ出します。`--issue <N>`（必要に応じて `--parent-issue`、`--tier2-limit`、`--max-bytes`、`--repository`）を指定すると、対象 Issue の Tier 1〜3 を同じ構成・予算ルールで絞り込んだ JSON を書き出します。ファイルが無い、または読めないときは終了コード 0 のまま、`status` は `unavailable`、`artifacts` は空です。壊れたファイルは `<db>.corrupt.<ナノ秒>` へ移します。
+
+### Tier 1〜3
+
+予算は UTF-8 bytes です。トークナイザのトークン上限は保証しません。
+
+| 層 | 内容 | 収まらないとき |
+| :--- | :--- | :--- |
+| Tier 1 | 子 Issue の目的、受け入れ、footprint、symbols。親の目的と受け入れ。直接依存の確定した成果 | 検索順位では落とさない。索引を経由せず、正本から読む |
+| Tier 2 | ローカル索引に対する BM25。上位から、予算に入る件数だけ残す | 末尾から落とす。0 件でもよい |
+| Tier 3 | 残した Tier 2 の出典 URL | 本文と diff は注入しない |
+
+```text
+context_status: ready | over_budget | unavailable
+tier2_status: ready | reduced | unavailable | empty
+reduction_reason: tier1_exceeds_budget | tier2_tail_dropped | null
+Tier 2 missing: tier2_status=unavailable, hits=0, Tier 1 kept
+defaults: tier2_limit=5 local_bytes=32768 cloud_bytes=8192
+```
+
+### 縮退
+
+- `over_budget`: Tier 1 だけで予算を超えます。`reduction_reason` は `tier1_exceeds_budget` です。Tier 1 は切らずに残し、Tier 2 は空にします。
+- `unavailable`: Tier 1 を読めません。Tier 1 は空になり、dispatch はこれまでの起動文のまま進めます。必須入力を取れた成功には数えません。
+- Tier 2 の索引が無い、壊れている、または検索に失敗したときは、上の `Tier 2 missing` のとおり 0 件に縮退します。Tier 1 が予算に収まるときは `context_status` は `ready` のままです。索引が読めて該当が 0 件のときは `tier2_status` が `empty` であり、索引の欠損とは別です。
+- 予算に収めるための末尾削減は、`tier2_status` が `reduced`、`reduction_reason` が `tier2_tail_dropped`、`context_status` が `ready` です。
+
+対話実行では、実装の前に `orchestune context export --issue <issue_number>` の JSON を読みます。dispatch が書く `context.json` の代わりにはしません。`orchestune claim`、依存の完了、stale-read ゲートはこれまでどおり使います。
+

@@ -17,6 +17,16 @@ from orchestune.models import CommitCheck, IssueRecord, PrRecord
 from tests.forge_event_support import EventCommentForgeMixin
 
 
+def _invalid_max_pages(max_pages: int | None) -> bool:
+    return max_pages is not None and (isinstance(max_pages, bool) or max_pages < 1)
+
+
+def _in_issue_range(issue: IssueRecord, since: str | None, state: str) -> bool:
+    if since is not None and issue.created_at < since:
+        return False
+    return state == "all" or issue.state.lower() == state
+
+
 class FakeForge(EventCommentForgeMixin):
     """An in-memory implementation of the Forge protocol for testing."""
 
@@ -233,6 +243,26 @@ class FakeForge(EventCommentForgeMixin):
             for issue in self.issues.values()
             if issue.parent and issue.parent.get("number") == pnum
         ]
+
+    def list_issues_in_range(
+        self,
+        *,
+        since: str | None = None,
+        state: str = "open",
+        max_pages: int | None = None,
+    ) -> tuple[list[IssueRecord], bool]:
+        if state not in {"open", "closed", "all"}:
+            raise ValueError(f"stateが不正です: {state!r}")
+        if _invalid_max_pages(max_pages):
+            raise ValueError(f"max_pagesが不正です: {max_pages!r}")
+        matched = [
+            issue
+            for issue in sorted(self.issues.values(), key=lambda item: item.number)
+            if _in_issue_range(issue, since, state)
+        ]
+        if max_pages is None:
+            return matched, True
+        return matched[:max_pages], len(matched) <= max_pages
 
     def set_blocked_by(
         self, issue_number: int | str, blocking_issue_number: int | str

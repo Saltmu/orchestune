@@ -20,6 +20,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from orchestune.context.compose import (
+    append_cloud_context,
+    fit_local_context,
+    local_context_document,
+    local_prompt_reference,
+)
+from orchestune.context.contracts import LaunchContext
 from orchestune.dispatch.local_semantic_fix import launch_local_semantic_fix
 from orchestune.dispatch.reviewer import (
     ReviewerBot,
@@ -34,6 +41,7 @@ from orchestune.infra.detached_process import (
 )
 from orchestune.infra.git_cli import run_git
 from orchestune.infra.process_utils import is_process_alive
+from orchestune.session_dirs import create_session_dir
 from orchestune.targets.cloud_routine import (
     ROUTINE_ID_ENV_VAR as ROUTINE_ID_ENV_VAR,
 )
@@ -142,6 +150,14 @@ CODEX_CLI_LOCAL_CMD_TEMPLATE = _default_local_cmd_template(
 GROK_CLI_LOCAL_CMD_TEMPLATE = _default_local_cmd_template(
     "grok-cli", resolve_reviewer_bot("auto", "grok-cli")
 )
+_BUILTIN_LOCAL_TEMPLATES = frozenset(
+    {
+        CLAUDE_CLI_LOCAL_CMD_TEMPLATE,
+        AGY_CLI_LOCAL_CMD_TEMPLATE,
+        CODEX_CLI_LOCAL_CMD_TEMPLATE,
+        GROK_CLI_LOCAL_CMD_TEMPLATE,
+    }
+)
 
 LOCAL_CLI_CANDIDATES: tuple[str, ...] = ("claude", "agy", "codex", "grok")
 
@@ -242,6 +258,57 @@ def _format_local_cmd(
     return cmd
 
 
+def _is_builtin_local_cmd(
+    local_cmd: str | None,
+    target_name: str | None,
+    reviewer_bot: ReviewerBot | None,
+) -> bool:
+    if not isinstance(local_cmd, str):
+        return False
+    if local_cmd in _BUILTIN_LOCAL_TEMPLATES:
+        return True
+    if isinstance(target_name, str) and target_name in _LOCAL_CMD_BASE_BY_TARGET:
+        return local_cmd == _default_local_cmd_template(target_name, reviewer_bot)
+    return False
+
+
+def _write_context_file(
+    worktree_path: Path,
+    issue_number: int,
+    launch_context: object | None,
+    *,
+    include_intro: bool = False,
+) -> str | None:
+    if not isinstance(launch_context, LaunchContext):
+        return None
+    if launch_context.context_status == "unavailable" or launch_context.tier1 is None:
+        return None
+    session_dir = create_session_dir(
+        "context", str(issue_number), project_dir=worktree_path
+    )
+    path = session_dir / "context.json"
+    relative = path.relative_to(worktree_path).as_posix()
+    intro_bytes = (
+        len(local_prompt_reference(relative).encode("utf-8")) if include_intro else 0
+    )
+    fitted = fit_local_context(launch_context, intro_bytes=intro_bytes)
+    path.write_text(
+        json.dumps(local_context_document(fitted), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return relative
+
+
+def _append_context_reference(cmd: list[str], relative: str) -> list[str]:
+    note = local_prompt_reference(relative)
+    updated = list(cmd)
+    for index, arg in enumerate(updated):
+        if "GitHub Issue #" in arg:
+            updated[index] = f"{arg}{note}"
+            return updated
+    return updated
+
+
 class LocalProcessDispatchTarget(LocalUsageProvider, DispatchTarget):
     """ローカルマシン上のサブプロセスとしてエージェントを起動する戦略。
 
@@ -300,29 +367,41 @@ class LocalProcessDispatchTarget(LocalUsageProvider, DispatchTarget):
         worktree_path: Path,
         execution_selection: ExecutionSelection | None,
         base_branch: str | None,
+        launch_context: object | None = None,
     ) -> list[str]:
         if not self._local_cmd:
             return self._command_builder(task, worktree_path)
-        model = execution_selection.model if execution_selection else None
-        reasoning_effort = (
-            execution_selection.reasoning_effort if execution_selection else None
+        append_intro = (
+            "{context_json}" not in self._local_cmd
+            and _is_builtin_local_cmd(
+                self._local_cmd, self.target_name, self._reviewer_bot
+            )
         )
-        profile_name = (
-            execution_selection.profile
-            if execution_selection
-            else (task.execution_profile or "")
+        relative = _write_context_file(
+            worktree_path,
+            task.issue_number,
+            launch_context,
+            include_intro=append_intro,
         )
-        return _format_local_cmd(
-            self._local_cmd,
+        template = self._local_cmd
+        if "{context_json}" in template:
+            template = template.replace("{context_json}", relative or "")
+        cmd = _format_local_cmd(
+            template,
             task,
             branch_name,
             worktree_path,
-            model,
-            reasoning_effort,
-            profile_name,
+            execution_selection.model if execution_selection else None,
+            execution_selection.reasoning_effort if execution_selection else None,
+            execution_selection.profile
+            if execution_selection
+            else (task.execution_profile or ""),
             self._reviewer_bot,
             base_branch=base_branch,
         )
+        if relative and append_intro:
+            return _append_context_reference(cmd, relative)
+        return cmd
 
     def launch(
         self,
@@ -333,10 +412,16 @@ class LocalProcessDispatchTarget(LocalUsageProvider, DispatchTarget):
         force_push: bool = False,
         execution_selection: ExecutionSelection | None = None,
         base_branch: str | None = None,
+        launch_context: object | None = None,
     ) -> DispatchHandle:
         self.log_dir.mkdir(parents=True, exist_ok=True)
         cmd = self._resolve_command(
-            task, branch_name, worktree_path, execution_selection, base_branch
+            task,
+            branch_name,
+            worktree_path,
+            execution_selection,
+            base_branch,
+            launch_context,
         )
         slug = branch_name.replace("/", "-")
         log_path = self.log_dir / f"{slug}.log"
@@ -513,11 +598,16 @@ class CodexCloudDispatchTarget(DispatchTarget):
         self._reviewer_bot = reviewer_bot
 
     def _build_prompt(
-        self, task: TaskMetadata, branch_name: str, base_branch: str | None = None
+        self,
+        task: TaskMetadata,
+        branch_name: str,
+        base_branch: str | None = None,
+        *,
+        launch_context: object | None = None,
     ) -> str:
         footprint = ", ".join(task.footprint) if task.footprint else "(未指定)"
         base_branch_val = resolve_base_branch_val(base_branch)
-        return (
+        text = (
             f"GitHub Issue #{task.issue_number}"
             f"（サブタスク: {task.subtask_id or '不明'}）を"
             "標準開発ワークフローに従って実装してください。\n"
@@ -526,6 +616,7 @@ class CodexCloudDispatchTarget(DispatchTarget):
             f"PR作成時は必ずベースブランチに `{base_branch_val}` を指定してください（`gh pr create --base {base_branch_val}`）。\n"
             f"{noninteractive_instruction(self._reviewer_bot)}\n"
         )
+        return append_cloud_context(text, launch_context)
 
     def _fetch_task_status(self, task_id: str) -> str | None:
         """テスト容易性のための内部委任フック。"""
@@ -540,6 +631,7 @@ class CodexCloudDispatchTarget(DispatchTarget):
         force_push: bool = False,
         execution_selection: ExecutionSelection | None = None,
         base_branch: str | None = None,
+        launch_context: object | None = None,
     ) -> DispatchHandle:
         push_args = ["push", "--set-upstream", "origin", branch_name]
         if force_push:
@@ -567,7 +659,10 @@ class CodexCloudDispatchTarget(DispatchTarget):
             command.extend(["--model", model])
         if reasoning_effort:
             command.extend(["-c", f"model_reasoning_effort={reasoning_effort}"])
-        command.append(self._build_prompt(task, branch_name, base_branch=base_branch))
+        prompt = self._build_prompt(
+            task, branch_name, base_branch=base_branch, launch_context=launch_context
+        )
+        command.append(prompt)
 
         combined_output = _run_codex_cloud_exec(command, worktree_path, log_path)
         task_id, task_url = _parse_codex_cloud_exec_output(combined_output)

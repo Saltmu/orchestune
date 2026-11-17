@@ -208,6 +208,7 @@ def _provision_and_launch(
     force_push: bool = False,
     execution_selection: ExecutionSelection | None = None,
     base_branch: str | None = None,
+    launch_context: object | None = None,
 ) -> tuple[DispatchHandle, float]:
     """#262レビュー対応: dispatch_target.launch()直前の時刻をstarted_atとして取得し起動する。"""
     dispatch_started_at = time.time()
@@ -216,6 +217,10 @@ def _provision_and_launch(
         kwargs["execution_selection"] = execution_selection
     if _target_supports_param(dispatch_target, "base_branch"):
         kwargs["base_branch"] = base_branch
+    if launch_context is not None and _target_supports_param(
+        dispatch_target, "launch_context"
+    ):
+        kwargs["launch_context"] = launch_context
     handle = dispatch_target.launch(task, branch_name, worktree_path, **kwargs)
     return handle, dispatch_started_at
 
@@ -271,6 +276,7 @@ def _launch_on_prepared_worktree(
     dispatch_target: DispatchTarget,
     base_branch: str | None,
     execution_selection: ExecutionSelection | None = None,
+    launch_context: object | None = None,
 ) -> LaunchResult:
     """`prepare_task_worktree`が既に用意したworktreeへdispatch_targetを起動する。
     起動失敗時は、このworktreeを本呼び出しが用意したものとみなして補償削除する
@@ -283,6 +289,7 @@ def _launch_on_prepared_worktree(
             worktree_path,
             execution_selection=execution_selection,
             base_branch=base_branch,
+            launch_context=launch_context,
         )
         return LaunchResult(
             issue_number=task.issue_number,

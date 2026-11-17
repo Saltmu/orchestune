@@ -1412,3 +1412,46 @@ orchestune trial result <TRIAL_ID> --decision adopted --repo "<source_root>"
 orchestune trial result <TRIAL_ID> --decision keep --repo "<source_root>"
 ```
 
+## Launch context (`orchestune context`)
+
+`orchestune context` rebuilds the local index and exports it as JSON. It has no `--apply`, `--no-apply`, or `--dry-run` flag, so it stays out of the preview and apply table at the top. An interactive session does not receive it automatically. The `context.json` file that dispatch writes in the worktree is a separate path.
+
+### Rebuild and export
+
+```bash
+orchestune context rebuild --repository OWNER/REPO --issue 7
+orchestune context export
+orchestune context export --issue 7
+```
+
+`--db` defaults to `.orchestune/context-index.sqlite3` for both subcommands. `rebuild` requires `--repository` and one of `--parent-issue`, `--issue` (repeatable), or `--since`. A missing selector exits 2. A fetch or write failure exits 1. When the fetch fails, the command does not replace the index, so the existing file remains. Omit `--indexed-at` to use the current UTC time. `--max-pages` must be at least 1.
+
+`export` prints the published index as JSON on stdout. When `--issue <N>` (and optional `--parent-issue`, `--tier2-limit`, `--max-bytes`, `--repository`) is given, it writes the bounded Tier 1–3 launch context for that issue using the same composition and budget rules. A missing or unreadable index exits 0 with `status` `unavailable` and an empty `artifacts` list. A corrupt file is moved to `<db>.corrupt.<nanoseconds>`.
+
+### Tier 1 to Tier 3
+
+The budget is UTF-8 bytes. It does not promise a tokenizer token cap.
+
+| Tier | Contents | When it does not fit |
+| :--- | :--- | :--- |
+| Tier 1 | Child purpose, acceptance, footprint, and symbols; parent purpose and acceptance; confirmed outcomes of direct dependencies | Search rank does not drop it. Read it from the source of truth, not through the index |
+| Tier 2 | BM25 hits from the local index, kept from the top while they fit the budget | Drop from the tail. Zero hits are allowed |
+| Tier 3 | Source URLs from the kept Tier 2 hits | Bodies and diffs are not injected |
+
+```text
+context_status: ready | over_budget | unavailable
+tier2_status: ready | reduced | unavailable | empty
+reduction_reason: tier1_exceeds_budget | tier2_tail_dropped | null
+Tier 2 missing: tier2_status=unavailable, hits=0, Tier 1 kept
+defaults: tier2_limit=5 local_bytes=32768 cloud_bytes=8192
+```
+
+### Degradation
+
+- `over_budget`: Tier 1 alone exceeds the budget. `reduction_reason` is `tier1_exceeds_budget`. Tier 1 stays whole and Tier 2 is empty.
+- `unavailable`: Tier 1 could not be read. Tier 1 is empty and dispatch keeps the existing launch text. Do not count that launch as a successful required-input fetch.
+- A missing, corrupt, or failed Tier 2 index degrades to 0 hits, as in `Tier 2 missing` above. `context_status` stays `ready` when Tier 1 fits. A readable index with no hits uses `tier2_status` `empty`, which is separate from a missing index.
+- Tail trimming that stays inside the budget uses `tier2_status` `reduced`, `reduction_reason` `tier2_tail_dropped`, and `context_status` `ready`.
+
+In an interactive session, read the JSON from `orchestune context export --issue <issue_number>` before implementation. Do not use it as a substitute for the `context.json` dispatch writes. Keep using `orchestune claim`, completed dependencies, and the stale-read gate.
+

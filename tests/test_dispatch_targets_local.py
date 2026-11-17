@@ -57,6 +57,7 @@ class _IsCompleteOnlyTarget(DispatchTarget):
         force_push=False,
         execution_selection=None,
         base_branch=None,
+        launch_context=None,
     ):
         return DispatchHandle(branch_name=branch_name)
 

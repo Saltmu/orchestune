@@ -86,6 +86,7 @@ ALLOWED_L4_DEPENDENTS = {
     "replan.cli": frozenset({"cli"}),
     "remediation.cli": frozenset({"cli"}),
     "config_wizard.cli": frozenset({"cli"}),
+    "context.cli": frozenset({"cli"}),
     "installer.cli": frozenset({"cli"}),
     "scratch.cli": frozenset({"cli"}),
     "workflow.cli": frozenset({"cli"}),

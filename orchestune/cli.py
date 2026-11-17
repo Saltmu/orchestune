@@ -183,6 +183,12 @@ _COMMAND_SPECS: tuple[_Command, ...] = (
         "orchestune.local_trial.cli",
         exit_with_return=True,
     ),
+    _Command(
+        "context",
+        "Rebuild and export the local context index",
+        "orchestune.context.cli",
+        exit_with_return=True,
+    ),
 )
 
 _COMMAND_SPEC_BY_NAME = {spec.name: spec for spec in _COMMAND_SPECS}

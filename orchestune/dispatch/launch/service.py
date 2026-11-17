@@ -20,6 +20,7 @@ from orchestune.claim.contracts import (
     ClaimStage,
     OwnerKind,
 )
+from orchestune.context.compose import compose_for_dispatch
 from orchestune.dependencies.policy import (
     DependencyPolicyView,
     StackDecision,
@@ -774,6 +775,7 @@ def _commit_planned_launch(
     outcome: ClaimOutcome,
     target: DispatchTarget,
     plan: TaskLaunchPlan[TTask],
+    config: DispatcherConfig,
 ) -> LaunchResult | None:
     assert outcome.worktree_path is not None
     assert outcome.branch is not None
@@ -785,6 +787,7 @@ def _commit_planned_launch(
             target,
             outcome.base_ref,
             execution_selection=plan.execution_selection,
+            launch_context=_launch_context_for(config, task),
         )
     except LaunchOutcomeUnknown as exc:
         print(
@@ -835,7 +838,26 @@ def _try_planned_launch(
     if hold is not None:
         return hold
 
-    return _commit_planned_launch(task, outcome, target, plan)
+    return _commit_planned_launch(task, outcome, target, plan, config)
+
+
+def _launch_context_for(config: DispatcherConfig, task: TaskMetadata) -> object | None:
+    """Build a launch context, or return None when Tier 1 is unavailable."""
+    number = task.issue_number
+    if isinstance(number, bool) or not isinstance(number, int):
+        return None
+    try:
+        parent = config.parent_issue_number
+        parent_number = (
+            parent if isinstance(parent, int) and not isinstance(parent, bool) else None
+        )
+        return compose_for_dispatch(
+            config.resolved_forge,
+            number,
+            parent_issue_number=parent_number,
+        )
+    except Exception:  # noqa: BLE001 - boundary: context assembly must not block launch
+        return None
 
 
 def _record_failed_launch_phase(

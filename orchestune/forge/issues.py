@@ -6,7 +6,8 @@ import json
 import subprocess
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TypeVar
+from typing import Any, TypeVar
+from urllib.parse import quote
 
 import orchestune.forge.issues_rest as issues_rest
 from orchestune.models import IssueRecord
@@ -327,6 +328,30 @@ class GitHubIssueMixin(
             is_pull_request="pull_request" in raw,
         )
 
+    def list_issues_in_range(
+        self,
+        *,
+        since: str | None = None,
+        state: str = "open",
+        max_pages: int | None = None,
+    ) -> tuple[list[IssueRecord], bool]:
+        """List issues updated at or after ``since``, one REST page at a time.
+
+        Exhaustion follows the raw page length. Pull requests are removed after
+        that decision, so a page of only pull requests can still be a full page.
+        """
+        _validate_issue_range(state, max_pages)
+        collected: list[IssueRecord] = []
+        page = 1
+        while True:
+            raw_page = _load_issue_range_page(self._run, since, state, page)
+            collected.extend(_range_records(raw_page))
+            if len(raw_page) < _RANGE_PAGE_SIZE:
+                return collected, True
+            if max_pages is not None and page >= max_pages:
+                return collected, False
+            page += 1
+
     def get_repository_slug(self) -> str:
         """`owner/repo` of the repository the Forge commands run against."""
         slug: object = self._graphql_or_rest(
@@ -342,3 +367,62 @@ class GitHubIssueMixin(
 
 def _name_with_owner(raw: object) -> object:
     return raw.get("nameWithOwner") if isinstance(raw, dict) else None
+
+
+_RANGE_PAGE_SIZE = 100
+
+
+def _validate_issue_range(state: str, max_pages: int | None) -> None:
+    if state not in _VALID_ISSUE_STATES:
+        raise ValueError(f"stateが不正です: {state!r}")
+    if max_pages is None:
+        return
+    if isinstance(max_pages, bool) or max_pages < 1:
+        raise ValueError(f"max_pagesが不正です: {max_pages!r}")
+
+
+def _range_query(since: str | None, state: str, page: int) -> str:
+    params = [f"state={state}", f"per_page={_RANGE_PAGE_SIZE}", f"page={page}"]
+    if since is not None:
+        params.append("since=" + quote(since, safe=""))
+    return "repos/{owner}/{repo}/issues?" + "&".join(params)
+
+
+def _load_issue_range_page(
+    run: GhRunner, since: str | None, state: str, page: int
+) -> list[dict[str, Any]]:
+    payload = json.loads(run(["gh", "api", _range_query(since, state, page)]))
+    if not isinstance(payload, list) or any(
+        not isinstance(item, dict) for item in payload
+    ):
+        raise ValueError("Issue range lookup returned an unusable payload")
+    return payload
+
+
+def _range_records(raw_page: list[dict[str, Any]]) -> list[IssueRecord]:
+    records: list[IssueRecord] = []
+    for raw in raw_page:
+        record = _range_issue(raw)
+        if record is not None:
+            records.append(record)
+    return records
+
+
+def _range_issue(raw: dict[str, Any]) -> IssueRecord | None:
+    if "pull_request" in raw:
+        return None
+    number = raw.get("number")
+    if isinstance(number, bool) or not isinstance(number, int):
+        raise ValueError("Issue range lookup returned an unusable payload")
+    body = raw.get("body")
+    created = raw.get("created_at")
+    return IssueRecord(
+        number=number,
+        title=str(raw.get("title") or ""),
+        body=body if isinstance(body, str) else "",
+        labels=issues_rest.issue_labels(raw),
+        created_at=created if isinstance(created, str) else "",
+        state=issues_rest.issue_state(raw),
+        parent=None,
+        blocked_by=(),
+    )

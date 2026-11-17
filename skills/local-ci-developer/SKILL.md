@@ -24,6 +24,10 @@ This skill routes the standard development workflow. [stages.toml](../../orchest
 | **Review Execution (Step 11)** | Use the reviewer recorded in Step 1 without re-asking and without running resolve again; later rounds inherit the existing trigger and do not switch because config changed (`--switch-reviewer` requires explicit user instruction); if unresolved, explicitly use `--bot-name skip` and stop for human review at the integration gate | Use the reviewer recorded in Step 1 without running resolve again; later rounds inherit the existing trigger and do not switch because config changed (`--switch-reviewer` requires explicit user instruction); if unresolved, explicitly use `--bot-name skip` and stop for human review at the integration gate |
 | **Escalation** | Prompt user for decision | Run `orchestune complete --apply --issue <N> --result blocked --reason <REASON>` and terminate safely |
 
+### Interactive context read
+
+Before implementation in interactive mode, read the JSON from `orchestune context export --issue <issue_number>`. That path is separate from the `context.json` dispatch writes and does not replace `orchestune claim`, completed dependencies, or the stale-read gate.
+
 ## Fast-Path for Minor Changes (Typo / Docs)
 For documentation updates or typo fixes that do not alter code logic, **Steps 3–8 (TDD) may be skipped**. However, to prevent secret leaks (gitleaks) and ensure quality, **Step 9 Local CI (`./scripts/local-ci.sh` / `.\\scripts\\local-ci.ps1`) must always be executed** before proceeding to Step 10 (PR creation).
 
@@ -89,11 +93,7 @@ orchestune complete --apply --issue <N> --pr <PR> --result done --reviewer <clau
 orchestune complete --apply --issue <N> --result blocked --reason <REASON>
 ```
 
-For a claimed task whose requirement becomes unnecessary, run the `not-needed`
-command from its worktree. `done` and `blocked` require an existing claim.
-`complete` preserves the worktree. Success means the matching result label and durable
-handoff/replay receipt are confirmed, not PR merge, independent review approval, or
-physical collection. Resume the same request with `--completion-id <ID>` and the matching claim marker (or the explicit completion ID for an unclaimed Issue);
-replay does not restore labels after requeue. Without a Dispatcher, rerun GC to
-advance policies; cloud/unclaimed not-needed needs independent approval.
+For a claimed task whose requirement becomes unnecessary, run the `not-needed` command from its worktree. `done` and `blocked` require an existing claim.
+`complete` preserves the worktree. Success means the matching result label and durable handoff/replay receipt are confirmed, not PR merge, independent review approval, or physical collection.
+Resume the same request with `--completion-id <ID>` and the matching claim marker (or the explicit completion ID for an unclaimed Issue); replay does not restore labels after requeue. Without a Dispatcher, rerun GC to advance policies; cloud/unclaimed not-needed needs independent approval.
 See [worktree.md](references/worktree.md) for locks, review recovery and legacy holds.

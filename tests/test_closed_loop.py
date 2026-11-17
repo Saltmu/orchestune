@@ -313,6 +313,7 @@ class DummyAgentDispatchTarget(DispatchTarget):
         force_push: bool = False,
         execution_selection=None,
         base_branch: str | None = None,
+        launch_context: object | None = None,
     ) -> DispatchHandle:
         # Run agent task scenario synchronously
         self.run_scenario_func(task, branch_name, worktree_path)

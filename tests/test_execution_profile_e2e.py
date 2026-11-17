@@ -68,6 +68,7 @@ class RecordingDispatchTarget(DispatchTarget):
         force_push: bool = False,
         execution_selection: ExecutionSelection | None = None,
         base_branch: str | None = None,
+        launch_context: object | None = None,
     ) -> DispatchHandle:
         self.launched_tasks.append(
             (task, branch_name, worktree_path, execution_selection)
