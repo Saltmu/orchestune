@@ -1031,3 +1031,15 @@ def test_numeric_depends_on_scalar_depends_on_and_repo_mismatch(
     assert mismatch_res.context_status == "unavailable"
     assert mismatch_res.unavailable_reason is not None
     assert "repository mismatch" in mismatch_res.unavailable_reason
+
+
+def test_fit_local_context_preserves_prior_reduction_state(tmp_path: Path) -> None:
+    reduced = _context(
+        tier2_status="reduced",
+        reduction_reason="tier2_tail_dropped",
+    )
+    _cmd, written = _capture_launch(tmp_path, GROK_CLI_LOCAL_CMD_TEMPLATE, reduced)
+    payload = json.loads(written[0].read_text(encoding="utf-8"))
+
+    assert payload["tier2_status"] == "reduced"
+    assert payload["reduction_reason"] == "tier2_tail_dropped"

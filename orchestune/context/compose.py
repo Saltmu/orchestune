@@ -221,12 +221,17 @@ def fit_local_context(
         if launch_context.tier2_status == TIER2_UNAVAILABLE
         else TIER2_READY
     )
+    prior_dropped = (
+        launch_context.tier2_status == TIER2_REDUCED
+        or launch_context.reduction_reason == REDUCTION_TIER2_TAIL_DROPPED
+    )
     return _fit(
         launch_context.tier1,
         search_state,
         launch_context.tier2,
         launch_context.max_bytes,
         intro_bytes=intro_bytes,
+        prior_dropped=prior_dropped,
     )
 
 
@@ -712,9 +717,10 @@ def _fit(
     max_bytes: int,
     *,
     intro_bytes: int = 0,
+    prior_dropped: bool = False,
 ) -> LaunchContext:
     kept = list(hits)
-    dropped = False
+    dropped = prior_dropped
     while True:
         status, tier2_status, reason = _statuses(
             search_state, hits, kept, dropped, over=False
