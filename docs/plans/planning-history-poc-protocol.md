@@ -174,7 +174,7 @@ uv run python -m scripts.planning_history_poc \
 
 #### `Card` オブジェクト（キー順序固定）
 
-入力 `corpus` 内での `cases`、`tasks`、`sources`、`depends_on`、`footprint`、`symbols`、`source_ids` の並び順が入れ替わっても **完全に同一のカード配列とバイト出力** になるよう、以下の正規化順で出力する。
+入力 `corpus` 内での `cases`、`tasks`、`sources`、`depends_on`、`footprint`、`symbols`、`source_ids` の並び順が入れ替わっても、入力ファイルの生バイト列 SHA-256 を記録する `corpus_digest`（および `request_digest`）を除き、**完全に同一の `cards` 配列（カード順位と内容）および `status`・`returned_count`・`excluded_counts`・`budget_dropped`** が再現されるよう（同一入力バイト列に対しては標準出力の全バイト列も完全一致するよう）、以下の正規化順で出力する。
 
 | 順序 | フィールド | 型 | 正規化・出力規則 |
 | :---: | --- | --- | --- |
