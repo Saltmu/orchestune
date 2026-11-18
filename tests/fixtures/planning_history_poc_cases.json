@@ -1,0 +1,818 @@
+{
+  "schema_version": "planning-history-corpus-v1",
+  "repository": "Saltmu/orchestune",
+  "cases": [
+    {
+      "case_id": "case-1100-rev1",
+      "parent_issue": 1100,
+      "plan_revision_digest": "058675f447d2d744fc77288adaa0ff34b91c48aa25f394dde5a73adaed019484",
+      "title": "[EPIC] 共有コンテキスト索引とBM25検索カードの抽出契約（旧版）",
+      "purpose": "共有コンテキスト索引とBM25検索カードの抽出契約を初期構成で分解する。",
+      "acceptance_criteria": [
+        "共有成果の抽出契約を定義する。",
+        "BM25検索の初期索引を構築する。"
+      ],
+      "tasks": [
+        {
+          "subtask_id": "context-schema",
+          "issue_number": 1101,
+          "description": "共有成果レコードの値型と抽出契約を定義する。",
+          "depends_on": [],
+          "footprint": [
+            "orchestune/context/contracts.py"
+          ],
+          "symbols": [
+            "SharedArtifactV1"
+          ],
+          "result": "done",
+          "missing_reason": null,
+          "source_ids": [
+            "src-1100-r1-outcome-1101",
+            "src-1100-r1-pr-1110",
+            "src-1100-r1-task-1101"
+          ]
+        },
+        {
+          "subtask_id": "context-index",
+          "issue_number": 1102,
+          "description": "共有コンテキスト索引とBM25検索を単一タスクで実装する。",
+          "depends_on": [
+            "context-schema"
+          ],
+          "footprint": [
+            "orchestune/context/search.py",
+            "orchestune/context/storage.py"
+          ],
+          "symbols": [
+            "search_artifacts"
+          ],
+          "result": "blocked",
+          "missing_reason": null,
+          "source_ids": [
+            "src-1100-r1-outcome-1102",
+            "src-1100-r1-task-1102"
+          ]
+        }
+      ],
+      "lineage_issue_numbers": [
+        1100,
+        1101,
+        1102
+      ],
+      "pr_numbers": [
+        1110
+      ],
+      "sources": [
+        {
+          "source_id": "src-1100-r1-plan",
+          "kind": "plan",
+          "url": "https://github.com/Saltmu/orchestune/issues/1100",
+          "digest": "e98efe87714f6db4a446fcab5730fb5f64115113598a1e4427da2f107ff7b459",
+          "available_at": "2026-10-01T08:00:00Z"
+        },
+        {
+          "source_id": "src-1100-r1-task-1101",
+          "kind": "task",
+          "url": "https://github.com/Saltmu/orchestune/issues/1101",
+          "digest": "fa39ccc7554dba61158856e2a5daec9bc8c000d726704b92c725e3ebe2011c48",
+          "available_at": "2026-10-01T08:15:00Z"
+        },
+        {
+          "source_id": "src-1100-r1-task-1102",
+          "kind": "task",
+          "url": "https://github.com/Saltmu/orchestune/issues/1102",
+          "digest": "6c506204e520aae69adc706e756382c8e28ec0d3e2da655295158f633d4d0498",
+          "available_at": "2026-10-01T08:20:00Z"
+        },
+        {
+          "source_id": "src-1100-r1-pr-1110",
+          "kind": "pr",
+          "url": "https://github.com/Saltmu/orchestune/pull/1110",
+          "digest": "ff18295f7ba0f8d0283154a593bec3424a390418abf4a2bf26e65ee5f0e6c4a2",
+          "available_at": "2026-10-01T09:10:00Z"
+        },
+        {
+          "source_id": "src-1100-r1-outcome-1101",
+          "kind": "outcome",
+          "url": "https://github.com/Saltmu/orchestune/issues/1101#issuecomment-110101",
+          "digest": "a8b016ec92419130a00e22a5ef71d38fdb0c5916e766aeafa5bc26e672210f48",
+          "available_at": "2026-10-01T09:30:00Z"
+        },
+        {
+          "source_id": "src-1100-r1-outcome-1102",
+          "kind": "outcome",
+          "url": "https://github.com/Saltmu/orchestune/issues/1102#issuecomment-110201",
+          "digest": "24e89d9048d47138e6ff4ad1909cd8934dc70d8061c672fa84aee1529165e998",
+          "available_at": "2026-10-01T10:00:00Z"
+        }
+      ],
+      "available_at": "2026-10-01T10:00:00Z"
+    },
+    {
+      "case_id": "case-1100-rev2",
+      "parent_issue": 1100,
+      "plan_revision_digest": "ab490a047c1fe553be4e1873b36d4654354d243af37292e5e6dc04af12647202",
+      "title": "[EPIC] 共有コンテキスト索引とBM25検索カードの抽出契約（改訂版）",
+      "purpose": "共有コンテキスト索引とBM25検索カードの抽出契約・予算制限を段階的に分解する。",
+      "acceptance_criteria": [
+        "共有コンテキスト索引の抽出契約とBM25検索カードを分離する。",
+        "UTF-8バイト予算制限で低順位カードを安全に削減する。"
+      ],
+      "tasks": [
+        {
+          "subtask_id": "context-schema",
+          "issue_number": 1101,
+          "description": "共有コンテキスト索引の値型と抽出契約を確定する。",
+          "depends_on": [],
+          "footprint": [
+            "orchestune/context/contracts.py"
+          ],
+          "symbols": [
+            "SharedArtifactV1"
+          ],
+          "result": "done",
+          "missing_reason": null,
+          "source_ids": [
+            "src-1100-r2-outcome-1101",
+            "src-1100-r2-pr-1110",
+            "src-1100-r2-task-1101"
+          ]
+        },
+        {
+          "subtask_id": "context-search-budget",
+          "issue_number": 1103,
+          "description": "BM25検索カードの順位付けと予算制限を実装する。",
+          "depends_on": [
+            "context-schema"
+          ],
+          "footprint": [
+            "orchestune/context/budget.py",
+            "orchestune/context/search.py"
+          ],
+          "symbols": [
+            "fit_context_budget",
+            "search_artifacts"
+          ],
+          "result": "done",
+          "missing_reason": null,
+          "source_ids": [
+            "src-1100-r2-outcome-1103",
+            "src-1100-r2-pr-1112",
+            "src-1100-r2-task-1103"
+          ]
+        },
+        {
+          "subtask_id": "context-legacy-cleanup",
+          "issue_number": 1104,
+          "description": "旧形式の検索キャッシュ互換レイヤを整理する。",
+          "depends_on": [
+            "context-search-budget"
+          ],
+          "footprint": [
+            "orchestune/context/storage.py"
+          ],
+          "symbols": [
+            "open_context_index"
+          ],
+          "result": "not-needed",
+          "missing_reason": null,
+          "source_ids": [
+            "src-1100-r2-outcome-1104",
+            "src-1100-r2-task-1104"
+          ]
+        }
+      ],
+      "lineage_issue_numbers": [
+        1100,
+        1101,
+        1102,
+        1103,
+        1104
+      ],
+      "pr_numbers": [
+        1110,
+        1112
+      ],
+      "sources": [
+        {
+          "source_id": "src-1100-r2-plan",
+          "kind": "plan",
+          "url": "https://github.com/Saltmu/orchestune/issues/1100",
+          "digest": "925c78e1270b8e8be4d04c24d99dcf8df0d54daab80f093868b1dcc66663e62c",
+          "available_at": "2026-10-05T09:00:00Z"
+        },
+        {
+          "source_id": "src-1100-r2-task-1101",
+          "kind": "task",
+          "url": "https://github.com/Saltmu/orchestune/issues/1101",
+          "digest": "fa39ccc7554dba61158856e2a5daec9bc8c000d726704b92c725e3ebe2011c48",
+          "available_at": "2026-10-01T08:15:00Z"
+        },
+        {
+          "source_id": "src-1100-r2-task-1103",
+          "kind": "task",
+          "url": "https://github.com/Saltmu/orchestune/issues/1103",
+          "digest": "bfd16505f331d4f24783d9978bcff40377efaa38497d465b9bc8376d4f71dda5",
+          "available_at": "2026-10-05T09:10:00Z"
+        },
+        {
+          "source_id": "src-1100-r2-task-1104",
+          "kind": "task",
+          "url": "https://github.com/Saltmu/orchestune/issues/1104",
+          "digest": "635610d5884b745c9c8312f107dc04f5c67df1628ab028d3f2e2714f4336dc04",
+          "available_at": "2026-10-05T09:15:00Z"
+        },
+        {
+          "source_id": "src-1100-r2-pr-1110",
+          "kind": "pr",
+          "url": "https://github.com/Saltmu/orchestune/pull/1110",
+          "digest": "ff18295f7ba0f8d0283154a593bec3424a390418abf4a2bf26e65ee5f0e6c4a2",
+          "available_at": "2026-10-01T09:10:00Z"
+        },
+        {
+          "source_id": "src-1100-r2-pr-1112",
+          "kind": "pr",
+          "url": "https://github.com/Saltmu/orchestune/pull/1112",
+          "digest": "6e23fc9ea4114c9a83c6821a7969b12012edd1cd9b90f836dce3549c17d425f8",
+          "available_at": "2026-10-05T11:30:00Z"
+        },
+        {
+          "source_id": "src-1100-r2-outcome-1101",
+          "kind": "outcome",
+          "url": "https://github.com/Saltmu/orchestune/issues/1101#issuecomment-110101",
+          "digest": "a8b016ec92419130a00e22a5ef71d38fdb0c5916e766aeafa5bc26e672210f48",
+          "available_at": "2026-10-01T09:30:00Z"
+        },
+        {
+          "source_id": "src-1100-r2-outcome-1103",
+          "kind": "outcome",
+          "url": "https://github.com/Saltmu/orchestune/issues/1103#issuecomment-110301",
+          "digest": "142e6a6eee8c8875edf36989a83a56f877e8b4d5c9585d7ae62084c58baaa20e",
+          "available_at": "2026-10-05T11:45:00Z"
+        },
+        {
+          "source_id": "src-1100-r2-outcome-1104",
+          "kind": "outcome",
+          "url": "https://github.com/Saltmu/orchestune/issues/1104#issuecomment-110401",
+          "digest": "d24bda7b0fabc401598ae851fddc9854c9722e0614379f87265fbca5c9365d48",
+          "available_at": "2026-10-05T12:00:00Z"
+        }
+      ],
+      "available_at": "2026-10-05T12:00:00Z"
+    },
+    {
+      "case_id": "case-1200-mixed-outcomes",
+      "parent_issue": 1200,
+      "plan_revision_digest": "204706a354ca1e25286febe645a1f9ea4599b352f645f9e133708dc6fdf63c65",
+      "title": "[EPIC] 実行履歴カードの抽出契約とOutcome欠測・未起票タスクの保持",
+      "purpose": "類似計画カードの抽出契約を整理し、Outcome不明やblockedの履歴を欠落させずに保持する。",
+      "acceptance_criteria": [
+        "done・blocked・unknownの各結果を根拠付きでカードに残す。",
+        "未起票タスク（issue_number=null）と不明理由（missing_reason）を保持する。"
+      ],
+      "tasks": [
+        {
+          "subtask_id": "history-contract",
+          "issue_number": 1201,
+          "description": "履歴カードの抽出契約と出典digest検証を定義する。",
+          "depends_on": [],
+          "footprint": [
+            "docs/plans/planning-history-poc-protocol.md"
+          ],
+          "symbols": [
+            "parse_from_comments",
+            "restore_plan_from_parent"
+          ],
+          "result": "done",
+          "missing_reason": null,
+          "source_ids": [
+            "src-1200-outcome-1201",
+            "src-1200-pr-1210",
+            "src-1200-task-1201"
+          ]
+        },
+        {
+          "subtask_id": "history-collector",
+          "issue_number": 1202,
+          "description": "親計画と子タスクの出典照合および収集を実装する。",
+          "depends_on": [
+            "history-contract"
+          ],
+          "footprint": [
+            "orchestune/context/extract.py"
+          ],
+          "symbols": [
+            "extract_shared_artifacts"
+          ],
+          "result": "blocked",
+          "missing_reason": null,
+          "source_ids": [
+            "src-1200-outcome-1202",
+            "src-1200-task-1202"
+          ]
+        },
+        {
+          "subtask_id": "history-evaluator",
+          "issue_number": 1203,
+          "description": "固定資料の採点手順と欠測処理を確認する。",
+          "depends_on": [
+            "history-collector"
+          ],
+          "footprint": [
+            "docs/plans/context-poc-eval.md"
+          ],
+          "symbols": [],
+          "result": "unknown",
+          "missing_reason": "no_outcome_comment_recorded_before_snapshot",
+          "source_ids": [
+            "src-1200-task-1203"
+          ]
+        },
+        {
+          "subtask_id": "history-rollout-notes",
+          "issue_number": null,
+          "description": "段階導入時の運用メモを親manifest上で予約する。",
+          "depends_on": [
+            "history-evaluator"
+          ],
+          "footprint": [
+            "docs/en/usage.md"
+          ],
+          "symbols": [],
+          "result": "unknown",
+          "missing_reason": "unfiled_subtask_in_parent_manifest",
+          "source_ids": [
+            "src-1200-plan"
+          ]
+        }
+      ],
+      "lineage_issue_numbers": [
+        1200,
+        1201,
+        1202,
+        1203
+      ],
+      "pr_numbers": [
+        1210
+      ],
+      "sources": [
+        {
+          "source_id": "src-1200-plan",
+          "kind": "plan",
+          "url": "https://github.com/Saltmu/orchestune/issues/1200",
+          "digest": "5030111c677bcdf26aa28d4557801252c07169875de02e592529ffad502db7d3",
+          "available_at": "2026-10-12T10:00:00Z"
+        },
+        {
+          "source_id": "src-1200-task-1201",
+          "kind": "task",
+          "url": "https://github.com/Saltmu/orchestune/issues/1201",
+          "digest": "6698b73952fc03650fe5c187382cb1fa69fe0e54a62a48233e5105020a4bee2f",
+          "available_at": "2026-10-12T10:15:00Z"
+        },
+        {
+          "source_id": "src-1200-task-1202",
+          "kind": "task",
+          "url": "https://github.com/Saltmu/orchestune/issues/1202",
+          "digest": "b9d1890cd6d28126ece76188f1bc49b1ef846d4e3e8dbcd1aa128a6c17808ff8",
+          "available_at": "2026-10-12T10:20:00Z"
+        },
+        {
+          "source_id": "src-1200-task-1203",
+          "kind": "task",
+          "url": "https://github.com/Saltmu/orchestune/issues/1203",
+          "digest": "11a5f4facb1899129c5da0d4bf8b4d65772bbe2d4957b7ba38fee2c253b66d8b",
+          "available_at": "2026-10-12T10:25:00Z"
+        },
+        {
+          "source_id": "src-1200-pr-1210",
+          "kind": "pr",
+          "url": "https://github.com/Saltmu/orchestune/pull/1210",
+          "digest": "47bc5741cb3b693616d33b8ed7b132a696cec29d8df49826e5e68bfe9243f457",
+          "available_at": "2026-10-12T14:00:00Z"
+        },
+        {
+          "source_id": "src-1200-outcome-1201",
+          "kind": "outcome",
+          "url": "https://github.com/Saltmu/orchestune/issues/1201#issuecomment-120101",
+          "digest": "92615e13459c5cf544453c52435829d5b46323b228f532ba89bd52abfdde73e2",
+          "available_at": "2026-10-12T14:30:00Z"
+        },
+        {
+          "source_id": "src-1200-outcome-1202",
+          "kind": "outcome",
+          "url": "https://github.com/Saltmu/orchestune/issues/1202#issuecomment-120201",
+          "digest": "1fa7feda144d98ae00642ab4fa9506475e6470475f8ca43cfcd6c67956123141",
+          "available_at": "2026-10-12T15:30:00Z"
+        }
+      ],
+      "available_at": "2026-10-12T15:30:00Z"
+    },
+    {
+      "case_id": "case-1300-tie-a",
+      "parent_issue": 1300,
+      "plan_revision_digest": "5a7bfe857f4972111a9c7f23f9e3d0a392d59c4f7a8bca8879b380b5c43d48cf",
+      "title": "[EPIC] 予算制限とBM25検索アダプタの同点順位検証",
+      "purpose": "予算制限とBM25検索アダプタの同点順位検証を共通構成で分解する。",
+      "acceptance_criteria": [
+        "同一BM25スコア時のtie-break順位を検証する。"
+      ],
+      "tasks": [
+        {
+          "subtask_id": "adapter-check",
+          "issue_number": 1301,
+          "description": "BM25検索アダプタと予算制限の境界を確認する。",
+          "depends_on": [],
+          "footprint": [
+            "orchestune/context/budget.py"
+          ],
+          "symbols": [
+            "fit_context_budget"
+          ],
+          "result": "done",
+          "missing_reason": null,
+          "source_ids": [
+            "src-1300-a-outcome-1301",
+            "src-1300-a-task-1301"
+          ]
+        }
+      ],
+      "lineage_issue_numbers": [
+        1300,
+        1301
+      ],
+      "pr_numbers": [
+        1310
+      ],
+      "sources": [
+        {
+          "source_id": "src-1300-a-plan",
+          "kind": "plan",
+          "url": "https://github.com/Saltmu/orchestune/issues/1300",
+          "digest": "c9853ac3c23e7acba97715c92ed73ccba87baba8f1a8b0b920fe3887057cb22c",
+          "available_at": "2026-10-20T08:00:00Z"
+        },
+        {
+          "source_id": "src-1300-a-task-1301",
+          "kind": "task",
+          "url": "https://github.com/Saltmu/orchestune/issues/1301",
+          "digest": "07f1e55be96f33b051ccb5a2f174fc6d5eb2695205955fc7a7f71b74949cd93a",
+          "available_at": "2026-10-20T08:30:00Z"
+        },
+        {
+          "source_id": "src-1300-a-outcome-1301",
+          "kind": "outcome",
+          "url": "https://github.com/Saltmu/orchestune/issues/1301#issuecomment-130101",
+          "digest": "60ef037441dcef108910536f52f33e5c4ab4d2f2a7360399a99f894687f7ef45",
+          "available_at": "2026-10-20T09:00:00Z"
+        }
+      ],
+      "available_at": "2026-10-20T09:00:00Z"
+    },
+    {
+      "case_id": "case-1300-tie-z",
+      "parent_issue": 1300,
+      "plan_revision_digest": "526b45da54c0783c86daed90f9c68f6ae12d1a7a3f084d81b9df8caee83af837",
+      "title": "[EPIC] 予算制限とBM25検索アダプタの同一親同時刻候補",
+      "purpose": "同一親でavailable_atが同一時刻のときcase_id昇順で重複除外されることを確認する。",
+      "acceptance_criteria": [
+        "同一parent_issueかつ同一available_atではcase_id昇順の最小候補のみ残す。"
+      ],
+      "tasks": [
+        {
+          "subtask_id": "adapter-check",
+          "issue_number": 1301,
+          "description": "同一時刻の別スナップショット候補。",
+          "depends_on": [],
+          "footprint": [
+            "orchestune/context/budget.py"
+          ],
+          "symbols": [
+            "fit_context_budget"
+          ],
+          "result": "done",
+          "missing_reason": null,
+          "source_ids": [
+            "src-1300-z-outcome-1301",
+            "src-1300-z-task-1301"
+          ]
+        }
+      ],
+      "lineage_issue_numbers": [
+        1300,
+        1301
+      ],
+      "pr_numbers": [
+        1310
+      ],
+      "sources": [
+        {
+          "source_id": "src-1300-z-plan",
+          "kind": "plan",
+          "url": "https://github.com/Saltmu/orchestune/issues/1300",
+          "digest": "3e078057db6c83ff6a48b76510fed4736c6efeb861d9b35e1631f7aefa993bd1",
+          "available_at": "2026-10-20T08:00:00Z"
+        },
+        {
+          "source_id": "src-1300-z-task-1301",
+          "kind": "task",
+          "url": "https://github.com/Saltmu/orchestune/issues/1301",
+          "digest": "246d8d9e6d441f3a787efd0cc4bf5751523ecc97a0ac7a99b2d32ef19cf0a18b",
+          "available_at": "2026-10-20T08:30:00Z"
+        },
+        {
+          "source_id": "src-1300-z-outcome-1301",
+          "kind": "outcome",
+          "url": "https://github.com/Saltmu/orchestune/issues/1301#issuecomment-130102",
+          "digest": "7b8bd15694751682320136af9d6f3598e9713d75ef6fb5ed1f33fa98bdb8e569",
+          "available_at": "2026-10-20T09:00:00Z"
+        }
+      ],
+      "available_at": "2026-10-20T09:00:00Z"
+    },
+    {
+      "case_id": "case-1350-tie-b",
+      "parent_issue": 1350,
+      "plan_revision_digest": "264d3b5275cc2012177357da17217fdc39b64df8f863d27b929684a7b033a472",
+      "title": "[EPIC] 予算制限とBM25検索アダプタの同点順位検証",
+      "purpose": "予算制限とBM25検索アダプタの同点順位検証を共通構成で分解する。",
+      "acceptance_criteria": [
+        "同一BM25スコア時のtie-break順位を検証する。"
+      ],
+      "tasks": [
+        {
+          "subtask_id": "adapter-check",
+          "issue_number": 1351,
+          "description": "BM25検索アダプタと予算制限の境界を確認する。",
+          "depends_on": [],
+          "footprint": [
+            "orchestune/context/budget.py"
+          ],
+          "symbols": [
+            "fit_context_budget"
+          ],
+          "result": "done",
+          "missing_reason": null,
+          "source_ids": [
+            "src-1350-outcome-1351",
+            "src-1350-task-1351"
+          ]
+        }
+      ],
+      "lineage_issue_numbers": [
+        1350,
+        1351
+      ],
+      "pr_numbers": [
+        1360
+      ],
+      "sources": [
+        {
+          "source_id": "src-1350-plan",
+          "kind": "plan",
+          "url": "https://github.com/Saltmu/orchestune/issues/1350",
+          "digest": "e28f958d91de9a9a0ad580aaa1c30147050afaa72181bab9f0fe0066a8a8d793",
+          "available_at": "2026-10-20T08:00:00Z"
+        },
+        {
+          "source_id": "src-1350-task-1351",
+          "kind": "task",
+          "url": "https://github.com/Saltmu/orchestune/issues/1351",
+          "digest": "99b26c0a64489d6d2d0cf2adc8ea08e9c7d68583c9de7522ae9dd1c0456f5631",
+          "available_at": "2026-10-20T08:30:00Z"
+        },
+        {
+          "source_id": "src-1350-outcome-1351",
+          "kind": "outcome",
+          "url": "https://github.com/Saltmu/orchestune/issues/1351#issuecomment-135101",
+          "digest": "5dad058f3229d89253f17f9d68e50bac22d9d4d8d35d922c48f564327c5cc398",
+          "available_at": "2026-10-20T09:00:00Z"
+        }
+      ],
+      "available_at": "2026-10-20T09:00:00Z"
+    },
+    {
+      "case_id": "case-1400-target-lineage",
+      "parent_issue": 1400,
+      "plan_revision_digest": "b49fa7b0a7f8e2f051e5f041515e1697134b1ef9a0a7d3a49e30aee6fdcd041c",
+      "title": "[EPIC] 共有コンテキスト索引とBM25検索カードの抽出契約（対象系列・自己リーク除外対象）",
+      "purpose": "共有コンテキスト索引とBM25検索カードの抽出契約・予算制限を分解する対象系列そのものの候補。",
+      "acceptance_criteria": [
+        "対象系列の親・子・置換IssueおよびPRと交差する候補をBM25前に除外する。"
+      ],
+      "tasks": [
+        {
+          "subtask_id": "target-protocol",
+          "issue_number": 1401,
+          "description": "共有コンテキスト索引とBM25検索カードの抽出契約・予算制限を定義する。",
+          "depends_on": [],
+          "footprint": [
+            "orchestune/context/budget.py",
+            "orchestune/context/search.py"
+          ],
+          "symbols": [
+            "fit_context_budget",
+            "search_artifacts"
+          ],
+          "result": "done",
+          "missing_reason": null,
+          "source_ids": [
+            "src-1400-outcome-1401",
+            "src-1400-pr-1410",
+            "src-1400-task-1401"
+          ]
+        },
+        {
+          "subtask_id": "target-selector",
+          "issue_number": 1402,
+          "description": "固定資料から類似計画カードを選ぶコマンドを実装する。",
+          "depends_on": [
+            "target-protocol"
+          ],
+          "footprint": [
+            "scripts/planning_history_poc.py"
+          ],
+          "symbols": [
+            "select_cards"
+          ],
+          "result": "unknown",
+          "missing_reason": "in_progress_target_lineage_subtask",
+          "source_ids": [
+            "src-1400-task-1402"
+          ]
+        }
+      ],
+      "lineage_issue_numbers": [
+        1400,
+        1401,
+        1402,
+        1409
+      ],
+      "pr_numbers": [
+        1410
+      ],
+      "sources": [
+        {
+          "source_id": "src-1400-plan",
+          "kind": "plan",
+          "url": "https://github.com/Saltmu/orchestune/issues/1400",
+          "digest": "e51ce9c120e17d1cefe527524fb4e5efd19599044d077342abf2671f0b357995",
+          "available_at": "2026-10-15T09:00:00Z"
+        },
+        {
+          "source_id": "src-1400-task-1401",
+          "kind": "task",
+          "url": "https://github.com/Saltmu/orchestune/issues/1401",
+          "digest": "190380f1581f43252cd01ff9b0e744d9a19f211ab475d35a3cf93f74fabadb1e",
+          "available_at": "2026-10-15T09:10:00Z"
+        },
+        {
+          "source_id": "src-1400-task-1402",
+          "kind": "task",
+          "url": "https://github.com/Saltmu/orchestune/issues/1402",
+          "digest": "bcaceb20d027e509d6e977aa8c0deda446b864f6bd1eaf37de399944268da56a",
+          "available_at": "2026-10-15T09:20:00Z"
+        },
+        {
+          "source_id": "src-1400-pr-1410",
+          "kind": "pr",
+          "url": "https://github.com/Saltmu/orchestune/pull/1410",
+          "digest": "74101735579960673780b4d28352947d131102c0f428d55d1f2dec0fc246cd76",
+          "available_at": "2026-10-15T09:50:00Z"
+        },
+        {
+          "source_id": "src-1400-outcome-1401",
+          "kind": "outcome",
+          "url": "https://github.com/Saltmu/orchestune/issues/1401#issuecomment-140101",
+          "digest": "61b257c33d0f252856a460207c1b9eb5a0fe796842d654b3558b2a5494a868db",
+          "available_at": "2026-10-15T10:00:00Z"
+        }
+      ],
+      "available_at": "2026-10-15T10:00:00Z"
+    },
+    {
+      "case_id": "case-1500-at-cutoff",
+      "parent_issue": 1500,
+      "plan_revision_digest": "45049a90ad0862d351de0a7c8fae24e1d354de8f657e253771f3976787d5ebb0",
+      "title": "[EPIC] 共有コンテキスト索引とBM25検索カードの抽出契約（cutoff同時刻境界）",
+      "purpose": "available_atがas_ofと同時刻の候補がstrict不等号（available_at < as_of）で除外されることを確認する。",
+      "acceptance_criteria": [
+        "cutoff同時刻（available_at == as_of）の候補を除外する。"
+      ],
+      "tasks": [
+        {
+          "subtask_id": "cutoff-boundary-task",
+          "issue_number": 1501,
+          "description": "共有コンテキスト索引とBM25検索カードの境界時刻を検証する。",
+          "depends_on": [],
+          "footprint": [
+            "orchestune/context/search.py"
+          ],
+          "symbols": [
+            "search_artifacts"
+          ],
+          "result": "done",
+          "missing_reason": null,
+          "source_ids": [
+            "src-1500-outcome-1501",
+            "src-1500-task-1501"
+          ]
+        }
+      ],
+      "lineage_issue_numbers": [
+        1500,
+        1501
+      ],
+      "pr_numbers": [
+        1510
+      ],
+      "sources": [
+        {
+          "source_id": "src-1500-plan",
+          "kind": "plan",
+          "url": "https://github.com/Saltmu/orchestune/issues/1500",
+          "digest": "9b08d3080775b117d9c84022c9ccc07ba6cd20717d6e539da796243c64391ed6",
+          "available_at": "2026-10-31T23:50:00Z"
+        },
+        {
+          "source_id": "src-1500-task-1501",
+          "kind": "task",
+          "url": "https://github.com/Saltmu/orchestune/issues/1501",
+          "digest": "b9cde1eb8bb95430878e8815d8c8b51c32b4a9cfb18a377d23a53eb349bdd548",
+          "available_at": "2026-10-31T23:55:00Z"
+        },
+        {
+          "source_id": "src-1500-outcome-1501",
+          "kind": "outcome",
+          "url": "https://github.com/Saltmu/orchestune/issues/1501#issuecomment-150101",
+          "digest": "05327f55b1d07e1303d3cfef9ce0073368663ed633ac750573bd9a74fc928575",
+          "available_at": "2026-11-01T00:00:00Z"
+        }
+      ],
+      "available_at": "2026-11-01T00:00:00Z"
+    },
+    {
+      "case_id": "case-1600-after-cutoff",
+      "parent_issue": 1600,
+      "plan_revision_digest": "d35de1497982acac3ccded07e3996e25d4b54032d4305d4adf754123c8667529",
+      "title": "[EPIC] 共有コンテキスト索引とBM25検索カードの抽出契約（cutoff事後更新）",
+      "purpose": "事後編集またはas_ofより後のsourceを含む候補が未来情報として除外されることを確認する。",
+      "acceptance_criteria": [
+        "cutoff事後（available_at > as_of）の候補を除外する。"
+      ],
+      "tasks": [
+        {
+          "subtask_id": "future-edited-task",
+          "issue_number": 1601,
+          "description": "共有コンテキスト索引とBM25検索カードの事後編集本文を含むタスク。",
+          "depends_on": [],
+          "footprint": [
+            "orchestune/context/budget.py",
+            "orchestune/context/search.py"
+          ],
+          "symbols": [
+            "fit_context_budget",
+            "search_artifacts"
+          ],
+          "result": "done",
+          "missing_reason": null,
+          "source_ids": [
+            "src-1600-outcome-1601",
+            "src-1600-task-1601"
+          ]
+        }
+      ],
+      "lineage_issue_numbers": [
+        1600,
+        1601
+      ],
+      "pr_numbers": [
+        1610
+      ],
+      "sources": [
+        {
+          "source_id": "src-1600-plan",
+          "kind": "plan",
+          "url": "https://github.com/Saltmu/orchestune/issues/1600",
+          "digest": "42a2402d186af532541fbf37b7600aa4bdb8af38333481935908a961b8801546",
+          "available_at": "2026-10-25T10:00:00Z"
+        },
+        {
+          "source_id": "src-1600-task-1601",
+          "kind": "task",
+          "url": "https://github.com/Saltmu/orchestune/issues/1601",
+          "digest": "214b897c3d0db88e849e163933a6a174ead2bade916d215545f53033bfe17b6c",
+          "available_at": "2026-11-02T09:15:00Z"
+        },
+        {
+          "source_id": "src-1600-outcome-1601",
+          "kind": "outcome",
+          "url": "https://github.com/Saltmu/orchestune/issues/1601#issuecomment-160101",
+          "digest": "297a3a0a741c9f0c447a116cadecc7d7aa15dc143345f40bcf8c909db820b905",
+          "available_at": "2026-10-25T12:00:00Z"
+        }
+      ],
+      "available_at": "2026-11-02T09:15:00Z"
+    }
+  ]
+}
