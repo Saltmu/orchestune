@@ -84,8 +84,8 @@
       "trial_a": "trial-09-task-1730-A",
       "trial_b": "trial-10-task-1730-B",
       "quality_a": 7,
-      "quality_b": 6,
-      "quality_diff": -1,
+      "quality_b": 5,
+      "quality_diff": -2,
       "input_diff": 55283,
       "cached_diff": 26112,
       "output_diff": 708,
@@ -120,8 +120,8 @@
     "quality_total": {
       "n": 6,
       "median": 0.0,
-      "mean": 0.1667,
-      "min": -1,
+      "mean": 0.0,
+      "min": -2,
       "max": 1
     },
     "requirement_coverage": {
@@ -148,8 +148,8 @@
     "verification_plan": {
       "n": 6,
       "median": 0.0,
-      "mean": 0.0,
-      "min": 0,
+      "mean": -0.1667,
+      "min": -1,
       "max": 0
     },
     "input_tokens": {
@@ -214,5 +214,5 @@
     "6_search_latency": "pass"
   },
   "decision": "redesign_or_observe_more",
-  "decision_reason": "Criteria 3 and 5 are unmet. One quality pair decreased. total_tokens was not reported, so its denominator is 0. Two quality pairs improved, so the batch is not a drop. Every condition B payload had returned_count 0."
+  "decision_reason": "Criteria 3 and 5 are unmet. One quality pair decreased. total_tokens was not reported, so its denominator is 0. Two quality pairs improved, so the batch is not a drop. Every condition B payload had returned_count 0. blind-05 was rescored after a condition cue was removed; its quality total is 5."
 }

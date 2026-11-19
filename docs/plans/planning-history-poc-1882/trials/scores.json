@@ -1,5 +1,5 @@
 {
-  "method": "one independent scorer per blind plan; arm mapping applied only after every score was fixed",
+  "method": "one independent scorer per blind plan; arm mapping applied only after every score was fixed. blind-05 later had one condition cue removed from the scoring text and was rescored by a new scorer; the other eleven scores were not rescored.",
   "records": [
     {
       "blind_id": "blind-01",
@@ -65,11 +65,12 @@
       "requirement_coverage": 1,
       "footprint_alignment": 1,
       "dependency_dag_validity": 2,
-      "verification_plan": 2,
-      "total": 6,
+      "verification_plan": 1,
+      "total": 5,
       "leak_detected": false,
       "requirement_drop": false,
-      "rationale": "要件の主経路は各サブタスクへ割り当て済み。保存パス、権限不足時の非対話案内、tracked .gitignoreの非改変、shell=True禁止は本文に明示がなく境界が曖昧。基準木の既存ファイルとシンボルは実在する。要件に無いテストファイルの予約がある。DAGは循環がなく、共有契約の直列化は妥当。各出力に具体的な検証がある。要件外のIssue番号や後続実装の参照はない。"
+      "rationale": "主経路と受け入れ項目は各サブタスクへ割り当てている。一方で Git common-dir の info/exclude と lock・active pointer のファイル名、worktree と成果物の配置、ignored を dirty から外す条件、base 変更後は閉じて新規開始する扱いが具体化されていない。既存の層・公開関数・有限停止検査は checkout と合うが、planning 用の単体テストを footprint 外に1件追加している。T02–T05 は契約後に並列、service.py を共有する T06 と T07 は直列で、依存は必要十分である。各工程に検証観点とテストファイルはあるが、標準の local CI は統合工程にしかない。",
+      "rescore": "condition cue removed from scoring text before this score"
     },
     {
       "blind_id": "blind-06",

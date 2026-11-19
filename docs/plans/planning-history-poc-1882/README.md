@@ -62,15 +62,15 @@ done
 | `trials/measurements.json` | 13083 | `d2e66c940a15f4c4b4e37b2748255c99a6969be7b293b3dbe65201a8a9108d80` |
 | `trials/logs.jsonl` | 938575 | `64a59a7dfe797fb5a3d9fda36c84f5bacec27290538262b590c15b582f56ed5d` |
 | `trials/plans.jsonl` | 185234 | `fa41874f78d74304bd7fa643a339bc3a64a48c4d4411c5a8f8cef77df41d6837` |
-| `trials/blind-plans.jsonl` | 182893 | `491948f4cc3c5728ec9f90259c8a56f3e8bbcc9208939f72200a41d13f686525` |
-| `trials/scores.json` | 10789 | `feb544d17591d4db4ed6030763db6691e556d3c80e2c703c3cf906c434fd0d5f` |
-| `aggregation.json` | 5250 | `5f99acbf986f2fca8fa223f8dc1284feacc0247ac875515a082c2aa92510b688` |
+| `trials/blind-plans.jsonl` | 182878 | `13adf19e62f25a2742490fba74ed7275edfb52fedeca6c7e3825528944f6c2e1` |
+| `trials/scores.json` | 11232 | `77756eb6115acedc85b437d6b96e7748c857a93d85408a2ce17d28a7b4380370` |
+| `aggregation.json` | 5333 | `dde2becd78e265f0c02cc881a4df90d13146f70b6031720acff01cddfceafa15` |
 
 `raw-sources.jsonl` は 60 行（`plan` 4、`task` 25、`outcome` 25、`requirement` 6）。各行は `source_id`, `kind`, `url`, `available_at`, `digest`, `text` を持つ。`digest` は `text` の SHA-256 である。要件行 `target-<issue>-requirement` の `available_at` と `digest` は、`pre_registration.json` の当該ターゲットの `as_of` と `requirement_digest` に一致する。
 
 ## 試行と匿名化計画の対応
 
-採点は盲検 ID ごとに独立して行い、12 件の点を固定したあとで `trials/scores.json` に腕と `trial_id` を対応付けた。盲検計画 JSONL には `trial_id` と腕を入れていない。
+採点は盲検 ID ごとに独立して行い、12 件の点を固定したあとで `trials/scores.json` に腕と `trial_id` を対応付けた。盲検計画 JSONL には `trial_id` と腕を入れていない。公開後、`blind-05` の採点用本文だけが「同梱 JSON」と条件を示していた。その句を採点用本文から外し、別の採点者がその本文だけを採点し直した。生計画 `trials/plans.jsonl` の当該試行は元の文のままである。他の 11 件の採点用本文には条件を示す句が無く、採点し直していない。
 
 | 順 | trial_id | 盲検 | プロンプト SHA-256 | 計画 SHA-256 | ログ SHA-256 |
 | ---: | --- | --- | --- | --- | --- |
