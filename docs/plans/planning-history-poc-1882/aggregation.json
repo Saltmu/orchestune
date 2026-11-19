@@ -1,0 +1,218 @@
+{
+  "eligible_pairs": 6,
+  "pairs": [
+    {
+      "parent_issue": 1421,
+      "blind_a": "blind-10",
+      "blind_b": "blind-08",
+      "trial_a": "trial-01-task-1421-A",
+      "trial_b": "trial-02-task-1421-B",
+      "quality_a": 7,
+      "quality_b": 7,
+      "quality_diff": 0,
+      "input_diff": -46181,
+      "cached_diff": -38272,
+      "output_diff": -551,
+      "wall_diff": -21501.54,
+      "repo_reads_diff": 0,
+      "search_ms_b": 136.64,
+      "leak_b": false,
+      "drop_b": false,
+      "card_returned": 0
+    },
+    {
+      "parent_issue": 1588,
+      "blind_a": "blind-01",
+      "blind_b": "blind-03",
+      "trial_a": "trial-04-task-1588-A",
+      "trial_b": "trial-03-task-1588-B",
+      "quality_a": 8,
+      "quality_b": 8,
+      "quality_diff": 0,
+      "input_diff": 5277,
+      "cached_diff": 14848,
+      "output_diff": 2175,
+      "wall_diff": 51312.1,
+      "repo_reads_diff": -1,
+      "search_ms_b": 127.64,
+      "leak_b": false,
+      "drop_b": false,
+      "card_returned": 0
+    },
+    {
+      "parent_issue": 1589,
+      "blind_a": "blind-07",
+      "blind_b": "blind-06",
+      "trial_a": "trial-05-task-1589-A",
+      "trial_b": "trial-06-task-1589-B",
+      "quality_a": 6,
+      "quality_b": 7,
+      "quality_diff": 1,
+      "input_diff": 3422,
+      "cached_diff": -6912,
+      "output_diff": 1834,
+      "wall_diff": 38727.92,
+      "repo_reads_diff": 0,
+      "search_ms_b": 140.31,
+      "leak_b": false,
+      "drop_b": false,
+      "card_returned": 0
+    },
+    {
+      "parent_issue": 1590,
+      "blind_a": "blind-12",
+      "blind_b": "blind-09",
+      "trial_a": "trial-08-task-1590-A",
+      "trial_b": "trial-07-task-1590-B",
+      "quality_a": 7,
+      "quality_b": 8,
+      "quality_diff": 1,
+      "input_diff": 19699,
+      "cached_diff": 9984,
+      "output_diff": 3658,
+      "wall_diff": 69317.6,
+      "repo_reads_diff": 0,
+      "search_ms_b": 140.46,
+      "leak_b": false,
+      "drop_b": false,
+      "card_returned": 0
+    },
+    {
+      "parent_issue": 1730,
+      "blind_a": "blind-02",
+      "blind_b": "blind-05",
+      "trial_a": "trial-09-task-1730-A",
+      "trial_b": "trial-10-task-1730-B",
+      "quality_a": 7,
+      "quality_b": 6,
+      "quality_diff": -1,
+      "input_diff": 55283,
+      "cached_diff": 26112,
+      "output_diff": 708,
+      "wall_diff": 20137.37,
+      "repo_reads_diff": 1,
+      "search_ms_b": 211.12,
+      "leak_b": false,
+      "drop_b": false,
+      "card_returned": 0
+    },
+    {
+      "parent_issue": 1841,
+      "blind_a": "blind-04",
+      "blind_b": "blind-11",
+      "trial_a": "trial-12-task-1841-A",
+      "trial_b": "trial-11-task-1841-B",
+      "quality_a": 7,
+      "quality_b": 7,
+      "quality_diff": 0,
+      "input_diff": 29683,
+      "cached_diff": 27520,
+      "output_diff": 1296,
+      "wall_diff": 32685.86,
+      "repo_reads_diff": 1,
+      "search_ms_b": 233.07,
+      "leak_b": false,
+      "drop_b": false,
+      "card_returned": 0
+    }
+  ],
+  "metrics": {
+    "quality_total": {
+      "n": 6,
+      "median": 0.0,
+      "mean": 0.1667,
+      "min": -1,
+      "max": 1
+    },
+    "requirement_coverage": {
+      "n": 6,
+      "median": 0.0,
+      "mean": 0.1667,
+      "min": 0,
+      "max": 1
+    },
+    "footprint_alignment": {
+      "n": 6,
+      "median": 0.0,
+      "mean": 0.0,
+      "min": -1,
+      "max": 1
+    },
+    "dependency_dag_validity": {
+      "n": 6,
+      "median": 0.0,
+      "mean": 0.0,
+      "min": 0,
+      "max": 0
+    },
+    "verification_plan": {
+      "n": 6,
+      "median": 0.0,
+      "mean": 0.0,
+      "min": 0,
+      "max": 0
+    },
+    "input_tokens": {
+      "n": 6,
+      "median": 12488.0,
+      "mean": 11197.1667,
+      "min": -46181,
+      "max": 55283
+    },
+    "cached_tokens": {
+      "n": 6,
+      "median": 12416.0,
+      "mean": 5546.6667,
+      "min": -38272,
+      "max": 27520
+    },
+    "output_tokens": {
+      "n": 6,
+      "median": 1565.0,
+      "mean": 1520.0,
+      "min": -551,
+      "max": 3658
+    },
+    "wall_ms": {
+      "n": 6,
+      "median": 35706.89,
+      "mean": 31779.885,
+      "min": -21501.54,
+      "max": 69317.6
+    },
+    "repo_reads": {
+      "n": 6,
+      "median": 0.0,
+      "mean": 0.1667,
+      "min": -1,
+      "max": 1
+    }
+  },
+  "total_tokens": {
+    "comparable_pairs": 0,
+    "missing_pairs": 6,
+    "reason": "turn.completed usage has no total_tokens field"
+  },
+  "cost_usd": {
+    "comparable_pairs": 0,
+    "missing_pairs": 6,
+    "reason": "codex exec --json does not emit cost_usd"
+  },
+  "post_implementation_rework": {
+    "comparable_pairs": 0,
+    "missing_pairs": 6,
+    "reason": "planning-only evaluation; post-implementation rework not executed"
+  },
+  "truncation_pairs": 0,
+  "partial_observation_pairs": 0,
+  "criteria": {
+    "1_leak": "pass",
+    "2_requirement_drop_b": "pass",
+    "3_quality_non_decrease": "fail",
+    "4_some_improvement": "pass",
+    "5_total_tokens_median": "fail",
+    "6_search_latency": "pass"
+  },
+  "decision": "redesign_or_observe_more",
+  "decision_reason": "Criteria 3 and 5 are unmet. One quality pair decreased. total_tokens was not reported, so its denominator is 0. Two quality pairs improved, so the batch is not a drop. Every condition B payload had returned_count 0."
+}
