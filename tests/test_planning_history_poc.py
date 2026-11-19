@@ -61,6 +61,13 @@ def _load_fixture_corpus() -> dict[str, Any]:
     return data
 
 
+def _with_adopted_footprint(path: str) -> dict[str, Any]:
+    corpus = _load_fixture_corpus()
+    case = next(item for item in corpus["cases"] if item["case_id"] == "case-1100-rev2")
+    case["tasks"][0]["footprint"] = [*case["tasks"][0]["footprint"], path]
+    return corpus
+
+
 def test_canonical_fixture_default_limit_and_budget(tmp_path: Path) -> None:
     request_path = _write_json(tmp_path / "request.json", CANONICAL_REQUEST)
     proc = _run_cli(FIXTURE_CORPUS_PATH, request_path)
@@ -376,3 +383,79 @@ def test_invalid_inputs_exit_2(tmp_path: Path) -> None:
     avail_corpus["cases"][0]["available_at"] = "2026-10-01T09:00:00Z"
     avail_path = _write_json(tmp_path / "avail.json", avail_corpus)
     assert _run_cli(avail_path, valid_req).returncode == 2
+
+
+@pytest.mark.parametrize(
+    "footprint",
+    [
+        "/absolute/repro.txt",
+        "C:\\absolute\\repro.txt",
+        "C:/absolute/repro.txt",
+        "\\\\server\\share\\repro.txt",
+        "../outside.txt",
+        "tasks/../../outside.txt",
+        ".",
+        "..",
+        "foo/..",
+    ],
+)
+def test_non_repo_relative_footprints_exit_2(tmp_path: Path, footprint: str) -> None:
+    corpus_path = _write_json(
+        tmp_path / "corpus.json", _with_adopted_footprint(footprint)
+    )
+    request_path = _write_json(tmp_path / "request.json", CANONICAL_REQUEST)
+    proc = _run_cli(corpus_path, request_path)
+    assert proc.returncode == 2
+    assert proc.stdout == b""
+    assert proc.stderr != b""
+
+
+def test_lexical_repo_relative_footprints_stay_on_the_card(tmp_path: Path) -> None:
+    relative = "dir/../orchestune/context/search.py"
+    windows_relative = "orchestune\\context\\search.py"
+    corpus = _with_adopted_footprint(relative)
+    case = next(item for item in corpus["cases"] if item["case_id"] == "case-1100-rev2")
+    case["tasks"][0]["footprint"].append(windows_relative)
+    corpus_path = _write_json(tmp_path / "corpus.json", corpus)
+    request_path = _write_json(tmp_path / "request.json", CANONICAL_REQUEST)
+    proc = _run_cli(corpus_path, request_path)
+    assert proc.returncode == 0, proc.stderr.decode("utf-8", errors="replace")
+    assert proc.stderr == b""
+    payload = json.loads(proc.stdout.decode("utf-8"))
+    card = next(
+        item for item in payload["cards"] if item["case_id"] == "case-1100-rev2"
+    )
+    footprints = [fp for task in card["tasks"] for fp in task["footprint"]]
+    assert relative in footprints
+    assert windows_relative in footprints
+
+
+def test_lone_surrogate_exits_2_without_traceback(tmp_path: Path) -> None:
+    corpus = _load_fixture_corpus()
+    case = next(item for item in corpus["cases"] if item["case_id"] == "case-1100-rev2")
+    case["title"] = "broken-\ud800"
+    corpus_path = tmp_path / "surrogate.json"
+    corpus_path.write_bytes(json.dumps(corpus).encode("ascii") + b"\n")
+    request_path = _write_json(tmp_path / "request.json", CANONICAL_REQUEST)
+    proc = _run_cli(corpus_path, request_path)
+    assert proc.returncode == 2
+    assert proc.stdout == b""
+    assert proc.stderr != b""
+    assert b"Traceback" not in proc.stderr
+
+
+def test_oversized_json_integer_exits_2_without_traceback(tmp_path: Path) -> None:
+    encoded = json.dumps(CANONICAL_REQUEST)
+    replacement = "[" + ("9" * 5000) + "]"
+    encoded = encoded.replace(
+        json.dumps(CANONICAL_REQUEST["exclude_issue_numbers"]),
+        replacement,
+        1,
+    )
+    huge_path = tmp_path / "huge.json"
+    huge_path.write_bytes(encoded.encode("ascii") + b"\n")
+    proc = _run_cli(FIXTURE_CORPUS_PATH, huge_path)
+    assert proc.returncode == 2
+    assert proc.stdout == b""
+    assert proc.stderr != b""
+    assert b"Traceback" not in proc.stderr

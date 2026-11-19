@@ -16,6 +16,7 @@ from typing import Any
 
 from orchestune.context.budget import fit_context_budget
 from orchestune.context.search import search_artifacts
+from orchestune.footprint_paths import normalize_footprint_path
 
 CORPUS_SCHEMA_VERSION = "planning-history-corpus-v1"
 QUERY_SCHEMA_VERSION = "planning-history-query-v1"
@@ -136,7 +137,9 @@ def _load_strict_json(path: Path, label: str) -> tuple[dict[str, Any], str]:
             object_pairs_hook=_no_duplicate_keys,
             parse_constant=_reject_constant,
         )
-    except (json.JSONDecodeError, RecursionError) as exc:
+    except ValidationError:
+        raise
+    except (json.JSONDecodeError, RecursionError, ValueError) as exc:
         raise ValidationError(f"{label} is not valid JSON: {exc}") from exc
     if not isinstance(parsed, dict):
         raise ValidationError(f"{label} top-level must be a JSON object")
@@ -156,10 +159,18 @@ def _require_keys(obj: Any, expected: frozenset[str], label: str) -> dict[str, A
     return obj
 
 
+def _require_utf8_text(value: str, label: str) -> str:
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValidationError(f"{label} is not valid UTF-8 text: {value!r}") from exc
+    return value
+
+
 def _require_non_empty_str(value: Any, label: str) -> str:
     if not isinstance(value, str) or value.strip() == "":
         raise ValidationError(f"{label} must be a non-empty string")
-    return value
+    return _require_utf8_text(value, label)
 
 
 def _require_no_edge_ws_str(value: Any, label: str) -> str:
@@ -167,6 +178,16 @@ def _require_no_edge_ws_str(value: Any, label: str) -> str:
         raise ValidationError(
             f"{label} must be a non-empty string without leading/trailing whitespace"
         )
+    return _require_utf8_text(value, label)
+
+
+def _require_repo_relative_path(value: str, label: str) -> str:
+    try:
+        normalize_footprint_path(value)
+    except ValueError as exc:
+        raise ValidationError(
+            f"{label} must be a repository-relative path: {value!r}"
+        ) from exc
     return value
 
 
@@ -348,9 +369,11 @@ def _validate_tasks(
         _require_unique_str_list(
             task["depends_on"], f"{t_label}.depends_on", allow_empty=True
         )
-        _require_unique_str_list(
+        footprint = _require_unique_str_list(
             task["footprint"], f"{t_label}.footprint", allow_empty=True
         )
+        for path_index, path in enumerate(footprint):
+            _require_repo_relative_path(path, f"{t_label}.footprint[{path_index}]")
         _require_unique_str_list(
             task["symbols"], f"{t_label}.symbols", allow_empty=True
         )
@@ -716,6 +739,12 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _write_diagnostic(exc: BaseException) -> None:
+    sys.stderr.buffer.write(
+        f"Error: {exc}\n".encode("utf-8", errors="backslashreplace")
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI entrypoint returning 0 on success, 1 on I/O error, 2 on validation error."""
     args = _parse_args(argv)
@@ -737,10 +766,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             max_bytes=args.max_bytes,
         )
     except FileIOError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+        _write_diagnostic(exc)
         return 1
     except ValidationError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+        _write_diagnostic(exc)
+        return 2
+    except UnicodeEncodeError as exc:
+        _write_diagnostic(exc)
         return 2
 
     sys.stdout.buffer.write(result.rendered_bytes)
