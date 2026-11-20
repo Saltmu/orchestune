@@ -1,6 +1,8 @@
-# 類似計画カード PoC 比較評価レポート（Issue #1874）
+# 類似計画カード PoC 比較評価レポート（Issue #1874 / 再検証 #1882）
 
-親 EPIC: [#1842](https://github.com/Saltmu/orchestune/issues/1842) / 比較契約: [#1872](https://github.com/Saltmu/orchestune/issues/1872)（[`planning-history-poc-protocol.md`](planning-history-poc-protocol.md)） / カード生成 CLI: [#1873](https://github.com/Saltmu/orchestune/issues/1873)（[`scripts/planning_history_poc.py`](../../scripts/planning_history_poc.py), commit `7c2292774bfb1721b38705ff3f136ace8f9c958a`） / 本評価 Issue: [#1874](https://github.com/Saltmu/orchestune/issues/1874) / 測定形式参照例: [#1869](https://github.com/Saltmu/orchestune/issues/1869)（[`context-poc-eval.md`](context-poc-eval.md)）
+親 EPIC: [#1842](https://github.com/Saltmu/orchestune/issues/1842) / 比較契約: [#1872](https://github.com/Saltmu/orchestune/issues/1872)（[`planning-history-poc-protocol.md`](planning-history-poc-protocol.md)） / カード生成 CLI: [#1873](https://github.com/Saltmu/orchestune/issues/1873)（[`scripts/planning_history_poc.py`](../../scripts/planning_history_poc.py), commit `7c2292774bfb1721b38705ff3f136ace8f9c958a`） / 初回評価: [#1874](https://github.com/Saltmu/orchestune/issues/1874) / 再検証: [#1882](https://github.com/Saltmu/orchestune/issues/1882) / 測定形式参照例: [#1869](https://github.com/Saltmu/orchestune/issues/1869)（[`context-poc-eval.md`](context-poc-eval.md)）
+
+[#1882](https://github.com/Saltmu/orchestune/issues/1882) の適格データは §8 以降と [`planning-history-poc-1882/`](planning-history-poc-1882/README.md) にある。§2 から §7 は #1874 の探索記録である。
 
 ## 1. 概要・照合基準・責務境界
 
@@ -13,7 +15,22 @@
 | 置き場所（リポジトリ相対パス） | 責務 |
 | --- | --- |
 | `docs/plans/planning-history-poc-eval.md`（本書） | 候補選定・除外理由、事前登録、固定資料・リクエスト・出力カードの SHA-256 と出典 manifest、全試行の実測値と盲検採点、ペア差と指標別分母、継続・再設計・見送りの判定根拠、参照先と保持期間を記録する。 |
-| `.orchestune/tmp/eval-1874-20261119T013848Z-36cc12e0/` | Git 管理外の一意な評価セッション。固定した原本（`raw-sources/`）、固定資料（`corpus.json`）、検索リクエスト（`requests/`）、生成カード（`cards/`）、プロンプト（`prompts/`）、生計画（`raw-plans/`）、匿名化計画（`blind-plans/`）、実行イベントログ（`logs/`）、集計 JSON を保管する。 |
+| `.orchestune/tmp/eval-1874-20261119T013848Z-36cc12e0/` | #1874 が使った Git 管理外セッション。checkout からは取得できない。#1882 では適格資料に使わない。 |
+| `docs/plans/planning-history-poc-1882/` | #1882 の固定バンドル。原本バイト、request、カード、プロンプト、試行、採点、集計を checkout から照合する。 |
+
+## 0. #1882 による #1874 バッチの分類
+
+#1874 の 12 試行と、その前の 4 試行は探索である。適格な事前登録済みバッチとしては証明できない。基盤拡張の採否は §8 の適格データだけで更新する。
+
+証明できない理由は次のとおり。
+
+1. §2.2 の事前登録はプロセス上限 300 秒を載せ、§4.1 の本番 12 試行は 240 秒で実行している。240 秒へ変えた条件を本番開始前に再登録した digest は、このレポートにも checkout にも無い。
+2. 初回 4 試行（`trial-01-task-1421-A`、`trial-03-task-1588-B`、`trial-05-task-1589-A`、`trial-07-task-1590-B` の各原試行）が 300 秒で計画 0 bytes のあと、共通プロンプトに隔離ガードを足している。そのプロンプトのバイト列 digest は事前登録表に無い。この 4 試行は探索として残す。
+3. トークン予算が数値で固定されていない。
+4. 原本・request・カード・計画・ログの実体は `.orchestune/tmp/eval-1874-20261119T013848Z-36cc12e0/` を指している。このパスは PR の checkout に含まれず、再検証時点の作業環境にも残っていなかった。掲載された SHA-256 は原本バイトと照合できない。現行 Issue URL は、編集後の本文を過去の `created_at` として証明しない。
+5. §3.2 は採用カードの出典を 77 件と書く。同節で URL を含む表行は 79 行ある。原記録が無いので、77 も 79 も出典件数の再集計としては採用しない。
+6. §5.2 に `cached_tokens` のペア分母と差分が無い。`measurements.json` が回収できないので、公開表の数値から適格な再集計はしない。
+7. `#1588` 条件 A（`trial-04-task-1588-A`）について、公開表は `wall_ms=240028.90` と `repo_reads=3` を残し、トークンと採点を `null` にしている。時間は予算打ち切り、リポジトリ読取は打ち切り前の部分観測、トークンと採点は欠測である。§5 はこれらを一括して欠測ペアにしている。原ログが無いので、この読み分けも適格データには入れない。
 
 ---
 
@@ -397,7 +414,7 @@
 
 1. **保持期間（Retention Period）**:
    - `.orchestune/tmp/eval-1874-20261119T013848Z-36cc12e0/` 配下の固定原本・リクエスト・生成カード・匿名化計画・JSONL 実行ログは、**親 EPIC [#1842](https://github.com/Saltmu/orchestune/issues/1842) が完了（クローズ）し、かつ本 PR 統合後少なくとも 30 日間（または §6.4 の再設計 R1/R2 適用後の再評価が完了するまで）** ローカル評価セッションとして保持する。
-   - Git 管理下の本レポート（`docs/plans/planning-history-poc-eval.md`）には全資料の GitHub パーマリンク、`available_at`、および UTF-8 生バイト SHA-256 ダイジェストを恒久記録しているため、一時ディレクトリ清掃後も GitHub API から同一版を取得して SHA-256 を照合可能である。出典または版時点の SHA-256 一致が確認できない外部資料は再現可能として扱わない。
+   - #1882 の再検証では、このローカルセッションの原本を checkout から取得できず、掲載 digest をバイト列と照合できなかった。GitHub の現行 Issue 本文は編集後の版であり、過去の `created_at` の証明にはならない。§7 の digest は探索記録の記述であり、再現可能な固定資料ではない。照合できる固定資料は `docs/plans/planning-history-poc-1882/` である。
 2. **セレクタ出力の決定論的再現コマンド**:
    ```bash
    for pnum in 1421 1588 1589 1590 1730 1841; do
@@ -409,3 +426,151 @@
    ```
 3. **機密情報および環境固有の絶対パス排除の確認**:
    - 本レポート内のすべてのファイル参照はリポジトリ相対パス（`docs/plans/...`, `scripts/...`, `.orchestune/tmp/eval-1874-20261119T013848Z-36cc12e0/...`）および正規化済み `"Saltmu/orchestune"` / GitHub URL のみで記述しており、環境固有の絶対ローカルパスや API キー・トークン等の機密情報を一切含まない（`./scripts/local-ci.sh` 内の `gitleaks` およびパス検査で検証済み）。
+
+---
+
+## 8. #1882 の適格バッチ
+
+§0 のとおり #1874 の 4 探索試行と 12 試行は、適格な事前登録済み比較として証明できない。本節は、試行前に条件を固定して実行した別バッチだけを集計し、プロトコル §7.4 の 6 条件をそのペアだけで再判定する。数値の正本は [`planning-history-poc-1882/aggregation.json`](planning-history-poc-1882/aggregation.json) と [`planning-history-poc-1882/trials/measurements.json`](planning-history-poc-1882/trials/measurements.json) である。ファイル digest、再生成コマンド、保持は [`planning-history-poc-1882/README.md`](planning-history-poc-1882/README.md) に置く。
+
+### 8.1 試行前に固定した条件
+
+`pre_registration.json`（SHA-256 `178b4f58f131ff8e62641cd87c5f152e98e46685c2a912fba47f84fb4bba2769`）は最初の LLM 呼び出しの前に凍結した。`frozen_before_trials` は true で、試行後にこのファイルは書き換えていない。
+
+| 項目 | 固定値 |
+| --- | --- |
+| 選定規則 | 事前に指定した 6 課題がすべて入力検証を通過したので、対象はちょうど `#1421`, `#1588`, `#1589`, `#1590`, `#1730`, `#1841`。カードが空になることを理由に課題を減らしていない。 |
+| 実行順 | 課題番号の昇順。腕は A→B、B→A、A→B、B→A、A→B、B→A。 |
+| 壁時計予算 | 1 試行 `240` 秒（`timeout --foreground 240`）。 |
+| トークン予算 | `180000`。観測された `total_tokens` が無いので、この予算による打ち切りは発生していない。 |
+| モデル | `codex-cli 0.169.0`、`gpt-6.1-sol`、`model_reasoning_effort=high`。`codex exec --json --ephemeral --sandbox read-only --skip-git-repo-check`。 |
+| セレクタ | `uv run python -m scripts.planning_history_poc --limit 3 --max-bytes 12288`。生成 SHA `3b974a82fc723b1d391f71b91a2c522ab17714a2`。 |
+| 隔離 | `GH_HOST=offline.invalid`。`GH_TOKEN` と `GITHUB_TOKEN` は空。分解試行は各 `base_sha` の detached checkout。 |
+| 共通プロンプトと差分 | `prompts/common.txt`、`prompts/arm-a.txt`、`prompts/arm-b.txt`。条件 B だけがカードファイルを JSON フェンスで足す。組み立て済み 12 digest は事前登録の `assembled_prompt_digests` にある。 |
+
+各適格ターゲットは、子 Issue より前の要件版、その版の `as_of`、実装前 `base_sha`、系列除外集合を持つ。要件本文は `raw-sources.jsonl` の `target-<issue>-requirement` で、`available_at` が `as_of`、`digest` が `requirement_digest` である。
+
+| 課題 | `as_of` | `base_sha` | 除外 Issue 数 | 除外 PR | 要件 digest 先頭 |
+| ---: | --- | --- | ---: | --- | --- |
+| 1421 | `2026-10-30T12:44:52Z` | `95822058eec1243bdec3d13b710a64dee05597ab` | 5 | なし | `14d898ab81fa` |
+| 1588 | `2026-11-03T07:08:36Z` | `64ea517732c31a419fbfce291a2332ce88effe4d` | 9 | なし | `4a1f8383ca66` |
+| 1589 | `2026-11-04T15:37:01Z` | `9b8806397d830e0b6ea8009d5a722cc89a7c282c` | 8 | なし | `c8f55d4c899c` |
+| 1590 | `2026-11-05T03:55:56Z` | `dd78adc1a64d92271209b4aaff117cea13ad3c68` | 9 | なし | `3e02a00eb78c` |
+| 1730 | `2026-11-07T10:48:47Z` | `840a99ce3bc3e92488f9b719690efff86d76fdf5` | 12 | なし | `644aa25fac59` |
+| 1841 | `2026-11-14T23:46:29Z` | `2309bef03661af822625708844c1a485dbc1232a` | 7 | `1865` | `ca7c6c1de740` |
+
+除外 PR は凍結時の `closedByPullRequestsReferences` だけである。空の 5 件は、その参照リストが空だった記録である。
+
+### 8.2 出典件数と除外
+
+`corpus.json`（SHA-256 `834b528fdfa2f96966c3d5547a3f0b565b6e651f6041185e0db1837274960da5`）に入ったのは、凍結バイトが `restore_plan_from_parent` を通過した 4 件、出典 54 件である。`available_at` は当該ケースの出典 `available_at` の最大値である。
+
+| case_id | タスク | 出典 | `available_at` |
+| --- | ---: | ---: | --- |
+| `case-1398-rev1` | 2 | 5 | `2026-11-01T17:30:55Z` |
+| `case-1588-rev1` | 8 | 17 | `2026-11-03T11:25:33Z` |
+| `case-1589-rev1` | 7 | 15 | `2026-11-04T20:29:41Z` |
+| `case-1590-rev1` | 8 | 17 | `2026-11-05T13:23:58Z` |
+
+corpus に入れなかった親は `pre_registration.json` の `case_notes` に理由がある。現行セレクタは退役した `model_tier` と、子本文の厳格不一致を拒否する。寛容なパーサには変えず、件数を合わせるためにケースも削っていない。
+
+| 親 | 除外理由 |
+| ---: | --- |
+| 1033, 1053, 1059, 1106, 1219, 1368 | 凍結バイトが `model_tier` 退役で復元拒否 |
+| 1230 | 不正な箇条書き行 |
+| 1417 | 分解ブロックが無い |
+| 1421 | 本文行数が 28 行期待に対し 29 行 |
+| 1730 | 復元した系列 `[1734, 1735, 1736, 1737, 1738]` に対し、sub-issue 集合が `1746`, `1751`–`1754`, `1757` を余分に含む |
+| 1841 | 不正な箇条書き行 `### 配置と命名マッピング` |
+| 1053（入力検証） | 最初の子 `2026-09-26T04:46:38Z` より前だと証明できる親本文版が無い |
+| 1842 | 本 EPIC 自身のため母集団に入れない |
+
+この 4 件 54 出典が、本バッチで再集計できる出典件数である。§3.2 の 77 件と、同節の URL 行 79 件は探索記録の記述であり、ここへ再掲しない。
+
+セレクタ結果は 6 件とも `returned_count=0` である。`#1421` は `no_matches`（`after_as_of` 4）。残り 5 件は `over_budget` で、`budget_dropped` は `#1588` が 1、`#1589` が 2、`#1590` `#1730` `#1841` が 3 である。条件 B の品質差を、履歴カード本文の効果としては読まない。
+
+### 8.3 試行実測
+
+12 試行はすべて exit 0、`status=succeeded`、`time_observation=complete`、`observation=complete`、`gh_calls=0` である。壁時計の最大は `206566.51` ms で、240 秒の打ち切りは 0 件である。`repo_reads` は `item.completed` の `command_execution` 件数、`gh_calls` は `(^|[;&|]\s*)gh\s` に合うコマンド件数である。
+
+トークン観測は 12 試行とも `partial` である。`turn.completed` の usage には `input_tokens`, `cached_input_tokens`, `output_tokens`, `reasoning_output_tokens` があり、`total_tokens` は無い。`total_tokens` は null、理由は `turn.completed usage has no total_tokens field`。入力と出力の和を `total_tokens` として記録していない。`cached_tokens` は usage の `cached_input_tokens` である。`cost_usd` は null（`codex exec --json` が出力しない）。実装後手戻りは null（計画生成のみで未実施）。
+
+| 順 | trial_id | 壁時計 ms | input | cached | output | `repo_reads` | 計画 bytes | 検索 ms |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | `trial-01-task-1421-A` | 150301.01 | 141609 | 104704 | 6598 | 3 | 12717 | null |
+| 2 | `trial-02-task-1421-B` | 128799.47 | 95428 | 66432 | 6047 | 3 | 14243 | 136.64 |
+| 3 | `trial-03-task-1588-B` | 200498.16 | 110711 | 86656 | 8944 | 2 | 20314 | 127.64 |
+| 4 | `trial-04-task-1588-A` | 149186.06 | 105434 | 71808 | 6769 | 3 | 13179 | null |
+| 5 | `trial-05-task-1589-A` | 148226.76 | 111390 | 92544 | 6751 | 3 | 14543 | null |
+| 6 | `trial-06-task-1589-B` | 186954.68 | 114812 | 85632 | 8585 | 3 | 18568 | 140.31 |
+| 7 | `trial-07-task-1590-B` | 206566.51 | 128355 | 100096 | 9543 | 3 | 19523 | 140.46 |
+| 8 | `trial-08-task-1590-A` | 137248.91 | 108656 | 90112 | 5885 | 3 | 11602 | null |
+| 9 | `trial-09-task-1730-A` | 133828.24 | 80845 | 65024 | 6070 | 2 | 15690 | null |
+| 10 | `trial-10-task-1730-B` | 153965.61 | 136128 | 91136 | 6778 | 3 | 17887 | 211.12 |
+| 11 | `trial-11-task-1841-B` | 112541.45 | 79497 | 64128 | 4956 | 2 | 12442 | 233.07 |
+| 12 | `trial-12-task-1841-A` | 79855.59 | 49814 | 36608 | 3660 | 1 | 10196 | null |
+
+打ち切りペアは 0、実行が途中で切れた部分観測ペアは 0 である。欠測はフィールド単位で、`total_tokens` 6 ペア、`cost_usd` 6 ペア、実装後手戻り 6 ペアである。条件 A の検索時間はカード生成が無いので null であり、条件 B の欠測ではない。
+
+参考として、報告された `input_tokens + output_tokens` は 12 試行とも登録上限 180000 以下（最大 148207）だった。この和は `total_tokens` ではなく、条件 5 の分母にも入れない。
+
+### 8.4 盲検採点とペア差
+
+採点は計画から腕と `trial_id` を外した盲検計画に対して、1 計画につき 1 採点者で行った。四点は必須要件網羅、実コードと整合する変更範囲、根拠のある依存と DAG、検証計画で、各 0–2、合計はそれらの和である。リークは、要件に無い対象の事後実装や Issue 番号を計画が使った場合とする。必須要件落ちは、必須要件が計画に無い場合とする。点と理由を固定したあとで腕を対応付けた。理由文は `trials/scores.json` にある。
+
+`blind-05` の最初の採点用本文は「同梱 JSON」と書いており、条件 B だけが受け取る入力を示していた。その句を採点用本文から外し、別の採点者がその本文だけを採点し直した。下表の `blind-05` はその再採点である。生計画は元の文のまま `trials/plans.jsonl` にある。他の 11 件を走査し、条件を示す句は無かったので採点し直していない。
+
+| 課題 | A（盲検） | B（盲検） | 点 A | 点 B | 差 | 動いた項目 |
+| ---: | --- | --- | ---: | ---: | ---: | --- |
+| 1421 | `blind-10` | `blind-08` | 2/2/1/2 = 7 | 2/2/1/2 = 7 | 0 | なし |
+| 1588 | `blind-01` | `blind-03` | 2/2/2/2 = 8 | 2/2/2/2 = 8 | 0 | なし |
+| 1589 | `blind-07` | `blind-06` | 1/1/2/2 = 6 | 2/1/2/2 = 7 | +1 | 要件網羅 |
+| 1590 | `blind-12` | `blind-09` | 2/1/2/2 = 7 | 2/2/2/2 = 8 | +1 | 変更範囲 |
+| 1730 | `blind-02` | `blind-05` | 1/2/2/2 = 7 | 1/1/2/1 = 5 | -2 | 変更範囲、検証計画 |
+| 1841 | `blind-04` | `blind-11` | 1/2/2/2 = 7 | 1/2/2/2 = 7 | 0 | なし |
+
+6 ペアとも `leak_detected=false`、`requirement_drop=false`、`card_returned=0` である。
+
+ペア差は B−A。偶数個の中央値は、並べた中央 2 値の平均（`statistics.median`）である。
+
+| 指標 | 比較可能 | 中央値 | 平均 | 最小 | 最大 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 品質合計 | 6 | 0 | 0 | -2 | 1 |
+| 要件網羅 | 6 | 0 | 0.1667 | 0 | 1 |
+| 変更範囲 | 6 | 0 | 0 | -1 | 1 |
+| 依存と DAG | 6 | 0 | 0 | 0 | 0 |
+| 検証計画 | 6 | 0 | -0.1667 | -1 | 0 |
+| `input_tokens` | 6 | 12488 | 11197.1667 | -46181 | 55283 |
+| `cached_tokens` | 6 | 12416 | 5546.6667 | -38272 | 27520 |
+| `output_tokens` | 6 | 1565 | 1520 | -551 | 3658 |
+| `wall_ms` | 6 | 35706.89 | 31779.885 | -21501.54 | 69317.6 |
+| `repo_reads` | 6 | 0 | 0.1667 | -1 | 1 |
+| `total_tokens` | 0 | 欠測 6。理由は usage に `total_tokens` が無いこと | | | |
+
+課題別の B−A は、品質、input、cached、output、壁時計 ms、`repo_reads`、条件 B の検索 ms の順で次のとおり。
+
+| 課題 | 品質 | input | cached | output | 壁時計 ms | reads | 検索 ms |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1421 | 0 | -46181 | -38272 | -551 | -21501.54 | 0 | 136.64 |
+| 1588 | 0 | 5277 | 14848 | 2175 | 51312.1 | -1 | 127.64 |
+| 1589 | +1 | 3422 | -6912 | 1834 | 38727.92 | 0 | 140.31 |
+| 1590 | +1 | 19699 | 9984 | 3658 | 69317.6 | 0 | 140.46 |
+| 1730 | -2 | 55283 | 26112 | 708 | 20137.37 | +1 | 211.12 |
+| 1841 | 0 | 29683 | 27520 | 1296 | 32685.86 | +1 | 233.07 |
+
+### 8.5 6 条件と基盤拡張の判定
+
+判定対象は上記 6 ペアだけである。#1874 の公開表は分母に入れない。
+
+| # | 条件 | 結果 | 根拠 |
+| ---: | --- | --- | --- |
+| 1 | リーク 0 | 達成 | 12 試行とも `leak_detected=false`。`gh_calls=0`。 |
+| 2 | 条件 B の必須要件落ち 0 | 達成 | 6 ペアとも `requirement_drop=false`。 |
+| 3 | 品質 5 組以上かつ全ペア非悪化 | 未達 | 比較可能 6。`#1730` の合計が 7 から 5 へ下がった。 |
+| 4 | 1 組以上の品質改善、または `total_tokens` 削減 | 達成 | `#1589` と `#1590` で合計点が 1 上がった。`total_tokens` の比較可能ペアは 0 なので、トークン削減は観測していない。 |
+| 5 | `total_tokens` の比較可能 5 組以上かつ中央値 `<= 0` | 未達 | 比較可能 0、欠測 6。 |
+| 6 | 条件 B の検索が毎回 10.0 秒以内 | 達成 | 最大 233.07 ms。 |
+
+判定は **再設計／追加観測** である。継続の 6 条件を同時には満たさない。見送りにはしない。品質合計が上がったペアが 2 組ある。条件 B の注入は 6 課題とも空封筒なので、この品質差は履歴カード本文の効果としては読まない。共有索引への計画履歴統合と、分解手順への任意接続は、この適格バッチからは採用しない。
+
+次の観測を行う場合は、契約を変える作業を別 Issue に切り、その変更後の条件をバッチ開始前に再び事前登録する。本節は #1872 の判定基準自体は変えていない。
