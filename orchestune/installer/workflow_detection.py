@@ -255,7 +255,7 @@ def detect_project_workflow(
             "custom_complete" if has_complete else "merge_recommended"
         )
     elif workflow_templates:
-        status = "workflow_template"
+        status = "workflow_template" if has_complete else "merge_recommended"
     else:
         status = "missing"
 
@@ -275,7 +275,11 @@ def detect_project_workflow(
 
 def format_merge_guidance_lines(detection: ProjectWorkflowDetection) -> tuple[str, ...]:
     """Build human-readable merge proposal lines for existing docs/skills."""
-    targets = list(detection.discipline_files) + list(detection.custom_skills)
+    targets = (
+        list(detection.discipline_files)
+        + list(detection.custom_skills)
+        + list(detection.workflow_templates)
+    )
     lines: list[str] = []
     if targets:
         lines.append(f"検出された既存開発スキル／規律文書: {', '.join(targets)}")

@@ -55,6 +55,24 @@ def test_detect_workflow_template_customized_without_placeholders(
     assert detection.has_complete is True
 
 
+def test_detect_customized_workflow_template_without_complete_proposes_merge(
+    tmp_path: Path,
+) -> None:
+    wf_dir = tmp_path / ".agents" / "skills" / "workflow-template"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "SKILL.md").write_text(
+        "# Custom Template\nRun `orchestune claim 1 --apply` and pytest.\n",
+        encoding="utf-8",
+    )
+
+    detection = detect_project_workflow(tmp_path)
+    assert detection.status == "merge_recommended"
+    assert detection.has_complete is False
+    assert "orchestune complete" in detection.missing_procedures
+    joined = "\n".join(format_merge_guidance_lines(detection))
+    assert ".agents/skills/workflow-template/SKILL.md" in joined
+
+
 def test_detect_existing_custom_skill_missing_complete_proposes_merge(
     tmp_path: Path,
 ) -> None:
