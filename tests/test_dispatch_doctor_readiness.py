@@ -89,30 +89,77 @@ def test_session_dirs_gitignore_lines_constant() -> None:
 
 
 class TestDisciplineCheck:
-    def test_discipline_ok_when_agents_md_exists(self, tmp_path: Path) -> None:
-        (tmp_path / "AGENTS.md").write_text("rules", encoding="utf-8")
+    def test_discipline_ok_when_agents_md_exists_with_complete(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "AGENTS.md").write_text(
+            "rules\norchestune complete --apply\n", encoding="utf-8"
+        )
         diags = run_readiness_checks(tmp_path, {}, True, which_fn=lambda _: None)
         diag = next(d for d in diags if d.code == CODE_READINESS_DISCIPLINE)
         assert diag.status == "ok"
         assert "AGENTS.md" in diag.evidence[0]
 
-    def test_discipline_ok_when_claude_md_exists(self, tmp_path: Path) -> None:
-        (tmp_path / "CLAUDE.md").write_text("rules", encoding="utf-8")
+    def test_discipline_ok_when_claude_md_exists_with_complete(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "CLAUDE.md").write_text(
+            "rules\norchestune complete --apply\n", encoding="utf-8"
+        )
         diags = run_readiness_checks(tmp_path, {}, True, which_fn=lambda _: None)
         diag = next(d for d in diags if d.code == CODE_READINESS_DISCIPLINE)
         assert diag.status == "ok"
         assert "CLAUDE.md" in diag.evidence[0]
 
-    def test_discipline_ok_when_dot_agents_agents_md_exists(
+    def test_discipline_ok_when_dot_agents_agents_md_exists_with_complete(
         self, tmp_path: Path
     ) -> None:
         agents_dir = tmp_path / ".agents"
         agents_dir.mkdir()
-        (agents_dir / "AGENTS.md").write_text("rules", encoding="utf-8")
+        (agents_dir / "AGENTS.md").write_text(
+            "rules\norchestune complete --apply\n", encoding="utf-8"
+        )
         diags = run_readiness_checks(tmp_path, {}, True, which_fn=lambda _: None)
         diag = next(d for d in diags if d.code == CODE_READINESS_DISCIPLINE)
         assert diag.status == "ok"
         assert ".agents/AGENTS.md" in diag.evidence[0]
+
+    def test_discipline_ok_when_workflow_template_installed(
+        self, tmp_path: Path
+    ) -> None:
+        wf_dir = tmp_path / ".agents" / "skills" / "workflow-template"
+        wf_dir.mkdir(parents=True)
+        (wf_dir / "SKILL.md").write_text(
+            "Run `orchestune complete --apply`.\n", encoding="utf-8"
+        )
+        diags = run_readiness_checks(tmp_path, {}, True, which_fn=lambda _: None)
+        diag = next(d for d in diags if d.code == CODE_READINESS_DISCIPLINE)
+        assert diag.status == "ok"
+        assert ".agents/skills/workflow-template/SKILL.md" in diag.evidence
+
+    def test_discipline_warning_when_existing_doc_lacks_complete(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "AGENTS.md").write_text(
+            "rules without complete\n", encoding="utf-8"
+        )
+        diags = run_readiness_checks(tmp_path, {}, True, which_fn=lambda _: None)
+        diag = next(d for d in diags if d.code == CODE_READINESS_DISCIPLINE)
+        assert diag.status == "warning"
+        assert "orchestune complete" in diag.message
+        assert "AGENTS.md" in diag.evidence
+        assert "orchestune-readiness" in diag.remediation
+
+    def test_discipline_warning_when_existing_custom_skill_lacks_complete(
+        self, tmp_path: Path
+    ) -> None:
+        skill_dir = tmp_path / ".claude" / "skills" / "custom-dev"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text("Run pytest.\n", encoding="utf-8")
+        diags = run_readiness_checks(tmp_path, {}, True, which_fn=lambda _: None)
+        diag = next(d for d in diags if d.code == CODE_READINESS_DISCIPLINE)
+        assert diag.status == "warning"
+        assert ".claude/skills/custom-dev/SKILL.md" in diag.evidence
 
     def test_discipline_warning_when_missing(self, tmp_path: Path) -> None:
         diags = run_readiness_checks(tmp_path, {}, True, which_fn=lambda _: None)

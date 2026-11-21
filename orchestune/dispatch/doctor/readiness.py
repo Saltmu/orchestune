@@ -32,6 +32,7 @@ from orchestune.dispatch.targets import (
 )
 from orchestune.forge import ForgeError, GitHubForge
 from orchestune.infra.process_utils import platform_ci_script_relative
+from orchestune.installer.workflow_detection import detect_project_workflow
 from orchestune.session_dirs import ORCHESTUNE_GITIGNORE_LINES
 
 _LOCAL_CLI_BINARIES = {
@@ -49,19 +50,49 @@ def _suggest_ci_commands(root: Path) -> list[str]:
 
 
 def _check_discipline(repo_root: Path) -> Diagnostic:
-    for candidate in ("AGENTS.md", "CLAUDE.md", ".agents/AGENTS.md"):
-        if (repo_root / candidate).is_file():
-            return Diagnostic(
-                CODE_READINESS_DISCIPLINE,
-                "ok",
-                f"エージェント規律ファイルが確認されました ({candidate})。 / Agent discipline file found.",
-                evidence=(candidate,),
-            )
+    detection = detect_project_workflow(repo_root)
+    evidence = (
+        detection.discipline_files
+        + detection.custom_skills
+        + detection.workflow_templates
+    )
+    if detection.status == "custom_complete":
+        msg = (
+            f"エージェント規律ファイル／開発スキルと orchestune complete 手順が確認されました ({', '.join(evidence)})。"
+            " / Agent discipline/workflow skill with orchestune complete found."
+        )
+        return Diagnostic(CODE_READINESS_DISCIPLINE, "ok", msg, evidence=evidence)
+    if detection.status == "workflow_template":
+        note = (
+            "（<...> プレースホルダーをプロジェクト固有コマンドへ置換してください）"
+            if detection.template_has_placeholders
+            else ""
+        )
+        msg = f"workflow-template スキルが確認されました ({', '.join(evidence)}){note}。 / workflow-template skill found."
+        return Diagnostic(CODE_READINESS_DISCIPLINE, "ok", msg, evidence=evidence)
+    if detection.status == "merge_recommended":
+        missing = ", ".join(detection.missing_procedures)
+        msg = (
+            f"既存の規律文書／開発スキル ({', '.join(evidence)}) に {missing} の手順が見つかりません。"
+            f"claim のみ実行され orchestune complete が呼ばれない恐れがあります。 / Existing discipline/skill lacks {missing}."
+        )
+        remed = (
+            "既存の開発スキル／規律文書へ `orchestune claim` および `orchestune complete` 手順をマージするか、"
+            "`orchestune-readiness` スキルでマージ案を作成してください。"
+            "テンプレート参照には `orchestune skills install --target all --scope project --with-workflow-skill` を使用できます。"
+        )
+        return Diagnostic(
+            CODE_READINESS_DISCIPLINE,
+            "warning",
+            msg,
+            evidence=evidence,
+            remediation=remed,
+        )
     return Diagnostic(
         CODE_READINESS_DISCIPLINE,
         "warning",
-        "エージェント規律ファイル（AGENTS.md、CLAUDE.md、または.agents/AGENTS.md）が見つかりません。"
-        " / Agent discipline file not found.",
+        "エージェント規律ファイル（AGENTS.md、CLAUDE.md、.agents/AGENTS.md）および開発スキルが見つかりません。"
+        " / Agent discipline file or workflow skill not found.",
         remediation="orchestune skills install --target all --scope project --with-workflow-skill "
         "を実行してワークフロースキルテンプレートを導入し、規律ファイルを配置してください。",
     )
