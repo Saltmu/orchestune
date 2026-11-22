@@ -8,8 +8,8 @@ This guide describes how to install Orchestune, register its skills with various
 
 Orchestune is designed around the assumption that an agent implements according to a standard development workflow, and that child tasks passing CI and the child review-evidence gate (enabled by default) are integrated automatically. If the target repository does not meet the following prerequisites, you will not get the traceability and quality guarantees Orchestune is built for. Confirm these before adopting Orchestune.
 
-1. **(a) A file defining the agent's development discipline must exist**
-   Provide a file such as `AGENTS.md` / `CLAUDE.md` that documents the development workflow you want agents to follow in this repository (TDD, Issue filing, PR conventions, etc.). The instruction the Orchestune dispatcher sends to an agent is a single line — "implement this following the standard development workflow" — and the actual definition of that workflow is the target repository's responsibility. If you are starting from scratch, `orchestune setup --with-workflow-skill` (see Section 2 below) can drop in a generic template.
+1. **(a) A file or workflow skill defining the agent's development discipline must exist**
+   Provide a file such as `AGENTS.md` / `CLAUDE.md` or a custom development skill that documents the development workflow you want agents to follow in this repository (TDD, Issue filing, `orchestune claim`, `orchestune complete`, PR conventions, etc.). The instruction the Orchestune dispatcher sends to an agent is a single line — "implement this following the standard development workflow" — and the actual definition of that workflow is the target repository's responsibility. If neither a discipline file nor a custom development skill exists yet, `orchestune skills install --target all --scope project` (see Section 2 below) automatically installs the generic `workflow-template` alongside the standard skills. When existing discipline files or development skills are present without `orchestune complete`, Orchestune preserves them and proposes merging the missing steps.
 2. **(b) A quality gate (CI) thorough enough to be trusted with automatic merging**
    Orchestune has no human review gate at the child-task level. Alongside CI, the child review-evidence gate acts as an automated gate in the default `required` mode, verifying each child's passing review evidence (`verdict=pass`, matching the SHA to be merged) before updating the parent branch (see [Usage §4.5](usage.md#45-child-review-evidence-gate) and [Architecture & Design](architecture.md) for details). However, explicitly setting `child-review-gate = "off"` skips evidence verification, and even with the gate enabled, review judgments come from an LLM. Mechanically checking correctness therefore depends on CI; smoke-test-level CI alone cannot sufficiently guarantee the quality of code integrated automatically.
 3. **(c) `ci_command` must be set to your repository's own CI entrypoint**
@@ -139,15 +139,22 @@ orchestune skills install --target codex --scope project
 
 Project-scoped skills (`.agents/skills/`, `.claude/skills/` and `.grok/skills/`) can be committed to Git so all team members have access to the same skills. Local transaction state and lock files are maintained under `.orchestune-installer/` and should remain gitignored.
 
-#### `--with-workflow-skill`: Deploying a generic workflow skill project-locally
+#### Automatic `workflow-template` Onboarding and Merge Proposals
 
-If you need an agent discipline workflow for a non-Python repository or want a starting point for project-specific rules:
+When running `orchestune skills install --target all --scope project`, Orchestune inspects project discipline documents (`AGENTS.md`, `CLAUDE.md`, `.agents/AGENTS.md`) and non-Orchestune custom skills (`.agents/skills/*`, `.claude/skills/*`, `.grok/skills/*`):
 
-```bash
-orchestune skills install --target all --scope project --with-workflow-skill
-```
+- **When no development skill or discipline document exists**: `workflow-template` is automatically installed alongside the standard skills (replace placeholders such as `<CI_ENTRYPOINT>` with your project's commands).
+- **When an existing development skill or discipline document lacks `orchestune complete`**: Existing files are preserved untouched, and Orchestune outputs a merge proposal listing the missing `orchestune claim` / `orchestune complete` steps (and suggests running `orchestune-readiness` to generate a concrete merge diff).
+- **Explicit flag control**:
+  ```bash
+  # Install both standard skills and workflow-template even if existing docs/skills are present
+  orchestune skills install --target all --scope project --with-workflow-skill
 
-This installs `workflow-template` into project-local skills. Note that `workflow-template` cannot be installed globally (`--scope user`) since workflow rules are inherently project-specific.
+  # Skip automatic workflow-template installation when absent
+  orchestune skills install --target all --scope project --no-workflow-skill
+  ```
+
+Note that `--with-workflow-skill` and `--no-workflow-skill` cannot be used with `--scope user` since workflow rules are inherently project-specific.
 
 ### Managing and Inspecting Skills
 

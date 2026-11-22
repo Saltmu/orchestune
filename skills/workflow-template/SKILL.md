@@ -6,7 +6,7 @@ description: "Generic template skill orchestrating design/planning, issue filing
 # Workflow Template Skill
 
 > [!IMPORTANT]
-> This is a **generic template** placed by Orchestune's `orchestune setup --with-workflow-skill`. Replace placeholders enclosed in `<...>` (e.g. `<TEST_COMMAND>`, `<CI_ENTRYPOINT>`, `<FORMAT_LINT_COMMAND>`, `<TYPE_CHECK_COMMAND>`) with the actual commands for your project before use. You may also freely rename the folder and skill name (e.g. to `local-ci-developer`).
+> This is a **generic template** placed by Orchestune's `orchestune skills install --scope project` (or `--with-workflow-skill`). Replace placeholders enclosed in `<...>` (e.g. `<TEST_COMMAND>`, `<CI_ENTRYPOINT>`, `<FORMAT_LINT_COMMAND>`, `<TYPE_CHECK_COMMAND>`) with the actual commands for your project before use. You may also freely rename the folder and skill name (e.g. to `local-ci-developer`).
 
 > [!NOTE]
 > **User-Facing Response Language**:

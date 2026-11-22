@@ -317,6 +317,7 @@ EXPECTED_LAYERS: dict[int, frozenset[str]] = {
             "installer.state",
             "installer.targets",
             "installer.transaction",
+            "installer.workflow_detection",
         }
     ),
     1: frozenset(

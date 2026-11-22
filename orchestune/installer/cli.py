@@ -4,6 +4,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 from orchestune.infra.cli_output import Level, make_output
 from orchestune.installer.contracts import (
@@ -27,7 +28,14 @@ from orchestune.installer.engine import (
     update_skills,
 )
 from orchestune.installer.payload import resolve_payload
+from orchestune.installer.state import inspect_bundle_state
 from orchestune.installer.targets import resolve_targets
+from orchestune.installer.workflow_detection import (
+    ProjectWorkflowDetection,
+    detect_project_workflow,
+    format_merge_guidance_lines,
+)
+from orchestune.session_dirs import find_project_root
 
 _DOCTOR_LEVELS: dict[str, Level] = {
     "ok": Level.SUCCESS,
@@ -88,12 +96,24 @@ def build_parser() -> argparse.ArgumentParser:
             sub.add_argument(
                 "--source-dir", type=Path, help="Explicit source checkout root"
             )
+        if cmd == "update":
             sub.add_argument(
                 "--with-workflow-skill",
                 action="store_true",
-                help="Include workflow-template skill (project scope only)",
+                help="Update workflow-template skill (project scope only)",
             )
         if cmd == "install":
+            wf_group = sub.add_mutually_exclusive_group()
+            wf_group.add_argument(
+                "--with-workflow-skill",
+                action="store_true",
+                help="Include workflow-template skill alongside standard skills (project scope only)",
+            )
+            wf_group.add_argument(
+                "--no-workflow-skill",
+                action="store_true",
+                help="Skip automatic workflow-template installation (project scope only)",
+            )
             sub.add_argument(
                 "--migrate-legacy",
                 action="store_true",
@@ -109,14 +129,27 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _resolve_effective_project_dir(
+    args: argparse.Namespace, scope: ScopeType
+) -> Path | None:
+    if scope != ScopeType.PROJECT:
+        return None
+    if isinstance(args.project_dir, Path):
+        return args.project_dir.resolve()
+    if args.skills_dir is not None:
+        return None
+    return find_project_root().resolve()
+
+
 def _handle_doctor(
     roots: list[PhysicalRoot],
     targets: list[TargetType],
     scope: ScopeType,
     offline: bool,
     as_json: bool,
+    project_dir: Path | None = None,
 ) -> int:
-    diagnostics = run_doctor_checks(roots, offline=offline)
+    diagnostics = run_doctor_checks(roots, offline=offline, project_dir=project_dir)
     has_error = any(d.status == "error" for d in diagnostics)
     if as_json:
         output = {
@@ -214,6 +247,107 @@ def _execute_root_operation(
         return res, InstallerExitCode.ERROR
 
 
+def _build_workflow_guidance(
+    detection: ProjectWorkflowDetection,
+    *,
+    with_workflow: bool,
+    no_workflow: bool,
+    dry_run: bool,
+) -> dict[str, Any]:
+    action, recommended = _classify_guidance_action(
+        detection,
+        with_workflow=with_workflow,
+        no_workflow=no_workflow,
+        dry_run=dry_run,
+    )
+    return {
+        "status": detection.status,
+        "action": action,
+        "detected_discipline_files": list(detection.discipline_files),
+        "detected_custom_skills": list(detection.custom_skills),
+        "detected_workflow_templates": list(detection.workflow_templates),
+        "missing_procedures": list(detection.missing_procedures),
+        "template_has_placeholders": detection.template_has_placeholders,
+        "recommended_actions": recommended,
+        "merge_checklist": list(detection.merge_checklist),
+    }
+
+
+def _classify_guidance_action(
+    detection: ProjectWorkflowDetection,
+    *,
+    with_workflow: bool,
+    no_workflow: bool,
+    dry_run: bool,
+) -> tuple[str, list[str]]:
+    placeholder_hint = "workflow-template 内の <CI_ENTRYPOINT> / <TEST_COMMAND> 等をプロジェクト固有コマンドへ置換してください。"
+    if with_workflow:
+        action = "would_install" if dry_run else "explicitly_installed"
+        recs = [placeholder_hint]
+        if detection.status == "merge_recommended":
+            recs.extend(format_merge_guidance_lines(detection))
+        return action, recs
+    if no_workflow:
+        recs = (
+            list(format_merge_guidance_lines(detection))
+            if detection.status == "merge_recommended"
+            else (
+                [
+                    "開発スキルが未検出のため、`orchestune skills install --target all --scope project --with-workflow-skill` でテンプレートを導入してください。"
+                ]
+                if detection.status == "missing"
+                else []
+            )
+        )
+        return "skipped_by_flag", recs
+    if detection.status == "missing":
+        return (
+            "would_auto_install" if dry_run else "auto_installed",
+            [placeholder_hint],
+        )
+    if detection.status == "workflow_template":
+        recs = [placeholder_hint] if detection.template_has_placeholders else []
+        return "already_present", recs
+    if detection.status == "merge_recommended":
+        return "merge_proposed", list(format_merge_guidance_lines(detection))
+    return "already_configured", []
+
+
+def _print_workflow_guidance(out: Any, guidance: dict[str, Any]) -> None:
+    action = guidance["action"]
+    if action in ("auto_installed", "would_auto_install"):
+        verb = (
+            "Would auto-install" if action == "would_auto_install" else "Auto-installed"
+        )
+        out.message(
+            Level.SUCCESS,
+            f"{verb} 'workflow-template' skill (no existing development skill or discipline doc detected).",
+        )
+    elif action == "merge_proposed":
+        out.message(
+            Level.WARNING,
+            "Existing development skill / discipline doc detected without 'orchestune complete'. "
+            "Preserving existing files; merge recommended:",
+        )
+    elif action == "already_configured":
+        out.message(
+            Level.SUCCESS,
+            "Existing project development workflow covers 'orchestune complete'.",
+        )
+    elif action == "already_present":
+        out.message(
+            Level.INFO,
+            "Existing 'workflow-template' skill preserved.",
+        )
+    elif action == "skipped_by_flag":
+        out.message(
+            Level.INFO,
+            "Skipped automatic 'workflow-template' installation (--no-workflow-skill).",
+        )
+    for line in guidance.get("recommended_actions", ()):
+        out.emit(out.text_block(f"    * {line}"))
+
+
 def _print_results(
     results: list[OperationResult],
     subcommand: str,
@@ -221,6 +355,7 @@ def _print_results(
     targets: list[TargetType],
     roots: list[PhysicalRoot],
     as_json: bool,
+    workflow_guidance: dict[str, Any] | None = None,
 ) -> None:
     any_failure = any(not r.success for r in results)
     if as_json:
@@ -229,7 +364,7 @@ def _print_results(
             overall_status = (
                 "failed" if all(not r.success for r in results) else "partial_failure"
             )
-        output_data = {
+        output_data: dict[str, Any] = {
             "schema_version": 1,
             "operation": subcommand,
             "scope": scope.value,
@@ -238,6 +373,8 @@ def _print_results(
             "results": [r.to_dict() for r in results],
             "overall_status": overall_status,
         }
+        if workflow_guidance is not None:
+            output_data["workflow_guidance"] = workflow_guidance
         make_output(machine=True).payload(json.dumps(output_data, indent=2))
     else:
         out = make_output(sys.stdout)
@@ -249,17 +386,19 @@ def _print_results(
                 out.emit(out.text_block(f"    - {act}"))
             if r.error:
                 out.message(Level.FAILURE, f"Error: {r.error}")
+        if workflow_guidance is not None:
+            _print_workflow_guidance(out, workflow_guidance)
 
 
 def _resolve_roots_and_payload(
     args: argparse.Namespace,
-) -> tuple[list[PhysicalRoot], BundlePayload | None] | int:
+) -> tuple[list[PhysicalRoot], BundlePayload | None, BundlePayload | None] | int:
     scope = ScopeType(args.scope)
     with_workflow = getattr(args, "with_workflow_skill", False)
-    if with_workflow and scope == ScopeType.USER:
-        _report_error(
-            "Error: --with-workflow-skill is only allowed with --scope project."
-        )
+    no_workflow = getattr(args, "no_workflow_skill", False)
+    if (with_workflow or no_workflow) and scope == ScopeType.USER:
+        flag = "--with-workflow-skill" if with_workflow else "--no-workflow-skill"
+        _report_error(f"Error: {flag} is only allowed with --scope project.")
         return int(InstallerExitCode.CONTRACT_ERROR)
 
     targets = [TargetType(t) for t in args.target]
@@ -276,18 +415,106 @@ def _resolve_roots_and_payload(
         return int(InstallerExitCode.CONTRACT_ERROR)
 
     if args.subcommand == "doctor":
-        return roots, None
+        return roots, None, None
 
     source_dir = getattr(args, "source_dir", None)
     try:
+        if args.subcommand == "install":
+            standard_payload = resolve_payload(
+                source_dir=source_dir, with_workflow_skill=False
+            )
+            workflow_payload = (
+                resolve_payload(source_dir=source_dir, with_workflow_skill=True)
+                if scope == ScopeType.PROJECT and not no_workflow
+                else None
+            )
+            return roots, standard_payload, workflow_payload
         payload = resolve_payload(
             source_dir=source_dir, with_workflow_skill=with_workflow
         )
+        return roots, payload, None
     except PayloadError as e:
         _report_error(f"Error: {e}")
         return int(InstallerExitCode.CONTRACT_ERROR)
 
-    return roots, payload
+
+def _should_install_workflow_for_root(
+    root: PhysicalRoot,
+    workflow_payload: BundlePayload,
+    detection: ProjectWorkflowDetection,
+    *,
+    with_workflow: bool,
+    no_workflow: bool,
+) -> bool:
+    if no_workflow:
+        return False
+    if with_workflow or detection.status == "missing":
+        return True
+    if detection.status == "workflow_template":
+        state = inspect_bundle_state(root.path, workflow_payload)
+        return state in (BundleState.ABSENT, BundleState.MANAGED_CURRENT)
+    return False
+
+
+def _run_root_operations(
+    roots: list[PhysicalRoot],
+    args: argparse.Namespace,
+    payload: BundlePayload,
+    workflow_payload: BundlePayload | None,
+    detection: ProjectWorkflowDetection | None,
+) -> tuple[list[OperationResult], int]:
+    dry_run = args.dry_run
+    migrate_legacy = getattr(args, "migrate_legacy", False)
+    with_workflow = getattr(args, "with_workflow_skill", False)
+    no_workflow = getattr(args, "no_workflow_skill", False)
+
+    results: list[OperationResult] = []
+    overall_exit_code: int = int(InstallerExitCode.OK)
+    for root in roots:
+        res, code = _execute_root_operation(
+            root, args.subcommand, payload, dry_run, migrate_legacy
+        )
+        results.append(res)
+        overall_exit_code = max(overall_exit_code, int(code))
+
+        if (
+            args.subcommand == "install"
+            and workflow_payload is not None
+            and detection is not None
+            and _should_install_workflow_for_root(
+                root,
+                workflow_payload,
+                detection,
+                with_workflow=with_workflow,
+                no_workflow=no_workflow,
+            )
+        ):
+            wf_res, wf_code = _execute_root_operation(
+                root, "install", workflow_payload, dry_run, migrate_legacy
+            )
+            results.append(wf_res)
+            overall_exit_code = max(overall_exit_code, int(wf_code))
+    return results, overall_exit_code
+
+
+def _resolve_project_workflow(
+    args: argparse.Namespace,
+    scope: ScopeType,
+    roots: list[PhysicalRoot],
+    project_dir: Path | None,
+) -> tuple[ProjectWorkflowDetection | None, dict[str, Any] | None]:
+    if args.subcommand != "install" or scope != ScopeType.PROJECT:
+        return None, None
+    detection = detect_project_workflow(
+        project_dir, extra_skills_roots=[r.path for r in roots]
+    )
+    guidance = _build_workflow_guidance(
+        detection,
+        with_workflow=getattr(args, "with_workflow_skill", False),
+        no_workflow=getattr(args, "no_workflow_skill", False),
+        dry_run=args.dry_run,
+    )
+    return detection, guidance
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -301,34 +528,42 @@ def main(argv: list[str] | None = None) -> int:
     if isinstance(prep, int):
         return prep
 
-    roots, payload = prep
+    roots, payload, workflow_payload = prep
     targets = [TargetType(t) for t in args.target]
     scope = ScopeType(args.scope)
+    project_dir = _resolve_effective_project_dir(args, scope)
 
     if args.subcommand == "doctor":
         return _handle_doctor(
-            roots, targets, scope, getattr(args, "offline", False), args.json
+            roots,
+            targets,
+            scope,
+            getattr(args, "offline", False),
+            args.json,
+            project_dir=project_dir,
         )
 
     assert payload is not None
-    dry_run = args.dry_run
-    migrate_legacy = getattr(args, "migrate_legacy", False)
-    results: list[OperationResult] = []
-    overall_exit_code: int = int(InstallerExitCode.OK)
-
-    for root in roots:
-        res, code = _execute_root_operation(
-            root, args.subcommand, payload, dry_run, migrate_legacy
-        )
-        results.append(res)
-        overall_exit_code = max(overall_exit_code, int(code))
-
+    detection, workflow_guidance = _resolve_project_workflow(
+        args, scope, roots, project_dir
+    )
+    results, overall_exit_code = _run_root_operations(
+        roots, args, payload, workflow_payload, detection
+    )
     if any(not r.success for r in results) and overall_exit_code == int(
         InstallerExitCode.OK
     ):
         overall_exit_code = int(InstallerExitCode.ERROR)
 
-    _print_results(results, args.subcommand, scope, targets, roots, args.json)
+    _print_results(
+        results,
+        args.subcommand,
+        scope,
+        targets,
+        roots,
+        args.json,
+        workflow_guidance=workflow_guidance,
+    )
     return overall_exit_code
 
 

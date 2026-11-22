@@ -8,8 +8,8 @@ Orchestuneのインストール方法、各種AIアシスタント（Claude Code
 
 Orchestuneは「エージェントが標準開発ワークフローに従って実装し、CIと子レビュー証跡ゲート（既定）を通過した子タスクが自動で統合される」ことを前提に設計されています。導入先のリポジトリが以下を満たしていない場合、期待通りのトレーサビリティ・品質は得られません。導入前に必ず確認してください。
 
-1. **(a) エージェント規律を定義したファイルが存在すること**
-   `AGENTS.md` / `CLAUDE.md` など、対象リポジトリでエージェントに遵守させたい開発ワークフロー（TDD、Issue起票、PR作成規約等）を明文化したファイルを用意してください。Orchestuneディスパッチャーが送るエージェントへの指示は「標準開発ワークフローに従って実装してください」という一文のみで、その実体の定義は導入先リポジトリ側の責務です。ゼロから用意する場合は、下記2章の `orchestune setup --with-workflow-skill` で汎用テンプレートを配置できます。
+1. **(a) エージェント規律を定義したファイルまたは開発ワークフロースキルが存在すること**
+   `AGENTS.md` / `CLAUDE.md` やカスタム開発スキルなど、対象リポジトリでエージェントに遵守させたい開発ワークフロー（TDD、Issue起票、`orchestune claim`、`orchestune complete`、PR作成規約等）を明文化したファイルを用意してください。Orchestuneディスパッチャーが送るエージェントへの指示は「標準開発ワークフローに従って実装してください」という一文のみで、その実体の定義は導入先リポジトリ側の責務です。未導入の場合は、`orchestune skills install --target all --scope project` 実行時に汎用テンプレート `workflow-template` が自動で同時導入されます。既存の規律ファイル・開発スキルがある場合は上書きせず、不足している `orchestune complete` 等の手順マージが提案されます。
 2. **(b) 自動マージを任せられる厚さの品質ゲート（CI）が存在すること**
    Orchestuneの子タスクレベルには人間によるレビューゲートが存在しません。CIに加え、子レビュー証跡ゲートが既定の `required` モードで自動ゲートとして働き、親ブランチ更新前に各子のレビュー合格証跡（`verdict=pass`、マージ対象SHAとの一致）を検証します（詳細は[使い方 §4.5](usage.md#45-子レビュー証跡ゲート)および[Architecture & Design](architecture.md)を参照）。ただし、`child-review-gate = "off"` を明示すると証跡検証は省略され、ゲートが有効でもレビュー判断はLLMによるものです。機械的な正しさの担保はCIに依存するため、スモークテスト程度のCIだけでは、自動で統合されるコードの品質を十分に担保できません。
 3. **(c) `ci_command` を自リポジトリのCIエントリーポイントに設定すること**
@@ -139,15 +139,22 @@ orchestune skills install --target codex --scope project
 
 プロジェクトスコープのスキル（`.agents/skills/`、`.claude/skills/`、`.grok/skills/`）は、チーム全体で共有するためにGitへコミットできます。ローカルのトランザクション状態やロックファイルは `.orchestune-installer/` 配下で管理され、`.gitignore` に含めて除外します。
 
-#### `--with-workflow-skill`: 汎用ワークフロースキルのプロジェクトローカル配置
+#### 開発ワークフロースキル（`workflow-template`）の自動導入とマージ提案
 
-Python以外のリポジトリや、プロジェクト固有のエージェント規律をゼロから作成したい場合:
+`orchestune skills install --target all --scope project` は、対象プロジェクトの規律ドキュメント（`AGENTS.md` / `CLAUDE.md` / `.agents/AGENTS.md`）および既存カスタムスキル（`.agents/skills/*` / `.claude/skills/*` / `.grok/skills/*`）を検査し、状況に応じて次の通り動作します：
 
-```bash
-orchestune skills install --target all --scope project --with-workflow-skill
-```
+- **開発スキル・規律ドキュメントが未存在の場合**: 標準スキルに加えて `workflow-template` を自動で同時導入します（プレースホルダー `<CI_ENTRYPOINT>` 等はプロジェクト固有コマンドへ置換してください）。
+- **既存の開発スキル・規律ドキュメントが存在し `orchestune complete` が未記載の場合**: 既存ファイルを上書きせず、不足している `orchestune claim` / `orchestune complete` 手順のマージ提案（および `orchestune-readiness` スキルでの差分作成案内）を表示します。
+- **明示的なフラグ制御**:
+  ```bash
+  # 既存スキルがある場合でも標準スキルと workflow-template を両方配置する
+  orchestune skills install --target all --scope project --with-workflow-skill
 
-これにより、`workflow-template` がプロジェクトのスキルディレクトリへ実体コピーされます。規律ファイルはプロジェクト固有であるため、`workflow-template` をグローバル（`--scope user`）へ配置することはできません。
+  # 開発スキル未存在時でも workflow-template の自動導入をスキップする
+  orchestune skills install --target all --scope project --no-workflow-skill
+  ```
+
+規律ファイルはプロジェクト固有であるため、`--with-workflow-skill` / `--no-workflow-skill` をグローバル（`--scope user`）へ指定することはできません。
 
 ### スキルの管理と診断
 

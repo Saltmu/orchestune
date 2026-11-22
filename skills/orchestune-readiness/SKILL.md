@@ -38,19 +38,25 @@ Parse the JSON output:
 - **Exit code 2**: Configuration error, invalid TOML, or invalid arguments. Report the error with exit code 2 and stop. Never treat configuration errors as skipped or passed.
 - **`skipped: false`**: Read the `doctor` diagnostic report. Inspect any diagnostic entries with `warning` or `error` status (e.g. `dispatch.readiness.discipline`, `dispatch.readiness.ci_definition`, `dispatch.readiness.ci_command`).
 
-## Step 2: Semantic Review of Discipline Documents
+## Step 2: Semantic Review of Discipline Documents & Development Workflow Skills
 
-Inspect discipline files identified in the repository (`AGENTS.md`, `CLAUDE.md`, `.agents/AGENTS.md`, `CONTRIBUTING.md`):
+Inspect discipline files (`AGENTS.md`, `CLAUDE.md`, `.agents/AGENTS.md`, `CONTRIBUTING.md`) and project-local custom skills (`.agents/skills/*`, `.claude/skills/*`, `.grok/skills/*` outside Orchestune-bundled skills):
 
-1. **No discipline doc (no rules)**:
-   No discipline file exists, or the file is empty without rules.
-   *Remediation*: Recommend running `orchestune skills install --target all --scope project --with-workflow-skill` to install the workflow template, or creating `AGENTS.md` with standard instructions.
-2. **Referenced discipline doc (referenced rules)**:
-   The top-level file (e.g. `AGENTS.md`) delegates instructions to another file (e.g. `.agents/AGENTS.md`). Follow the reference, verify the target file exists, and inspect that substantive rules are defined.
-3. **Circular reference**:
+1. **No discipline doc and no development workflow skill**:
+   No discipline file or custom development workflow skill exists (and `workflow-template` is not installed).
+   *Remediation*: Propose installing `workflow-template` via `orchestune skills install --target all --scope project --with-workflow-skill`, replacing `<CI_ENTRYPOINT>`, `<TEST_COMMAND>`, `<PREFLIGHT_CHECK_COMMAND>`, and `<INSTALL_COMMAND>` placeholders with the repository's actual commands, and referencing it from `AGENTS.md` / `CLAUDE.md`. Apply after user approval.
+2. **Existing development workflow skill or discipline doc missing Orchestune procedures**:
+   The repository already defines its own workflow skill or discipline rules, but lacks mandatory Orchestune lifecycle commands (`orchestune claim` and especially `orchestune complete`). Warn that running `claim` without `complete` leaves tasks uncompleted and unintegrated.
+   *Remediation*: Do **not** overwrite existing rules. Present a concrete merge diff adding Orchestune's required steps (pre-claim footprint declaration, `orchestune claim <issue> --apply` worktree isolation & retention, no direct GitHub label mutation, review loop / `review-reply.md`, and `orchestune complete --apply --issue <N> ...`) into the existing skill or discipline doc, and apply only after user confirmation.
+3. **Installed `workflow-template` with unreplaced placeholders**:
+   `workflow-template` is present, but `<...>` placeholders remain uncustomized.
+   *Remediation*: Inspect project configuration (`pyproject.toml`, `package.json`, `Makefile`, `.github/workflows/*.yml`, `scripts/`) and propose concrete command replacements.
+4. **Referenced discipline doc (referenced rules)**:
+   The top-level file (e.g. `AGENTS.md`) delegates instructions to another file (e.g. `.agents/AGENTS.md`). Follow the reference, verify the target file exists, and inspect that substantive rules (including `orchestune complete`) are defined.
+5. **Circular reference**:
    File A refers to File B, which refers back to File A without terminating rules.
    *Remediation*: Point out the loop and recommend consolidating rules into one canonical source.
-4. **Root-escaping reference**:
+6. **Root-escaping reference**:
    A reference points outside the repository root (e.g. `../external/rules.md`).
    *Remediation*: Prohibit root-escaping paths; copy required instructions into repository-local files.
 

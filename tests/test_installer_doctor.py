@@ -42,3 +42,34 @@ def test_doctor_gh_auth_no_token_leak():
     assert "gho_secret123456789" not in gh_auth.message
     assert "gho_secret123456789" not in str(gh_auth.details)
     assert "<REDACTED_TOKEN>" in str(gh_auth.details)
+
+
+def test_doctor_project_workflow_skill_states(tmp_path: Path):
+    root = PhysicalRoot(
+        path=tmp_path / ".agents" / "skills",
+        target_types=[TargetType.CODEX],
+        scope=ScopeType.PROJECT,
+    )
+
+    # 1. Missing
+    diags_missing = run_doctor_checks([root], offline=True, project_dir=tmp_path)
+    wf_missing = next(
+        d for d in diags_missing if d.check_name == "project_workflow_skill"
+    )
+    assert wf_missing.status == "warning"
+
+    # 2. Existing discipline without orchestune complete -> merge warning
+    (tmp_path / "AGENTS.md").write_text("# Rules\nRun pytest.\n", encoding="utf-8")
+    diags_merge = run_doctor_checks([root], offline=True, project_dir=tmp_path)
+    wf_merge = next(d for d in diags_merge if d.check_name == "project_workflow_skill")
+    assert wf_merge.status == "warning"
+    assert "orchestune complete" in wf_merge.message
+
+    # 3. Covered -> ok
+    (tmp_path / "AGENTS.md").write_text(
+        "# Rules\nRun `orchestune claim` and `orchestune complete`.\n",
+        encoding="utf-8",
+    )
+    diags_ok = run_doctor_checks([root], offline=True, project_dir=tmp_path)
+    wf_ok = next(d for d in diags_ok if d.check_name == "project_workflow_skill")
+    assert wf_ok.status == "ok"

@@ -4,12 +4,22 @@ import re
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
-from orchestune.installer.contracts import DiagnosticItem, ManifestError, PhysicalRoot
+from orchestune.installer.contracts import (
+    DiagnosticItem,
+    ManifestError,
+    PhysicalRoot,
+    ScopeType,
+)
 from orchestune.installer.state import (
     TRANSACTIONS_DIR,
     get_installer_dir,
     load_manifest,
+)
+from orchestune.installer.workflow_detection import (
+    detect_project_workflow,
+    format_merge_guidance_lines,
 )
 from orchestune.version import get_version
 
@@ -165,9 +175,54 @@ def _check_physical_root(root: PhysicalRoot) -> list[DiagnosticItem]:
     return items
 
 
+def _check_project_workflow(
+    roots: list[PhysicalRoot],
+    project_dir: Path | None,
+) -> DiagnosticItem | None:
+    project_roots = [r.path for r in roots if r.scope == ScopeType.PROJECT]
+    if project_dir is None and not project_roots:
+        return None
+    detection = detect_project_workflow(project_dir, extra_skills_roots=project_roots)
+    details: dict[str, object] = {
+        "status": detection.status,
+        "discipline_files": list(detection.discipline_files),
+        "custom_skills": list(detection.custom_skills),
+        "workflow_templates": list(detection.workflow_templates),
+        "missing_procedures": list(detection.missing_procedures),
+    }
+    if detection.status == "custom_complete":
+        status, msg = (
+            "ok",
+            "Project workflow discipline/skills cover orchestune complete",
+        )
+    elif detection.status == "workflow_template":
+        status = "ok"
+        msg = "Project workflow-template skill is installed"
+        if detection.template_has_placeholders:
+            msg += " (contains unreplaced <...> command placeholders)"
+    elif detection.status == "merge_recommended":
+        status = "warning"
+        msg = (
+            "Existing discipline/skill files found without 'orchestune complete'; "
+            "merge Orchestune completion procedures to avoid claim-only workflows"
+        )
+        details["merge_guidance"] = list(format_merge_guidance_lines(detection))
+    else:
+        status = "warning"
+        msg = (
+            "No project workflow skill or discipline document found; "
+            "run 'orchestune skills install --target all --scope project --with-workflow-skill'"
+        )
+    return DiagnosticItem(
+        check_name="project_workflow_skill", status=status, message=msg, details=details
+    )
+
+
 def run_doctor_checks(
     roots: list[PhysicalRoot],
     offline: bool = False,
+    *,
+    project_dir: Path | None = None,
 ) -> list[DiagnosticItem]:
     diagnostics: list[DiagnosticItem] = [_check_python_version()]
 
@@ -178,5 +233,9 @@ def run_doctor_checks(
 
     for root in roots:
         diagnostics.extend(_check_physical_root(root))
+
+    workflow_item = _check_project_workflow(roots, project_dir)
+    if workflow_item is not None:
+        diagnostics.append(workflow_item)
 
     return diagnostics
