@@ -89,7 +89,7 @@ _ACCEPTANCE_FALLBACK_HEADINGS = frozenset(
     }
 )
 _FOOTPRINT_HEADING = frozenset({"footprint"})
-_FENCE = re.compile(r"```.*?```", re.DOTALL)
+_FENCE = re.compile(r"(```|~~~).*?\1", re.DOTALL)
 _CHECKLIST_LINE = re.compile(r"^\s*[-*]\s+\[[ xX]\]\s+.+$", re.MULTILINE)
 
 

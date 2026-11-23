@@ -169,7 +169,8 @@ def test_fallback_headings_fill_acceptance() -> None:
 def test_checklist_ignores_fences_and_footprint_and_empty_stays_empty() -> None:
     checklist, _parent = _acceptance(
         "## 目的\n目的だけ\n\n- [ ] 最初の条件\n- [x] 次の条件\n\n"
-        "```\n- [ ] フェンス内は無視\n```\n" + _FOOTPRINT
+        "```\n- [ ] フェンス内は無視\n```\n"
+        "~~~\n- [ ] チルダ内は無視\n~~~\n" + _FOOTPRINT
     )
     empty, _parent = _acceptance("## 目的\n目的だけ\n" + _FOOTPRINT)
 
