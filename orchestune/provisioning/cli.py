@@ -337,7 +337,8 @@ def _print_result_rich(result: ProvisionResult, output: CliOutput) -> None:
 
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="orchestune provision: decomposition_plan.mdからIssueを起票する"
+        prog="orchestune provision",
+        description="Create GitHub Issues from decomposition_plan.md.",
     )
     parser.add_argument("--plan", default="decomposition_plan.md")
     parser.add_argument("--template", default=".github/issue_template.md")

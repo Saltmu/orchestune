@@ -448,31 +448,7 @@ def test_cli_no_args_exits(capsys):
 
     assert exc_info.value.code == 1
     captured = capsys.readouterr()
-    assert captured.out == (
-        "Usage: orchestune <command> [<args>]\n"
-        "Available commands:\n"
-        "  dag       DAG validation tool\n"
-        "  dispatch  Dispatcher/scheduler tool\n"
-        "  status    Monitor dispatched agent sessions (--watch for live view)\n"
-        "  setup     Setup skills symlinks for AI assistants\n"
-        "  bootstrap Verify gh auth and ensure required GitHub labels exist\n"
-        "  provision Provision GitHub Issues from decomposition_plan.md\n"
-        "  replan    Preview or replace an unstarted decomposition generation\n"
-        "  remediate Preview parent-scope remediation tasks\n"
-        "  claim     Claim a task issue (--apply to claim)\n"
-        "  complete  Complete a claimed task issue\n"
-        "  recover   Inspect or recover one stopped claim (preview by default)\n"
-        "  gc        Release handoff-ready task reservations (--apply to release)\n"
-        "  doctor    Diagnose dispatch single-executor setup (offline, read-only)\n"
-        "  blocked   Count blocked-human-review markers (read-only)\n"
-        "  review    Inspect, retry or override a Layer-2 semantic review\n"
-        "  reviewer  Resolve the interactive review bot (read-only)\n"
-        "  config    Create or edit orchestune.toml interactively\n"
-        "  skills    Install and manage Orchestune skills for AI assistants\n"
-        "  scratch   Create scratch session directories for task artifacts\n"
-        "  workflow  Check read-only advisory workflow gates\n"
-        "  context   Rebuild and export the local context index\n"
-    )
+    assert captured.out == _PLAIN_COMMAND_LIST
 
 
 def test_cli_no_args_renders_command_table_on_tty():
@@ -503,6 +479,17 @@ def test_cli_no_args_renders_command_table_on_tty():
     assert "DAG validation tool" in rendered
     assert "scratch" in rendered
     assert "╭" in rendered or "┌" in rendered
+    headings = (
+        "Getting started",
+        "Run and monitor",
+        "Recovery and maintenance",
+        "Agent and advanced commands",
+        "Deprecated",
+    )
+    positions = [rendered.index(heading) for heading in headings]
+    assert positions == sorted(positions)
+    assert rendered.index("trial") < rendered.index("dag")
+    assert "Deprecated: use 'orchestune skills install' instead." in rendered
 
 
 def test_cli_invalid_command_exits(capsys):
@@ -627,3 +614,98 @@ def test_cli_unknown_command_still_fails_after_help_flag_support(flag, capsys):
 
     assert exc_info.value.code == 1
     assert "Unknown command: invalid_cmd" in capsys.readouterr().out
+
+
+_PLAIN_COMMAND_LIST = """\
+Usage: orchestune <command> [<args>]
+Available commands:
+Getting started
+  trial      Local autonomous trial without GitHub setup
+  config     Create or edit orchestune.toml interactively
+  skills     Install and manage Orchestune skills for AI assistants
+  bootstrap  Verify gh auth and ensure required GitHub labels exist
+  doctor     Diagnose dispatch single-executor setup (offline, read-only)
+Run and monitor
+  dag        DAG validation tool
+  provision  Provision GitHub Issues from decomposition_plan.md
+  dispatch   Dispatcher/scheduler tool
+  status     Monitor dispatched agent sessions (--watch for live view)
+  blocked    Count blocked-human-review markers (read-only)
+  review     Inspect, retry or override a Layer-2 semantic review
+Recovery and maintenance
+  replan     Preview or replace an unstarted decomposition generation
+  remediate  Preview parent-scope remediation tasks
+  recover    Inspect or recover one stopped claim (preview by default)
+  gc         Release handoff-ready task reservations (--apply to release)
+Agent and advanced commands
+  claim      Claim a task issue (--apply to claim)
+  complete   Complete a claimed task issue
+  scratch    Create scratch session directories for task artifacts
+  workflow   Check read-only advisory workflow gates
+  context    Rebuild and export the local context index
+  reviewer   Resolve the interactive review bot (read-only)
+Deprecated
+  setup      Deprecated: use 'orchestune skills install' instead.
+"""
+
+
+def test_commands_list_each_registered_name_once_in_group_order():
+    from orchestune.cli import _COMMAND_SPECS, COMMANDS
+
+    names = [name for name, _description in COMMANDS]
+    assert names[0] == "trial"
+    assert names[-1] == "setup"
+    assert len(names) == len(set(names)) == len(_COMMAND_SPECS)
+    setup = dict(COMMANDS)["setup"]
+    assert setup == "Deprecated: use 'orchestune skills install' instead."
+
+
+def _help_output(argv: list[str], capsys: pytest.CaptureFixture[str]) -> str:
+    from orchestune.cli import main
+
+    with (
+        patch("sys.argv", ["orchestune", *argv]),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        main()
+    assert exc_info.value.code == 0
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    return captured.out
+
+
+def test_registered_command_help_names_the_command(capsys: pytest.CaptureFixture[str]):
+    from orchestune.cli import _COMMAND_SPECS
+
+    for spec in _COMMAND_SPECS:
+        output = _help_output([spec.name, "--help"], capsys)
+        assert f"usage: orchestune {spec.name}" in output
+        assert "#215" not in output
+        assert "#163" not in output
+
+
+@pytest.mark.parametrize("subcommand", ["init", "edit"])
+def test_config_subcommand_help_names_the_command(
+    subcommand: str, capsys: pytest.CaptureFixture[str]
+):
+    output = _help_output(["config", subcommand, "--help"], capsys)
+    assert f"usage: orchestune config {subcommand}" in output
+
+
+def test_dispatch_help_states_target_resolution_in_english(
+    capsys: pytest.CaptureFixture[str],
+):
+    output = " ".join(_help_output(["dispatch", "--help"], capsys).split())
+    assert "orchestune.toml" in output
+    assert "environment default" in output
+
+
+def test_translated_help_uses_english_phrases(capsys: pytest.CaptureFixture[str]):
+    bootstrap = _help_output(["bootstrap", "--help"], capsys)
+    assert "Check gh authentication" in bootstrap
+    status = _help_output(["status", "--help"], capsys)
+    assert "active_worktrees" in status
+    provision = _help_output(["provision", "--help"], capsys)
+    assert "decomposition_plan.md" in provision
+    config = _help_output(["config", "--help"], capsys)
+    assert "Create or edit orchestune.toml interactively." in config

@@ -26,7 +26,10 @@ from orchestune.infra.repository_config import (
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="orchestune DAG validation tool")
+    parser = argparse.ArgumentParser(
+        prog="orchestune dag",
+        description="orchestune DAG validation tool",
+    )
     parser.add_argument(
         "--plan",
         default="decomposition_plan.md",

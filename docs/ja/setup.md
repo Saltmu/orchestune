@@ -375,11 +375,15 @@ concurrency:
 ### 6.5 `orchestune doctor` による診断
 
 ```bash
+orchestune doctor
+orchestune doctor --online
 orchestune doctor --execution-mode actions --workflow .github/workflows/orchestune-dispatch.yml
 orchestune doctor --execution-mode actions --workflow .github/workflows/orchestune-dispatch.yml --json
 orchestune doctor --execution-mode local
 orchestune doctor --execution-mode local --online
 ```
+
+`--execution-mode` は省略できます。省略時は `GITHUB_ACTIONS` が完全一致で `true` のときだけ actions になり、未設定・`false`・`TRUE` などは local になります。明示した `local` または `actions` は環境変数より優先します。actions では `--workflow PATH` が必須です。local に `--workflow` を渡すと終了コード 2 です。`--workflow` からモードは推測せず、環境変数から workflow のパスも補いません。
 
 `--workflow` は複数回指定できます。診断は既定ではオフラインで、GitHub APIの呼出し・状態変更を行いません。`--online` を付けた場合のみ、GitHub 認証の確認（`dispatch.readiness.auth`）を行います。
 

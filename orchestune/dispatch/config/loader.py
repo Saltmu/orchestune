@@ -140,13 +140,14 @@ def _optional_text(value: object) -> str | None:
 
 
 _DISPATCH_TARGET_HELP = (
-    "#215/#163: エージェントの実ディスパッチ先。未指定時は実行環境から自動選択される"
-    "（GitHub Actions実行時は'cloud-routine'、ローカル実行時は'auto'）。"
-    "'auto'はPATH上のローカルCLIを検出し（claude優先、次点agy、codex、grok）、"
-    "見つかったCLIへディスパッチする。未検出時は警告を出しダミー起動にフォールバック。"
-    "'local'はダミー起動（no-op）。'cloud-routine'はClaude Codeクラウドルーチンへディスパッチ。"
-    "'codex-cloud'はCodex Cloud CLIへディスパッチ。"
-    "'claude-cli'/'agy-cli'/'codex-cli'/'grok-cli'はローカルCLIへディスパッチする。"
+    "Agent dispatch target. Resolved from the CLI flag, then orchestune.toml, "
+    "then the environment default (GitHub Actions uses 'cloud-routine'; "
+    "otherwise 'auto'). 'auto' detects a local CLI on PATH (claude, then agy, "
+    "codex, grok) and dispatches to it. If none is found, it warns and falls "
+    "back to a dummy launch. 'local' is a dummy launch (no-op). "
+    "'cloud-routine' dispatches to a Claude Code cloud routine. "
+    "'codex-cloud' dispatches to the Codex Cloud CLI. "
+    "'claude-cli', 'agy-cli', 'codex-cli', and 'grok-cli' dispatch to that local CLI."
 )
 
 
@@ -172,9 +173,12 @@ def _add_core_cli_arguments(parser: argparse.ArgumentParser) -> None:
         "--parent-issue",
         type=_positive_int,
         default=None,
-        help="開発対象をまとめている親の GitHub Issue 番号（未指定時は現在ブランチから推論）",
+        help=(
+            "Parent GitHub Issue that groups the work "
+            "(inferred from the current branch when omitted)."
+        ),
     )
-    add_apply_switch(parser, help="ラベル更新・worktree作成・エージェント起動を行う")
+    add_apply_switch(parser, help="Update labels, create worktrees, and launch agents.")
     parser.add_argument(
         "--dispatch-target",
         choices=[
@@ -194,7 +198,10 @@ def _add_core_cli_arguments(parser: argparse.ArgumentParser) -> None:
         "--max-concurrent",
         type=_non_negative_int,
         default=None,
-        help="同時に実行（起動）できるサブタスクエージェントの最大数（未指定時はTOMLまたは既定値2）",
+        help=(
+            "Maximum number of subtask agents to run at once "
+            "(TOML value, or 2 when omitted)."
+        ),
     )
 
 
@@ -203,37 +210,49 @@ def _add_execution_cli_arguments(parser: argparse.ArgumentParser) -> None:
         "--profile",
         type=str,
         default=None,
-        help="この実行全体で使用するモデル・推論強度のプロファイル（タスク指定より優先）",
+        help=(
+            "Model and reasoning profile for this whole run "
+            "(overrides the task setting)."
+        ),
     )
     parser.add_argument(
         "--child-review-gate",
         choices=["required", "off"],
         default=None,
-        help="子タスクのレビュー合格証跡（verdict=pass, SHA一致）を検証するゲート（既定: required）。offで検証をスキップ。",
+        help=(
+            "Gate that checks a child task's passing review evidence "
+            "(verdict=pass and matching SHA). Default: required. off skips the check."
+        ),
     )
     parser.add_argument(
         "--semantic-review-mode",
         choices=["required", "advisory", "off"],
         default=None,
-        help="統合PRの第2層セマンティックレビュー（既定: required）。",
+        help="Layer-2 semantic review of the integration PR (default: required).",
     )
     parser.add_argument(
         "--final-acceptance-review",
         choices=["advisory", "off"],
         default=None,
-        help="最終統合PRで受け入れ条件付きレビューを依頼（既定: advisory）。",
+        help=(
+            "Request an acceptance-criteria review on the final integration PR "
+            "(default: advisory)."
+        ),
     )
     parser.add_argument(
         "--force-integration-review",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="単一タスクFast-Pathでも統合PRレビューを強制する。",
+        help="Force an integration PR review even on the single-task fast path.",
     )
     parser.add_argument(
         "--allow-unsafe-agent-execution",
         action="store_true",
         default=False,
-        help="ローカルCLI（claude/agy/codex/grok）に対する承認・サンドボックスのバイパス（完全権限実行）を明示的に許可します。",
+        help=(
+            "Explicitly allow approval and sandbox bypass (full permissions) "
+            "for local CLIs (claude, agy, codex, grok)."
+        ),
     )
 
 
@@ -244,8 +263,11 @@ def _add_cli_arguments(parser: argparse.ArgumentParser) -> None:
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="スケジューラ駆動ディスパッチャー: 1サイクル分の選出・dispatchを実行する"
-        "（既定はプレビュー。適用には --apply を指定）"
+        prog="orchestune dispatch",
+        description=(
+            "Scheduler-driven dispatcher: select and dispatch one cycle "
+            "(preview by default; pass --apply to apply)."
+        ),
     )
     _add_cli_arguments(parser)
     return parser
@@ -577,6 +599,15 @@ def _assemble_dispatcher_config(
     return DispatcherConfig(**typed, forge=forge)
 
 
+def _dispatch_cli_args(
+    cli_args: list[str] | None, parsed_args: DispatchCliArgs | None
+) -> DispatchCliArgs:
+    """Use a completed parse when the caller already has one."""
+    if parsed_args is None:
+        return cast(DispatchCliArgs, build_arg_parser().parse_args(cli_args))
+    return parsed_args
+
+
 def load_and_resolve_config(
     cli_args: list[str] | None = None,
     cwd: Path | None = None,
@@ -586,10 +617,10 @@ def load_and_resolve_config(
     build_target_fn: Callable[[TargetBuildConfig], object] | None = None,
     resolve_paths_fn: Callable[[PathOverrides, Path | None], tuple[Path, Path]]
     | None = None,
+    parsed_args: DispatchCliArgs | None = None,
 ) -> DispatcherConfig:
     """End-to-end config resolution: CLI parsing -> TOML validation -> DispatcherConfig."""
-    parser = build_arg_parser()
-    args = cast(DispatchCliArgs, parser.parse_args(cli_args))
+    args = _dispatch_cli_args(cli_args, parsed_args)
     target_cwd = cwd or Path.cwd()
     primary_root, checkout_root = claim_workspace.resolve_checkout_roots(target_cwd)
 

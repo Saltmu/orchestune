@@ -115,10 +115,10 @@ def test_json_output(repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
 @pytest.mark.parametrize(
     "argv",
     [
-        [],
         ["--execution-mode", "actions"],
         ["--execution-mode", "local", "--workflow", "w.yml"],
         ["--execution-mode", "local", "--offline"],
+        ["--execution-mode", "cloud"],
     ],
 )
 def test_argument_errors_exit_2(repo: Path, argv: list[str]) -> None:
@@ -144,6 +144,83 @@ def test_not_a_git_repository_exits_2(
     monkeypatch.setattr(doctor_cli, "resolve_repository_root", fail)
     assert doctor_cli.main(["--execution-mode", "local"]) == 2
     assert "not a git repository" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("env_value", "expected"),
+    [
+        (None, "local"),
+        ("false", "local"),
+        ("TRUE", "local"),
+        ("true", "actions"),
+    ],
+)
+def test_omitted_mode_follows_github_actions(
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    env_value: str | None,
+    expected: str,
+) -> None:
+    if env_value is None:
+        monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    else:
+        monkeypatch.setenv("GITHUB_ACTIONS", env_value)
+    if expected == "actions":
+        _workflow(repo)
+        argv = ["--workflow", ".github/workflows/w.yml", "--json"]
+    else:
+        argv = ["--json"]
+    assert doctor_cli.main(argv) == (1 if expected == "actions" else 0)
+    assert json.loads(capsys.readouterr().out)["mode"] == expected
+
+
+def test_actions_default_without_workflow_exits_2(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    with pytest.raises(SystemExit) as exc:
+        doctor_cli.main([])
+    assert exc.value.code == 2
+    assert "--workflow" in capsys.readouterr().err
+
+
+def test_explicit_mode_overrides_environment(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    assert doctor_cli.main(["--execution-mode", "local", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["mode"] == "local"
+    monkeypatch.setenv("GITHUB_ACTIONS", "false")
+    _workflow(repo)
+    argv = [
+        "--execution-mode",
+        "actions",
+        "--workflow",
+        ".github/workflows/w.yml",
+        "--json",
+    ]
+    assert doctor_cli.main(argv) == 1
+    assert json.loads(capsys.readouterr().out)["mode"] == "actions"
+
+
+def test_local_default_rejects_workflow(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    with pytest.raises(SystemExit) as exc:
+        doctor_cli.main(["--workflow", "w.yml"])
+    assert exc.value.code == 2
+    assert "--workflow" in capsys.readouterr().err
+
+
+def test_help_explains_default_mode(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exc:
+        doctor_cli.main(["--help"])
+    assert exc.value.code == 0
+    output = capsys.readouterr().out
+    assert "GITHUB_ACTIONS=true" in output
+    assert "--workflow PATH" in output
 
 
 def test_help_has_no_offline_flag(capsys: pytest.CaptureFixture[str]) -> None:

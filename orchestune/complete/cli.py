@@ -22,7 +22,10 @@ from orchestune.infra.cli_output import CliOutput, make_output
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Complete an Orchestune task")
+    parser = argparse.ArgumentParser(
+        prog="orchestune complete",
+        description="Complete an Orchestune task",
+    )
     parser.add_argument("--issue", required=True, type=int)
     parser.add_argument("--pr", type=int)
     parser.add_argument(

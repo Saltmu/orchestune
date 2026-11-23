@@ -580,3 +580,99 @@ def test_tty_progress_restores_cursor_on_failure(tmp_path, failure, message):
     assert message in text
     assert text.count(HIDE_CURSOR) == text.count(SHOW_CURSOR) >= 1
     assert text.rfind(SHOW_CURSOR) > text.rfind(HIDE_CURSOR)
+
+
+def _block_dispatch_side_effects(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
+    from orchestune.dispatch import dispatcher as dispatcher_module
+
+    blocked = {
+        "new_run_id": Mock(),
+        "select_progress_sink": Mock(),
+        "load_and_resolve_config": Mock(),
+        "reserve_report": Mock(),
+    }
+    for name, double in blocked.items():
+        monkeypatch.setattr(dispatcher_module, name, double)
+    return blocked
+
+
+def _assert_dispatch_parse_has_no_side_effects(
+    argv: list[str], monkeypatch: pytest.MonkeyPatch
+) -> int | str | None:
+    from orchestune.dispatch.dispatcher import main
+
+    blocked = _block_dispatch_side_effects(monkeypatch)
+    with pytest.raises(SystemExit) as exc:
+        main(argv)
+    assert all(double.call_count == 0 for double in blocked.values())
+    return exc.value.code
+
+
+@pytest.mark.parametrize("flag", ["--help", "-h"])
+def test_direct_dispatch_help_skips_progress(flag, capsys, monkeypatch):
+    assert _assert_dispatch_parse_has_no_side_effects([flag], monkeypatch) == 0
+    captured = capsys.readouterr()
+    assert "usage: orchestune dispatch" in captured.out
+    assert captured.err == ""
+
+
+def test_direct_dispatch_syntax_error_skips_progress(capsys, monkeypatch):
+    code = _assert_dispatch_parse_has_no_side_effects(
+        ["--not-a-real-flag"], monkeypatch
+    )
+    assert code == 2
+    captured = capsys.readouterr()
+    assert captured.err != ""
+    assert "usage: orchestune dispatch" not in captured.out
+
+
+def test_root_dispatch_help_skips_progress(capsys, monkeypatch):
+    from orchestune.cli import main as root_main
+
+    blocked = _block_dispatch_side_effects(monkeypatch)
+    monkeypatch.setattr("sys.argv", ["orchestune", "dispatch", "--help"])
+    with pytest.raises(SystemExit) as exc:
+        root_main()
+    assert exc.value.code == 0
+    assert all(double.call_count == 0 for double in blocked.values())
+    captured = capsys.readouterr()
+    assert "usage: orchestune dispatch" in captured.out
+    assert captured.err == ""
+
+
+def test_dispatch_passes_parsed_args_once(tmp_path, monkeypatch):
+    import argparse
+
+    from orchestune.dispatch import dispatcher as dispatcher_module
+    from orchestune.dispatch.dispatcher import main
+
+    calls: list[list[str] | None] = []
+    original = argparse.ArgumentParser.parse_args
+
+    def spy(self, args=None, namespace=None):
+        if getattr(self, "prog", "") == "orchestune dispatch":
+            calls.append(args)
+        return original(self, args, namespace)
+
+    seen: dict[str, object] = {}
+
+    def wrapper(*args, **kwargs):
+        seen["args"] = args
+        seen["kwargs"] = kwargs
+        return config(tmp_path)
+
+    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", spy)
+    monkeypatch.setattr(dispatcher_module, "load_and_resolve_config", wrapper)
+    monkeypatch.setattr(
+        dispatcher_module, "run_dispatch_cycle", lambda _config: _report()
+    )
+    monkeypatch.setattr(
+        dispatcher_module, "run_pre_integration_cycle", lambda _config: _report()
+    )
+    assert main(["--parent-issue", "7"]) == 0
+    assert calls == [["--parent-issue", "7"]]
+    assert seen["args"] == ()
+    kwargs = seen["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["parsed_args"].parent_issue == 7
+    assert "cli_args" not in kwargs

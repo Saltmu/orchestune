@@ -24,7 +24,8 @@ EXIT_CONFLICT = 6
 
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Preview or apply a safe replacement of unstarted Issue generations."
+        prog="orchestune replan",
+        description="Preview or apply a safe replacement of unstarted Issue generations.",
     )
     parser.add_argument("--plan", default="decomposition_plan.md")
     parser.add_argument("--parent-issue", type=int)
