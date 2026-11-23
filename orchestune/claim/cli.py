@@ -23,7 +23,10 @@ from orchestune.infra.cli_output import CliOutput, make_output
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Claim an Orchestune task issue.")
+    parser = argparse.ArgumentParser(
+        prog="orchestune claim",
+        description="Claim an Orchestune task issue.",
+    )
     parser.add_argument("issue_number", type=int, help="GitHub Issue number to claim")
     add_apply_switch(
         parser, help="claim the task and update Git, GitHub, and local state"

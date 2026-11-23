@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 from orchestune.dispatch.doctor.check import (
@@ -18,6 +20,7 @@ from orchestune.dispatch.doctor.models import (
     OWNERSHIP_NOTICE,
     Diagnostic,
     DoctorReport,
+    ExecutionMode,
 )
 from orchestune.infra.cli_output import CliOutput, Level, label_token, make_output
 
@@ -41,7 +44,15 @@ def build_parser() -> argparse.ArgumentParser:
         prog="orchestune doctor",
         description="Diagnose dispatch single-executor setup (offline, read-only).",
     )
-    parser.add_argument("--execution-mode", choices=("local", "actions"), required=True)
+    parser.add_argument(
+        "--execution-mode",
+        choices=("local", "actions"),
+        help=(
+            "Diagnose as local or actions. actions requires --workflow PATH. "
+            "When omitted, GITHUB_ACTIONS=true selects actions and any other "
+            "value selects local. An explicit value wins. local rejects --workflow."
+        ),
+    )
     parser.add_argument(
         "--workflow",
         action="append",
@@ -113,12 +124,26 @@ def render_report(out: CliOutput, report: DoctorReport) -> None:
     out.emit(out.text_block(OWNERSHIP_NOTICE))
 
 
+def resolve_execution_mode(
+    explicit: str | None, environ: Mapping[str, str]
+) -> ExecutionMode:
+    """Prefer an explicit mode. Otherwise only GITHUB_ACTIONS=true selects actions."""
+    if explicit == "local":
+        return "local"
+    if explicit == "actions":
+        return "actions"
+    if environ.get("GITHUB_ACTIONS") == "true":
+        return "actions"
+    return "local"
+
+
 def main(argv: list[str] | None = None, *, output: CliOutput | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.execution_mode == "actions" and not args.workflow:
+    mode = resolve_execution_mode(args.execution_mode, os.environ)
+    if mode == "actions" and not args.workflow:
         parser.error("--workflow is required with --execution-mode actions")
-    if args.execution_mode == "local" and args.workflow:
+    if mode == "local" and args.workflow:
         parser.error("--workflow is only valid with --execution-mode actions")
     try:
         cwd = Path.cwd()
@@ -131,7 +156,7 @@ def main(argv: list[str] | None = None, *, output: CliOutput | None = None) -> i
         return 2
     report = run_doctor(
         DoctorRequest(
-            args.execution_mode,
+            mode,
             repo_root,
             workflows,
             online=args.online,

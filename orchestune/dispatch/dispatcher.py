@@ -370,25 +370,29 @@ def _post_cycle_exit_code(
 
 
 def main(argv: list[str] | None = None, cwd: Path | None = None) -> int:
+    parser = _build_arg_parser()
+    parsed = parser.parse_args(argv)
     sink = select_progress_sink(new_run_id())
     try:
-        return _main_with_sink(argv, cwd, sink)
+        return _main_with_sink(cwd, sink, parser, parsed)
     finally:
         sink.close()
 
 
 def _main_with_sink(
-    argv: list[str] | None, cwd: Path | None, sink: DispatchProgressSink
+    cwd: Path | None,
+    sink: DispatchProgressSink,
+    parser: argparse.ArgumentParser,
+    parsed: argparse.Namespace,
 ) -> int:
-    parser = _build_arg_parser()
     sink.emit("configuration", "started")
     try:
         config = load_and_resolve_config(
-            argv,
-            cwd,
+            cwd=cwd,
             load_config_fn=load_config_file,
             build_target_fn=build_dispatch_target,
             resolve_paths_fn=_resolve_dispatch_shared_paths,
+            parsed_args=parsed,
         )
     except (ConfigError, ValueError) as e:
         sink.emit("configuration", "failed")

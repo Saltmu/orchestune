@@ -103,7 +103,8 @@ def run_bootstrap(forge: RepoAdminForge | None = None, cwd: Path = Path(".")) ->
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
-        description="orchestune bootstrap: gh認証確認と必須ラベルの起票を行う"
+        prog="orchestune bootstrap",
+        description=("Check gh authentication and create the required GitHub labels."),
     )
     parser.parse_args(argv)
     sys.exit(run_bootstrap())

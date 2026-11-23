@@ -375,11 +375,15 @@ The legacy per-parent group (`orchestune-integrate-…-${{ inputs.parent_issue }
 ### 6.5 Diagnostics with `orchestune doctor`
 
 ```bash
+orchestune doctor
+orchestune doctor --online
 orchestune doctor --execution-mode actions --workflow .github/workflows/orchestune-dispatch.yml
 orchestune doctor --execution-mode actions --workflow .github/workflows/orchestune-dispatch.yml --json
 orchestune doctor --execution-mode local
 orchestune doctor --execution-mode local --online
 ```
+
+`--execution-mode` may be omitted. When it is omitted, actions is selected only when `GITHUB_ACTIONS` is exactly `true`; an unset value, `false`, `TRUE`, or any other value selects local. An explicit `local` or `actions` wins over the environment. actions requires `--workflow PATH`. Passing `--workflow` in local mode exits 2. The mode is not inferred from `--workflow`, and the workflow path is not taken from the environment.
 
 `--workflow` may be given multiple times. Diagnostics are offline by default: they make no GitHub API calls and change no state. When `--online` is passed, GitHub authentication (`dispatch.readiness.auth`) is also verified.
 

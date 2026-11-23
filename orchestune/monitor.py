@@ -60,7 +60,10 @@ def _non_negative_int(value: str) -> int:
 
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="ディスパッチ済みAIセッション（run_state.jsonのactive_worktrees）の状態を表示する"
+        prog="orchestune status",
+        description=(
+            "Show dispatched AI sessions (active_worktrees in run_state.json)."
+        ),
     )
     parser.add_argument("--run-state-path", type=Path, default=Path("run_state.json"))
     parser.add_argument("--log-dir", type=Path, default=Path("logs"))
@@ -68,31 +71,31 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--tail-lines",
         type=_non_negative_int,
         default=3,
-        help="タスクごとに表示するログ末尾の行数（既定3行、0を指定するとログ末尾を表示しない）",
+        help="Log lines to show per task (default 3; 0 hides the log tail).",
     )
     parser.add_argument(
         "--watch",
         "-w",
         action="store_true",
-        help="指定するとinterval秒おきに画面を自動更新し続ける（Ctrl+Cで終了）",
+        help="Refresh the screen every interval seconds until Ctrl+C.",
     )
     parser.add_argument(
         "--interval",
         type=_positive_int,
         default=3,
-        help="--watch指定時の自動更新間隔（秒、既定3秒、1以上の整数）",
+        help="Refresh interval in seconds when --watch is set (default 3, integer >= 1).",
     )
     parser.add_argument(
         "--parent-issue",
         type=_positive_int,
         default=None,
-        help="親統合の最後の観測を表示する親 Issue 番号",
+        help="Parent Issue number whose latest integration observation is shown.",
     )
     parser.add_argument(
         "--dispatch-report",
         type=Path,
         default=None,
-        help="dispatch が保存した結果 JSON。--parent-issue とセットで指定する",
+        help="Result JSON saved by dispatch. Pass it together with --parent-issue.",
     )
     return parser
 

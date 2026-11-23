@@ -14,7 +14,7 @@
 | 2 | **実行履歴の分解計画への還元**（WorkflowOps） | [#1842](https://github.com/Saltmu/orchestune/issues/1842) (`CLOSED`, PR #1881), [#1872](https://github.com/Saltmu/orchestune/issues/1872)–[#1874](https://github.com/Saltmu/orchestune/issues/1874), [#1882](https://github.com/Saltmu/orchestune/issues/1882) (PR #1885), [#1883](https://github.com/Saltmu/orchestune/issues/1883) | PoC＋再検証完了（本体未統合） | **再設計／追加観測**（共有索引統合は不採用） | 適格 6 課題すべてカード返却 0 件（空封筒）、`#1730` 品質 -2、`total_tokens` 欠測 6 | 契約変更（類似度・返却条件・トークン計測）を別 Issue で再設計するか見送るかを判断 |
 | 3 | **stale-read（read/write 競合）検出と下流再検証** | [#1230](https://github.com/Saltmu/orchestune/issues/1230) (`CLOSED`, PR #1821) → [#1825](https://github.com/Saltmu/orchestune/issues/1825) (`OPEN`) | ゲート枠組み実装済（既定 `advisory`）・入力接続は設計中 | 未評価（入力自動接続待ち） | 計画の宣言 read と executor の実ツール読取観測が `read-evidence-v1` へ未接続（提出者任せ） | `#1825` の設計承認・子 Issue 分解と実装（`declared_reads` + `adapter_observed` 接続） |
 | 4 | **開発手順ガイド・遵守制御**（`workflow next/check`） | [#1417](https://github.com/Saltmu/orchestune/issues/1417) (`CLOSED`, PR #1525) → [#1834](https://github.com/Saltmu/orchestune/issues/1834) (`OPEN`) | 読取専用 CLI 実装済・遵守比較は未実施 | 未測定 | `workflow-adherence-eval.md` の合意表が空欄のままで、Arm A/B 比較試行が未実行 | `#1834` の合意表（モデル・SHA・反復回数・承認者）を確定して測定を実行し、fail-closed 化を判断 |
-| 5 | **ローカル初回体験**（`orchestune trial`） | [#1730](https://github.com/Saltmu/orchestune/issues/1730) (`CLOSED`, PR #1749), [#1754](https://github.com/Saltmu/orchestune/issues/1754) | 初期実装＋Codex スモーク完了 | **継続（採用）** | `orchestune --help` 一覧から非表示、Claude Code 実走未確認（実施時アカウント制限）、`.serena/` 等未追跡ファイル注意 | ヘルプ一覧への露出可否と Claude Code 実走確認の要否を判断 |
+| 5 | **ローカル初回体験**（`orchestune trial`） | [#1730](https://github.com/Saltmu/orchestune/issues/1730) (`CLOSED`, PR #1749), [#1754](https://github.com/Saltmu/orchestune/issues/1754), [#1890](https://github.com/Saltmu/orchestune/issues/1890) | 初期実装＋Codex スモーク完了。ヘルプ一覧へ露出済み | **継続（採用）** | Claude Code 実走未確認（実施時アカウント制限）、`.serena/` 等未追跡ファイル注意 | Claude Code 実走確認の要否を判断 |
 | 6 | **コード解析ツール導入と効果観測**（Serena） | [#822](https://github.com/Saltmu/orchestune/issues/822) (`OPEN`) | 運用導入済・観測継続中 | 観測中（中間評価未了） | 環境により Serena 未使用・テキスト検索フォールバックが混在、コホート集計・5 PR 中間評価が未確定 | コホート基準の確定と 5 PR 中間評価（→ 20 PR 継続判断）の集計 |
 | 7 | **操作に応じた追加検証の選択**（AMV-Guard） | [#1843](https://github.com/Saltmu/orchestune/issues/1843) (`OPEN`) | 企画のみ（未着手） | — | 対象操作 1 種の選定、`#1230`/`#1825` との境界整理、VOI 較正可能性の棚卸し | `#1825` の進展も踏まえ、対象操作を 1 つに絞って設計・オフライン PoC を定義 |
 | 8 | **並列探索と必須成果統合の計画評価**（s³） | [#1844](https://github.com/Saltmu/orchestune/issues/1844) (`OPEN`) | 企画のみ（未着手） | — | 探索／必須統合／混合の分類定義、既存 DAG/契約情報から取れる構造指標の整理 | オフライン計画群での構造指標棚卸しと、`#1841`/`#1842`/`#660` との境界確定 |
@@ -133,17 +133,17 @@ flowchart TD
 - **関連 Issue / PR**: 親 EPIC [#1730](https://github.com/Saltmu/orchestune/issues/1730)（`CLOSED`, PR #1749）、実エージェントスモーク [#1754](https://github.com/Saltmu/orchestune/issues/1754)
 - **実装済み範囲**:
   - パッケージ: `orchestune/local_trial/`（`contracts.py`, `models.py`, `policy.py`, `prompts.py`, `planning.py`, `workspace.py`, `state.py`, `guidance.py`, `service.py`, `cli.py`）
-  - CLI: `orchestune trial start | status | resume | result`（GitHub 設定不要で計画 → 承認 → 実装 → CI → 別 worktree レビュー → 手動採用を完結。なお `orchestune/cli.py` の `COMMANDS` 表示一覧からは意図的に除外されており、`--help` には非表示だがサブコマンドとして実行可能）。
+  - CLI: `orchestune trial start | status | resume | result`（GitHub 設定不要で計画 → 承認 → 実装 → CI → 別 worktree レビュー → 手動採用を完結。`orchestune --help` の Getting started に表示する）。
   - 利用手順: `README.md`、[`../ja/setup.md`](../ja/setup.md)、[`../ja/usage.md`](../ja/usage.md) に記載済み。
 - **評価結果**（正本: [`local-trial-smoke.md`](local-trial-smoke.md)）:
   - **判定: 継続（採用）**
   - 実 Codex CLI（`codex-cli 0.167.0`）でエンドツーエンド完走（実処理約 71 秒・サイクル 1/3・レビュー 1/3）を実証済み。
 - **未接続ギャップ・残課題**:
-  - `orchestune --help` のコマンド一覧に未掲載（露出方針の最終判断が未整理）。
+  - `orchestune --help` の Getting started へ掲載済み（#1890）。
   - Claude Code 実 CLI でのスモーク実行は検証時のサブスクリプション制限により未確認。
   - 実行環境のグローバルプラグインが生成する未追跡ファイル（`.serena/` 等）があると `worktree_dirty` で安全停止するため、対象リポジトリ側の `.gitignore` が前提となる。
 - **次に決めること／次アクション**:
-  - `orchestune --help` への表示有無および Claude Code での実走確認を実施するかを判断する。
+  - Claude Code での実走確認を実施するかを判断する。
 
 ---
 

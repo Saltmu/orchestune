@@ -174,30 +174,33 @@ class TerminalPromptPort(PromptPort):
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="orchestune config",
-        description="orchestune.toml を対話形式で新規作成または編集します。",
+        description="Create or edit orchestune.toml interactively.",
     )
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
+    project_dir_help = (
+        "Project directory (nearest Git root, or the current directory when omitted)."
+    )
 
     init_parser = subparsers.add_parser(
         "init",
-        help="新しい orchestune.toml を対話形式で作成します。",
+        help="Create a new orchestune.toml interactively.",
     )
     init_parser.add_argument(
         "--project-dir",
         type=Path,
         default=None,
-        help="対象プロジェクトディレクトリ（未指定時は最寄りのGitルートまたはカレントディレクトリ）",
+        help=project_dir_help,
     )
 
     edit_parser = subparsers.add_parser(
         "edit",
-        help="既存の orchestune.toml を対話形式で編集します。",
+        help="Edit an existing orchestune.toml interactively.",
     )
     edit_parser.add_argument(
         "--project-dir",
         type=Path,
         default=None,
-        help="対象プロジェクトディレクトリ（未指定時は最寄りのGitルートまたはカレントディレクトリ）",
+        help=project_dir_help,
     )
 
     return parser

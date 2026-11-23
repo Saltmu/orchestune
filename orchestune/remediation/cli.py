@@ -64,7 +64,8 @@ def _preview_lines(preview: RemediationPreview, parent: int) -> list[str]:
 def main(argv: Sequence[str] | None = None, *, forge: Any = None) -> int:
     """Read the spec and remote state, and print a preview with its exit status."""
     parser = argparse.ArgumentParser(
-        description="Preview parent-scope remediation tasks without writing anything."
+        prog="orchestune remediate",
+        description="Preview parent-scope remediation tasks without writing anything.",
     )
     parser.add_argument("--spec", required=True)
     parser.add_argument("--parent-issue", type=int)

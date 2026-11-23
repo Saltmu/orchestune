@@ -16,7 +16,8 @@ from orchestune.recovery.service import recover_claim
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Inspect or recover one stopped local claim"
+        prog="orchestune recover",
+        description="Inspect or recover one stopped local claim",
     )
     parser.add_argument("--issue", type=int, required=True)
     parser.add_argument("--claim-id")
