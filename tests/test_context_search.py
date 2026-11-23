@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
@@ -11,6 +12,8 @@ from orchestune.context.budget import (
     DEFAULT_CLOUD_PROMPT_MAX_BYTES,
     DEFAULT_LOCAL_CONTEXT_MAX_BYTES,
     DEFAULT_TIER2_LIMIT,
+    DEFAULT_TIER2_MIN_SCORE,
+    DEFAULT_TIER2_MIN_SCORE_RATIO,
     fit_context_budget,
 )
 from orchestune.context.search import (
@@ -130,6 +133,40 @@ def test_limit_rejects_negative_values() -> None:
         search_artifacts((), "検索", limit=-1)
 
 
+def test_score_bounds_keep_the_stronger_hit() -> None:
+    query = "索引検索の予算を注入する"
+    strong = _doc(1, "c1", title=query * 4)
+    weak = _doc(2, "c2", title="引検")
+
+    assert [hit.issue_number for hit in search_artifacts((strong, weak), query)] == [
+        1,
+        2,
+    ]
+    floored = search_artifacts((strong, weak), query, min_score=1.0)
+    ratio = search_artifacts((strong, weak), query, min_score_ratio=0.5)
+
+    assert [hit.issue_number for hit in floored] == [1]
+    assert [hit.issue_number for hit in ratio] == [1]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [-0.1, True, float("nan"), float("inf")],
+)
+def test_min_score_rejects_invalid_values(value: object) -> None:
+    with pytest.raises(ValueError):
+        search_artifacts((), "検索", min_score=cast(float, value))
+
+
+@pytest.mark.parametrize(
+    "value",
+    [-0.1, 1.1, True, float("nan"), float("-inf")],
+)
+def test_min_score_ratio_rejects_invalid_values(value: object) -> None:
+    with pytest.raises(ValueError):
+        search_artifacts((), "検索", min_score_ratio=cast(float, value))
+
+
 def test_fts5_availability_does_not_change_rank() -> None:
     docs = (
         _doc(2, "c2", title="索引検索"),
@@ -147,7 +184,9 @@ def test_fts5_availability_does_not_change_rank() -> None:
 
 
 def test_budget_measures_utf8_bytes_without_a_tokenizer_cap() -> None:
-    assert DEFAULT_TIER2_LIMIT == 5
+    assert DEFAULT_TIER2_LIMIT == 3
+    assert DEFAULT_TIER2_MIN_SCORE == 1.0
+    assert DEFAULT_TIER2_MIN_SCORE_RATIO == 0.5
     assert DEFAULT_LOCAL_CONTEXT_MAX_BYTES == 32768
     assert DEFAULT_CLOUD_PROMPT_MAX_BYTES == 8192
     local = fit_context_budget("あ")

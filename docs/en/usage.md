@@ -1435,7 +1435,7 @@ The budget is UTF-8 bytes. It does not promise a tokenizer token cap.
 | Tier | Contents | When it does not fit |
 | :--- | :--- | :--- |
 | Tier 1 | Child purpose, acceptance, footprint, and symbols; parent purpose and acceptance; confirmed outcomes of direct dependencies | Search rank does not drop it. Read it from the source of truth, not through the index |
-| Tier 2 | BM25 hits from the local index, kept from the top while they fit the budget | Drop from the tail. Zero hits are allowed |
+| Tier 2 | BM25 hits from the local index, excluding the target issue, kept from the top while they fit the budget | Drop from the tail. Zero hits are allowed |
 | Tier 3 | Source URLs from the kept Tier 2 hits | Bodies and diffs are not injected |
 
 ```text
@@ -1443,8 +1443,14 @@ context_status: ready | over_budget | unavailable
 tier2_status: ready | reduced | unavailable | empty
 reduction_reason: tier1_exceeds_budget | tier2_tail_dropped | null
 Tier 2 missing: tier2_status=unavailable, hits=0, Tier 1 kept
-defaults: tier2_limit=5 local_bytes=32768 cloud_bytes=8192
+defaults: tier2_limit=3 local_bytes=32768 cloud_bytes=8192
+tier2: exclude target issue; min_score=1.0; min_score_ratio=0.5
+acceptance: standard heading, then fallback heading, then checklist outside fences and Footprint
 ```
+
+Acceptance uses a standard heading such as `受け入れ条件` first. When that is empty, it uses a fallback heading such as `期待される挙動` or `設計案・実装アプローチ`. When neither exists, it uses Markdown checklist lines outside code fences and `Footprint`. When none of those exist, acceptance stays empty and purpose is not copied.
+
+Tier 2 drops the target issue before search. Remaining hits below an absolute score of 1.0, and below 50% of the top score, are removed. Zero remaining hits use `tier2_status` `empty`, which is separate from a missing index.
 
 ### Degradation
 
