@@ -1277,16 +1277,18 @@ orchestune blocked --json
 ### CLI 構文 (Grammar)
 
 ```text
-orchestune trial start --request-file FILE [--repo PATH] [--agent claude|codex] [--ci-command TEXT]
+orchestune trial start [--request TEXT | --request-file FILE] [--repo PATH] [--agent claude|codex] [--ci-command TEXT]
 orchestune trial status [ID] [--repo PATH] [--json]
-orchestune trial resume ID [--repo PATH] [--approve-plan DIGEST] [--confirm-stopped ATTEMPT_ID] [--confirm-worktree DIGEST] [--request-file FILE] [--ci-command TEXT]
-orchestune trial result ID [--repo PATH] [--json]
-orchestune trial result ID --decision keep|adopted [--repo PATH] [--json]
+orchestune trial resume [ID] [--repo PATH] [--approve-plan DIGEST] [--confirm-stopped ATTEMPT_ID] [--confirm-worktree DIGEST] [--request-file FILE] [--ci-command TEXT]
+orchestune trial result [ID] [--repo PATH] [--json]
+orchestune trial result [ID] --decision keep|adopted [--repo PATH] [--json]
 ```
 
 - `--repo`: 対象リポジトリのパス（既定はカレントディレクトリ `cwd`）。
-- `--request-file`: タスク依頼文のファイルパス。UTF-8 strict、最大1MiB、空・読取不能・ディレクトリは終了コード2。※作業ツリーをクリーンに保つため、リポジトリ外（例: `../trial-request.txt`）または無視設定されたパスに配置してください。
-- `ID`: 試行を一意に識別する32桁のhex文字列（`--confirm-stopped` の ATTEMPT_ID も32桁hex）。
+- `--request`: 依頼文を直接指定します。`--request-file` との同時指定不可。空白のみ、UTF-8でない、UTF-8で1MiBを超える入力は、エージェント起動前に拒否されます。
+- `--request-file`: タスク依頼文のファイルパス。UTF-8 strict、最大1MiB、空・読取不能・ディレクトリは終了コード2。`--request` との同時指定不可。※作業ツリーをクリーンに保つため、リポジトリ外（例: `../trial-request.txt`）または無視設定されたパスに配置してください。
+- `--request` と `--request-file` の両方を省略した場合: 対話 TTY では依頼文を1行で入力するプロンプト（`依頼を入力してください (1行): `）が出ます。非対話実行では標準入力を読まずに終了コード2で失敗します。プロンプトでの EOF は終了コード2、`Ctrl+C` は終了コード130です。
+- `ID`: 試行を一意に識別する32桁のhex文字列（`--confirm-stopped` の ATTEMPT_ID も32桁hex）。省略すると `status`、`resume`、`result` は `--repo` のアクティブな試行を使います（ストアの `active_trial_id()` をちょうど1回だけ読みます）。アクティブな試行がない場合は `not_found`、ポインタ破損や未対応スキーマの場合はストアのエラーをそのまま返します。判断の記録でアクティブなポインタは消えるため、終了した試行の再表示は明示の ID で行います。
 - `DIGEST`: 計画または作業ツリーの承認・確認用64桁hexダイジェスト（SHA-256）。
 - `--ci-command`: shell構文を解釈せず直接引数リストへ展開するCI検証コマンド。Windows環境ではフォワードスラッシュとクォート（例: `"./scripts/local-ci.ps1"`）を案内します。
 - `--confirm-stopped`: 中断したプロセスの停止確認ID。他の変更フラグとは同時指定不可。
@@ -1307,10 +1309,12 @@ orchestune trial result ID --decision keep|adopted [--repo PATH] [--json]
 
 ### 対話・非対話フロー
 - **対話モード** (`sys.stdin.isatty() and sys.stdout.isatty()`):
+  `--request` と `--request-file` のどちらも指定がない場合、依頼文はプロンプト `依頼を入力してください (1行): ` から1行読み取ります。プロンプトでの EOF は終了コード2、`Ctrl+C` は終了コード130です。
   計画生成後、`phase=planned` かつ `reason=approval_required` の場合に確認プロンプトが表示されます:
   `この計画で開始しますか? (yes/no) [no]: `
   明示的に `yes` と入力すると直ちに計画ダイジェスト付きで実装・CI・レビューを開始します。`no` またはEOFの場合はplanned状態を保持して終了コード0で復帰します。
 - **非対話モード**:
+  `--request` と `--request-file` の両方を省略すると、標準入力を読まずに終了コード2で失敗します。
   入力を求めず計画を保存して終了コード0で復帰し、再開コマンドを表示します:
   `orchestune trial resume <ID> --repo <PATH> --approve-plan <DIGEST>`
 

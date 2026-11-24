@@ -556,15 +556,17 @@ Keep the request file outside the repository. The intended change is limited to 
 Run from the sample root. For Codex CLI:
 
 ```bash
-orchestune trial start --repo . --request-file ../trial-request.txt --agent codex --ci-command "python -m unittest test_calc.py"
+orchestune trial start --repo . --request "calc.py に subtract(a: int, b: int) -> int を追加して a - b を返し、test_calc.py に減算のテストを追加する。" --agent codex --ci-command "python -m unittest test_calc.py"
 ```
 
-For Claude Code, pass `--agent claude`. When both standard input and standard output are TTYs, the plan is followed by `この計画で開始しますか? (yes/no) [no]:`. Check the displayed `trial_id`, `goal`, `write_paths`, `ci_argv`, and `plan_digest`, then type `yes` when you agree. If the plan is updated, approve the latest displayed digest.
+For Claude Code, pass `--agent claude`. The request text can be given inline with `--request TEXT`, from a file with `--request-file FILE`, or — when both are omitted — typed as one line at an interactive prompt. The two options cannot be combined. A file must be strict UTF-8, non-empty, and up to 1 MiB; keep it outside the repository (for example `../trial-request.txt`) so the working directory stays clean. Blank, non-UTF-8, or over-limit input is rejected before any agent is launched. Without a TTY, omitting both options fails with exit code 2 instead of reading standard input.
+
+When both standard input and standard output are TTYs, the plan is followed by `この計画で開始しますか? (yes/no) [no]:`. Check the displayed `trial_id`, `goal`, `write_paths`, `ci_argv`, and `plan_digest`, then type `yes` when you agree. If the plan is updated, approve the latest displayed digest.
 
 Without a TTY, redirect that same start command's standard output outside the repository.
 
 ```bash
-orchestune trial start --repo . --request-file ../trial-request.txt --agent codex --ci-command "python -m unittest test_calc.py" > ../trial-start.txt
+orchestune trial start --repo . --request "calc.py に subtract(a: int, b: int) -> int を追加して a - b を返し、test_calc.py に減算のテストを追加する。" --agent codex --ci-command "python -m unittest test_calc.py" > ../trial-start.txt
 ```
 
 Confirm `effective_phase: planned` and `reason: approval_required`, then resume with the displayed id and digest.
@@ -573,6 +575,8 @@ Confirm `effective_phase: planned` and `reason: approval_required`, then resume 
 orchestune trial resume "$trial_id" --repo . --approve-plan "$digest"
 ```
 
+`resume`, `status`, and `result` accept the trial id as optional: omit it to use the active trial for `--repo`. Keep the explicit id for a fixed target — for example when a script must address one trial, or when re-displaying a closed trial (recording a decision clears the active pointer).
+
 ### Read the result and decide
 
 ```bash
@@ -580,7 +584,7 @@ orchestune trial status "$trial_id" --repo .
 orchestune trial result "$trial_id" --repo .
 ```
 
-Confirm `effective_phase: ready`, `approved_plan_digest`, CI and the separate-session review passing on the same `head_sha`, and the `diff:` from `result`. When the candidate is current, the text phase line is `effective_phase: ready (ローカルの採用候補)`. `orchestune trial result "$trial_id" --repo . --json` reports `ready_is_current`. You can also compare with `git diff "$base_sha" "$head_sha"` using the printed SHAs. Exit code 0 from `status` and `result` means the view was printed. Exit code 0 from `start` and `resume` means the trial is waiting for approval (`planned`) or is currently `ready`. Use the phase and the evidence, not the exit code, to decide adoption.
+Confirm `effective_phase: ready`, `approved_plan_digest`, CI and the separate-session review passing on the same `head_sha`, and the `diff:` from `result`. When the candidate is current, the text phase line is `effective_phase: ready (ローカルの採用候補)`. `orchestune trial result "$trial_id" --repo . --json` reports `ready_is_current`. You can also compare with `git diff "$base_sha" "$head_sha"` using the printed SHAs. Exit code 0 from `status` and `result` means the view was printed. Exit code 0 from `start` and `resume` means the trial is waiting for approval (`planned`) or is currently `ready`. Use the phase and the evidence, not the exit code, to decide adoption. The examples keep the explicit id because they address a fixed trial; when only one trial is active, `status` and `result` can omit it and use the active trial for `--repo`.
 
 When the trial stops, follow the displayed reason. Separate a checkout that was dirty before start from untracked files created by the plan or CI. Read unexpected files before you act on them.
 
@@ -590,12 +594,12 @@ To keep the result:
 orchestune trial result "$trial_id" --repo . --decision keep
 ```
 
-To adopt it, confirm the source checkout is clean and still on the starting branch at the starting base SHA. Fast-forward `trial/<ID>` for the real id, then record the decision.
+`--decision` also accepts an omitted id while the trial is active. To adopt it, confirm the source checkout is clean and still on the starting branch at the starting base SHA. Fast-forward `trial/<ID>` for the real id, then record the decision.
 
 ```bash
 git merge --ff-only "trial/$trial_id"
 orchestune trial result "$trial_id" --repo . --decision adopted
 ```
 
-Confirm `effective_phase: closed` and the decision you chose. The adoption record checks that the original branch contains the trial head.
+Confirm `effective_phase: closed` and the decision you chose. The adoption record checks that the original branch contains the trial head. Recording a decision clears the active pointer, so re-display a closed trial with its explicit id (`orchestune trial result "$trial_id" --repo .`).
 

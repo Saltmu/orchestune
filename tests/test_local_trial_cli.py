@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -21,6 +22,8 @@ from orchestune.local_trial.models import (
     AgentInfo,
     Budget,
     Checkpoint,
+    Decision,
+    DecisionValue,
     DisciplineStatus,
     Observation,
     RepositoryIdentity,
@@ -153,11 +156,11 @@ class TestArgumentParsingAndValidation:
         assert main(["result", "--help"]) == 0
 
     def test_unknown_subcommand_or_arg_returns_two(self):
+        # #1901: `start`/`resume`/`result` no longer fail on missing
+        # request/id alone; those cases are TTY/active-controlled and are
+        # covered by TestRequestInputAndActiveId.
         assert main(["unknown"]) == 2
         assert main(["start", "--unknown"]) == 2
-        assert main(["start"]) == 2  # missing --request-file
-        assert main(["resume"]) == 2  # missing id
-        assert main(["result"]) == 2  # missing id
 
     @pytest.mark.parametrize(
         "bad_id",
@@ -288,6 +291,246 @@ class TestArgumentParsingAndValidation:
             )
             == 2
         )
+
+
+class TestRequestInputAndActiveId:
+    """#1901: --request / interactive prompt / omitted trial id."""
+
+    def test_start_inline_request_uses_same_start_path(self):
+        state = _dummy_state("1" * 32, TrialPhase.PLANNED)
+        view = _dummy_view(state)
+        fake_deps = _make_fake_deps(state)
+        with (
+            patch.object(trial_cli, "make_dependencies", return_value=fake_deps),
+            patch.object(trial_cli, "start_trial", return_value=view) as mock_start,
+            patch("sys.stdin.isatty", return_value=False),
+        ):
+            assert main(["start", "--request", "  padded request text  "]) == 0
+        req = mock_start.call_args[0][0]
+        assert req.request_text == "  padded request text  "
+
+    def test_start_request_file_preserves_trailing_newline(self, tmp_path):
+        req_file = tmp_path / "req.txt"
+        req_file.write_text("task description\n")
+        state = _dummy_state("1" * 32, TrialPhase.PLANNED)
+        view = _dummy_view(state)
+        fake_deps = _make_fake_deps(state)
+        with (
+            patch.object(trial_cli, "make_dependencies", return_value=fake_deps),
+            patch.object(trial_cli, "start_trial", return_value=view) as mock_start,
+            patch("sys.stdin.isatty", return_value=False),
+        ):
+            assert main(["start", "--request-file", str(req_file)]) == 0
+        assert mock_start.call_args[0][0].request_text == "task description\n"
+
+    def test_start_request_and_request_file_mutually_exclusive(self, tmp_path):
+        req = tmp_path / "req.txt"
+        req.write_text("task description")
+        assert main(["start", "--request", "inline", "--request-file", str(req)]) == 2
+
+    def test_start_no_request_non_interactive_returns_two(self):
+        with (
+            patch.object(trial_cli, "make_dependencies") as mock_deps,
+            patch("sys.stdin.isatty", return_value=False),
+            patch("sys.stdout.isatty", return_value=False),
+        ):
+            assert main(["start"]) == 2
+        mock_deps.assert_not_called()
+
+    @pytest.mark.parametrize("blank", ["", "   ", "\n\t"])
+    def test_start_blank_inline_request_returns_two(self, blank):
+        with patch.object(trial_cli, "make_dependencies") as mock_deps:
+            assert main(["start", "--request", blank]) == 2
+        mock_deps.assert_not_called()
+
+    def test_start_over_limit_inline_request_returns_two(self):
+        with patch.object(trial_cli, "make_dependencies") as mock_deps:
+            assert main(["start", "--request", "a" * (1024 * 1024 + 1)]) == 2
+        mock_deps.assert_not_called()
+
+    def test_start_non_utf8_encodable_inline_request_returns_two(self):
+        with patch.object(trial_cli, "make_dependencies") as mock_deps:
+            assert main(["start", "--request", "\ud800"]) == 2
+        mock_deps.assert_not_called()
+
+    def test_start_interactive_prompt_reads_one_line(self):
+        state = _dummy_state("1" * 32, TrialPhase.PLANNED)
+        view = _dummy_view(state)
+        fake_deps = _make_fake_deps(state)
+        with (
+            patch.object(trial_cli, "make_dependencies", return_value=fake_deps),
+            patch.object(trial_cli, "start_trial", return_value=view) as mock_start,
+            patch("sys.stdin.isatty", return_value=True),
+            patch("sys.stdout.isatty", return_value=True),
+            patch(
+                "builtins.input", side_effect=["prompted request line", "no"]
+            ) as mock_input,
+        ):
+            assert main(["start"]) == 0
+        assert mock_start.call_args[0][0].request_text == "prompted request line"
+        # request prompt + plan approval prompt, exactly one line each
+        assert mock_input.call_count == 2
+
+    def test_start_interactive_prompt_eof_returns_two(self):
+        with (
+            patch.object(trial_cli, "make_dependencies") as mock_deps,
+            patch("sys.stdin.isatty", return_value=True),
+            patch("sys.stdout.isatty", return_value=True),
+            patch("builtins.input", side_effect=EOFError),
+        ):
+            assert main(["start"]) == 2
+        mock_deps.assert_not_called()
+
+    def test_start_interactive_prompt_ctrl_c_returns_130(self):
+        with (
+            patch.object(trial_cli, "make_dependencies") as mock_deps,
+            patch("sys.stdin.isatty", return_value=True),
+            patch("sys.stdout.isatty", return_value=True),
+            patch("builtins.input", side_effect=KeyboardInterrupt),
+        ):
+            assert main(["start"]) == 130
+        mock_deps.assert_not_called()
+
+    def test_resume_omitted_id_uses_active_once(self):
+        trial_id = "5" * 32
+        state = _dummy_state(trial_id)
+        view = _dummy_view(state)
+        fake_deps = _make_fake_deps(state)
+        with (
+            patch.object(trial_cli, "make_dependencies", return_value=fake_deps),
+            patch.object(trial_cli, "resume_trial", return_value=view) as mock_resume,
+            patch("sys.stdin.isatty", return_value=False),
+        ):
+            assert main(["resume"]) == 0
+        assert mock_resume.call_args[0][0].trial_id == trial_id
+        assert fake_deps.store.active_trial_id.call_count == 1
+
+    def test_resume_explicit_id_does_not_call_active(self):
+        trial_id = "5" * 32
+        state = _dummy_state(trial_id)
+        view = _dummy_view(state)
+        fake_deps = _make_fake_deps(state)
+        with (
+            patch.object(trial_cli, "make_dependencies", return_value=fake_deps),
+            patch.object(trial_cli, "resume_trial", return_value=view),
+            patch("sys.stdin.isatty", return_value=False),
+        ):
+            assert main(["resume", trial_id]) == 0
+        assert fake_deps.store.active_trial_id.call_count == 0
+
+    def test_resume_explicit_uppercase_id_lowercased(self):
+        state = _dummy_state("a" * 32)
+        view = _dummy_view(state)
+        fake_deps = _make_fake_deps(state)
+        with (
+            patch.object(trial_cli, "make_dependencies", return_value=fake_deps),
+            patch.object(trial_cli, "resume_trial", return_value=view) as mock_resume,
+            patch("sys.stdin.isatty", return_value=False),
+        ):
+            assert main(["resume", "A" * 32]) == 0
+        assert mock_resume.call_args[0][0].trial_id == "a" * 32
+
+    @pytest.mark.parametrize("command", [["resume"], ["result"], ["status"]])
+    def test_omitted_id_no_active_returns_two(self, command):
+        fake_deps = _make_fake_deps(None)
+        with patch.object(trial_cli, "make_dependencies", return_value=fake_deps):
+            assert main(command) == 2
+        assert fake_deps.store.active_trial_id.call_count == 1
+
+    @pytest.mark.parametrize("err_code", ["state_invalid", "schema_unsupported"])
+    def test_omitted_id_corrupt_pointer_returns_store_error(self, err_code):
+        fake_deps = _make_fake_deps(None)
+        fake_deps.store.active_trial_id.side_effect = TrialError(
+            err_code, "corrupt pointer"
+        )
+        with (
+            patch.object(trial_cli, "make_dependencies", return_value=fake_deps),
+            patch.object(trial_cli, "resume_trial") as mock_resume,
+        ):
+            assert main(["resume"]) == 2
+        mock_resume.assert_not_called()
+
+    def test_omitted_id_uses_repo_store(self, tmp_path):
+        trial_id = "7" * 32
+        state = _dummy_state(trial_id)
+        view = _dummy_view(state)
+        fake_deps = _make_fake_deps(state)
+        with (
+            patch.object(
+                trial_cli, "make_dependencies", return_value=fake_deps
+            ) as mock_deps,
+            patch.object(trial_cli, "resume_trial", return_value=view),
+            patch("sys.stdin.isatty", return_value=False),
+        ):
+            assert main(["resume", "--repo", str(tmp_path)]) == 0
+        mock_deps.assert_called_once_with(str(tmp_path))
+        assert fake_deps.store.active_trial_id.call_count == 1
+
+    def test_status_omitted_id_uses_active_once(self):
+        trial_id = "2" * 32
+        state = _dummy_state(trial_id, TrialPhase.NEEDS_ATTENTION)
+        view = _dummy_view(
+            state,
+            effective_phase=TrialPhase.NEEDS_ATTENTION,
+            reason="budget_exhausted",
+        )
+        fake_deps = _make_fake_deps(state)
+        with (
+            patch.object(trial_cli, "make_dependencies", return_value=fake_deps),
+            patch.object(trial_cli, "inspect_trial", return_value=view) as mock_inspect,
+        ):
+            assert main(["status"]) == 0
+        mock_inspect.assert_called_once_with(trial_id, fake_deps)
+        assert fake_deps.store.active_trial_id.call_count == 1
+
+    def test_result_omitted_id_inspect_uses_active_once(self, capsys):
+        trial_id = "6" * 32
+        state = _dummy_state(trial_id, TrialPhase.READY)
+        view = _dummy_view(state, effective_phase=TrialPhase.READY)
+        fake_deps = _make_fake_deps(state)
+        with (
+            patch.object(trial_cli, "make_dependencies", return_value=fake_deps),
+            patch.object(trial_cli, "inspect_trial", return_value=view) as mock_inspect,
+        ):
+            assert main(["result", "--json"]) == 0
+        mock_inspect.assert_called_once_with(trial_id, fake_deps)
+        assert fake_deps.store.active_trial_id.call_count == 1
+        data = json.loads(capsys.readouterr().out)
+        assert data["trial_id"] == trial_id
+
+    def test_result_omitted_id_decision_keep_uses_active_once(self):
+        trial_id = "6" * 32
+        state = _dummy_state(trial_id, TrialPhase.READY)
+        view = _dummy_view(state)
+        fake_deps = _make_fake_deps(state)
+        with (
+            patch.object(trial_cli, "make_dependencies", return_value=fake_deps),
+            patch.object(trial_cli, "record_decision", return_value=view) as mock_dec,
+        ):
+            assert main(["result", "--decision", "keep"]) == 0
+        mock_dec.assert_called_once_with(trial_id, "keep", fake_deps)
+        assert fake_deps.store.active_trial_id.call_count == 1
+
+    def test_result_explicit_id_redisplays_closed_trial(self, capsys):
+        trial_id = "8" * 32
+        state = _dummy_state(trial_id, TrialPhase.CLOSED)
+        state = replace(
+            state,
+            decision=Decision(
+                value=DecisionValue.KEEP, recorded_at="2026-01-01T00:00:00Z"
+            ),
+        )
+        view = _dummy_view(state, effective_phase=TrialPhase.CLOSED)
+        fake_deps = _make_fake_deps(state)
+        with (
+            patch.object(trial_cli, "make_dependencies", return_value=fake_deps),
+            patch.object(trial_cli, "inspect_trial", return_value=view) as mock_inspect,
+        ):
+            assert main(["result", trial_id]) == 0
+        mock_inspect.assert_called_once_with(trial_id, fake_deps)
+        out = capsys.readouterr().out
+        assert trial_id in out
+        assert "decision: keep" in out
 
 
 class TestAgentSelection:
