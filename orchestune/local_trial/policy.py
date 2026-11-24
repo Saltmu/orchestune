@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
-from orchestune.local_trial.contracts import TrialError, canonical_digest, plan_digest
+from orchestune.local_trial.contracts import (
+    TrialError,
+    canonical_digest,
+    plan_digest,
+    trial_error_with_dirty,
+)
 from orchestune.local_trial.models import (
     AttemptKind,
     AttemptResult,
     Checkpoint,
+    DirtyWorkspace,
     DisciplineStatus,
     Evidence,
     ImplementationPayload,
@@ -18,6 +24,7 @@ from orchestune.local_trial.models import (
     TrialPlan,
     TrialState,
     WorkspaceSnapshot,
+    WorktreeKind,
 )
 from orchestune.local_trial.workspace import workspace_digest
 
@@ -302,10 +309,18 @@ def verify_clean_plan(before: WorkspaceSnapshot, after: WorkspaceSnapshot) -> No
         raise TrialError("worktree_dirty", "Worktree modified during planning phase")
 
 
-def verify_clean_review(snap: WorkspaceSnapshot, head_sha: str) -> None:
+def verify_clean_review(snap: WorkspaceSnapshot, state: TrialState) -> None:
     """Verify review worktree is clean and matches trial head SHA."""
-    if snap.head_sha != head_sha or snap.changes:
-        raise TrialError("worktree_dirty", "Review worktree modified during review")
+    if snap.head_sha != state.head_sha or snap.changes:
+        raise trial_error_with_dirty(
+            "worktree_dirty",
+            "Review worktree modified during review",
+            DirtyWorkspace(
+                kind=WorktreeKind.REVIEW,
+                root=state.workspace.review_path,
+                changes=snap.changes,
+            ),
+        )
 
 
 def is_workspace_dirty_unapproved(state: TrialState, snap: WorkspaceSnapshot) -> bool:

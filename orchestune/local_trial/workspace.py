@@ -15,16 +15,19 @@ from orchestune.local_trial.contracts import (
     TrialError,
     TrialWorkspace,
     canonical_digest,
+    trial_error_with_dirty,
     workspace_digest,
 )
 from orchestune.local_trial.models import (
     Change,
+    DirtyWorkspace,
     GitIntent,
     GitOperation,
     RepositoryIdentity,
     TrialState,
     WorkspaceIdentity,
     WorkspaceSnapshot,
+    WorktreeKind,
 )
 
 git_runner: Callable[..., GitResult] = default_git_runner
@@ -118,8 +121,13 @@ class LocalTrialWorkspace(TrialWorkspace):
             cwd=repo_dir,
         )
         if status_res.stdout:
-            raise TrialError(
-                "source_dirty", f"{label} repository at {repo_dir} is dirty"
+            kind = WorktreeKind.PRIMARY if label == "Primary" else WorktreeKind.SOURCE
+            self._raise_dirty_status(
+                status_res.stdout,
+                code="source_dirty",
+                message=f"{label} repository at {repo_dir} is dirty",
+                kind=kind,
+                root=repo_dir,
             )
 
     def paths(self, repo: RepositoryIdentity, trial_id: str) -> WorkspaceIdentity:
@@ -271,8 +279,12 @@ class LocalTrialWorkspace(TrialWorkspace):
             cwd=str(impl_path),
         )
         if st.stdout:
-            raise TrialError(
-                "worktree_dirty", f"Existing worktree {impl_path} is dirty"
+            self._raise_dirty_status(
+                st.stdout,
+                code="worktree_dirty",
+                message=f"Existing worktree {impl_path} is dirty",
+                kind=WorktreeKind.IMPLEMENTATION,
+                root=str(impl_path),
             )
 
     def inspect(
@@ -354,6 +366,25 @@ class LocalTrialWorkspace(TrialWorkspace):
             changes.append(Change(status=norm_status, path=path, old_path=old_path))
             i += 1
         return changes, untracked
+
+    def _raise_dirty_status(
+        self,
+        raw: str,
+        *,
+        code: str,
+        message: str,
+        kind: WorktreeKind,
+        root: str,
+    ) -> None:
+        try:
+            changes, _untracked = self._parse_porcelain_changes(raw)
+        except Exception as exc:  # noqa: BLE001
+            raise TrialError(code, message) from exc
+        raise trial_error_with_dirty(
+            code,
+            message,
+            DirtyWorkspace(kind=kind, root=root, changes=tuple(changes)),
+        )
 
     def _compute_content_digest(self, dir_path: str, untracked_paths: list[str]) -> str:
         diff_res = self._run(
@@ -441,7 +472,15 @@ class LocalTrialWorkspace(TrialWorkspace):
                 and state.approved_worktree_digest
                 and state.approved_worktree_digest == current_ws_digest
             ):
-                raise TrialError("worktree_dirty", "Unapproved staged changes in index")
+                raise trial_error_with_dirty(
+                    "worktree_dirty",
+                    "Unapproved staged changes in index",
+                    DirtyWorkspace(
+                        kind=WorktreeKind.IMPLEMENTATION,
+                        root=impl,
+                        changes=snap.changes,
+                    ),
+                )
 
     def _stage_commit_paths(self, impl: str, target_paths: set[str]) -> None:
         paths_to_add: list[str] = []
@@ -610,7 +649,13 @@ class LocalTrialWorkspace(TrialWorkspace):
             cwd=str(review_path),
         ).stdout
         if st:
-            raise TrialError("worktree_dirty", "Review worktree is dirty")
+            self._raise_dirty_status(
+                st,
+                code="worktree_dirty",
+                message="Review worktree is dirty",
+                kind=WorktreeKind.REVIEW,
+                root=str(review_path),
+            )
         self._run(["switch", "--detach", state.head_sha], cwd=str(review_path))
 
     def diff(self, state: TrialState) -> str:

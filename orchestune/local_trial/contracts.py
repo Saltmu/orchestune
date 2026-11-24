@@ -19,10 +19,12 @@ from orchestune.local_trial.models import (
     AttemptKind,
     AttemptResult,
     Budget,
+    Change,
     Checkpoint,
     ControllerInfo,
     Decision,
     DecisionValue,
+    DirtyWorkspace,
     DisciplineStatus,
     Evidence,
     Finding,
@@ -47,6 +49,7 @@ from orchestune.local_trial.models import (
     TrialState,
     WorkspaceIdentity,
     WorkspaceSnapshot,
+    WorktreeKind,
 )
 
 KNOWN_TRIAL_ERROR_CODES: frozenset[str] = frozenset(
@@ -140,6 +143,95 @@ def plan_digest(plan: TrialPlan, request_digest_val: str, base_sha: str) -> str:
 def workspace_digest(snapshot: WorkspaceSnapshot) -> str:
     """Compute workspace digest from snapshot fields."""
     return canonical_digest(_encode_workspace_snapshot(snapshot))
+
+
+_DIRTY_LABELS = {
+    WorktreeKind.SOURCE: "開始元",
+    WorktreeKind.PRIMARY: "主",
+    WorktreeKind.IMPLEMENTATION: "実装",
+    WorktreeKind.REVIEW: "レビュー",
+}
+_DIRTY_ESCAPES = {"\\": "\\\\", " ": "\\ ", "\n": "\\n", "\r": "\\r", "\t": "\\t"}
+_DIRTY_LIMIT = 20
+_DIRTY_PATH_LIMIT = 200
+_DIRTY_STATUS_HINT = "この worktree で git status --short を確認してください。"
+_DIRTY_IGNORE_HINT = "未追跡の生成物だと確認できたパスだけ、手動で .gitignore またはローカル除外を検討できます。"
+_DIRTY_EMPTY = "観測した変更パスはありません。パスは断定しません。"
+
+
+def _escape_dirty_path(text: str) -> str:
+    if text == "":
+        return '""'
+    parts: list[str] = []
+    for char in text:
+        mapped = _DIRTY_ESCAPES.get(char)
+        if mapped is not None:
+            parts.append(mapped)
+        elif ord(char) < 32 or ord(char) == 127:
+            parts.append(f"\\x{ord(char):02x}")
+        else:
+            parts.append(char)
+    escaped = "".join(parts)
+    if len(escaped) <= _DIRTY_PATH_LIMIT:
+        return escaped
+    return escaped[: _DIRTY_PATH_LIMIT - 3] + "..."
+
+
+def _dirty_change_line(change: Change) -> str:
+    line = f"- {change.status} {_escape_dirty_path(change.path)}"
+    if change.old_path is not None:
+        line += f" <- {_escape_dirty_path(change.old_path)}"
+    return line
+
+
+def format_dirty_workspace(detail: DirtyWorkspace) -> str:
+    """Render bounded worktree diagnostics. Paths stay display text only."""
+    lines = [
+        f"{_DIRTY_LABELS[detail.kind]} worktree: {_escape_dirty_path(detail.root)}"
+    ]
+    if detail.changes:
+        shown = detail.changes[:_DIRTY_LIMIT]
+        lines.extend(_dirty_change_line(change) for change in shown)
+        omitted = len(detail.changes) - len(shown)
+        if omitted:
+            lines.append(f"ほか {omitted} 件は省略しました")
+        if any(change.status == "??" for change in detail.changes):
+            lines.append(_DIRTY_IGNORE_HINT)
+    else:
+        lines.append(_DIRTY_EMPTY)
+    lines.append(_DIRTY_STATUS_HINT)
+    return "\n".join(lines)
+
+
+def trial_error_with_dirty(
+    code: str, message: str, detail: DirtyWorkspace
+) -> TrialError:
+    """Keep the stop sentence and append shared dirty-workspace diagnostics."""
+    return TrialError(code, f"{message}\n{format_dirty_workspace(detail)}")
+
+
+def _implementation_dirty(state: TrialState, snap: WorkspaceSnapshot) -> DirtyWorkspace:
+    return DirtyWorkspace(
+        kind=WorktreeKind.IMPLEMENTATION,
+        root=state.workspace.implementation_path,
+        changes=snap.changes,
+    )
+
+
+def impl_dirty_view(
+    state: TrialState, snap: WorkspaceSnapshot, reason: str | None
+) -> DirtyWorkspace | None:
+    """Attach the implementation snapshot only to a worktree_dirty view."""
+    if reason != "worktree_dirty":
+        return None
+    return _implementation_dirty(state, snap)
+
+
+def impl_dirty(state: TrialState, snap: WorkspaceSnapshot, message: str) -> TrialError:
+    """Raise worktree_dirty with the implementation snapshot already inspected."""
+    return trial_error_with_dirty(
+        "worktree_dirty", message, _implementation_dirty(state, snap)
+    )
 
 
 # --- Strict Validation Helpers ---

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -96,6 +97,28 @@ def _make_state(
     )
 
 
+def _workspace_counting_status(counter: list[str]) -> LocalTrialWorkspace:
+    def runner(
+        args: list[str],
+        *,
+        cwd: str | Path | None,
+        check: bool = True,
+        env: dict[str, str] | None = None,
+        isolate_git_env: bool = True,
+    ) -> Any:
+        if args[:1] == ["status"]:
+            counter.append(str(cwd))
+        return run_git(
+            args,
+            cwd=cwd,
+            check=check,
+            env=env,
+            isolate_git_env=isolate_git_env,
+        )
+
+    return LocalTrialWorkspace(runner=runner)
+
+
 def test_protocol_satisfaction() -> None:
     ws = LocalTrialWorkspace()
     assert isinstance(ws, TrialWorkspace)
@@ -121,12 +144,23 @@ def test_discover_rejects_dirty_and_bare(tmp_path: Path) -> None:
     repo_path = tmp_path / "repo"
     _init_git_repo(repo_path)
 
-    # Dirty repo
+    # Dirty repo. Source and primary are the same directory, so status runs once.
     (repo_path / "dirty.txt").write_text("dirty", encoding="utf-8")
-    ws_impl = LocalTrialWorkspace()
+    status_cwds: list[str] = []
+    ws_impl = _workspace_counting_status(status_cwds)
     with pytest.raises(TrialError) as exc:
         ws_impl.discover(str(repo_path))
     assert exc.value.code == "source_dirty"
+    message = exc.value.message
+    resolved = str(repo_path.resolve())
+    assert message.startswith(f"Source repository at {resolved} is dirty")
+    assert "開始元 worktree:" in message
+    assert resolved in message
+    assert "- ?? dirty.txt" in message
+    assert "git status --short" in message
+    assert ".gitignore" in message
+    assert "--confirm-worktree" not in message
+    assert len(status_cwds) == 1
 
     # Bare repo
     bare_path = tmp_path / "bare.git"
@@ -134,6 +168,62 @@ def test_discover_rejects_dirty_and_bare(tmp_path: Path) -> None:
     with pytest.raises(TrialError) as exc:
         ws_impl.discover(str(bare_path))
     assert exc.value.code == "repository_invalid"
+
+
+def test_discover_distinguishes_source_and_primary(tmp_path: Path) -> None:
+    repo_path = tmp_path / "repo"
+    _init_git_repo(repo_path)
+    linked = tmp_path / "linked"
+    run_git(["worktree", "add", "-b", "linked", str(linked)], cwd=repo_path)
+
+    (repo_path / "primary.txt").write_text("p", encoding="utf-8")
+    status_cwds: list[str] = []
+    ws_impl = _workspace_counting_status(status_cwds)
+    with pytest.raises(TrialError) as exc:
+        ws_impl.discover(str(linked))
+    assert exc.value.code == "source_dirty"
+    primary = str(repo_path.resolve())
+    assert f"Primary repository at {primary} is dirty" in exc.value.message
+    assert "主 worktree:" in exc.value.message
+    assert "- ?? primary.txt" in exc.value.message
+    assert "開始元 worktree:" not in exc.value.message
+    assert len(status_cwds) == 2
+
+    (repo_path / "primary.txt").unlink()
+    (linked / "source file.txt").write_text("s", encoding="utf-8")
+    status_cwds.clear()
+    with pytest.raises(TrialError) as exc_source:
+        ws_impl.discover(str(linked))
+    assert exc_source.value.code == "source_dirty"
+    source = str(linked.resolve())
+    assert exc_source.value.message.startswith(
+        f"Source repository at {source} is dirty"
+    )
+    assert "開始元 worktree:" in exc_source.value.message
+    assert "- ?? source\\ file.txt" in exc_source.value.message
+    assert "--confirm-worktree" not in exc_source.value.message
+    assert len(status_cwds) == 1
+
+
+def test_discover_parse_failure_keeps_the_existing_stop(tmp_path: Path) -> None:
+    repo_path = tmp_path / "repo"
+    _init_git_repo(repo_path)
+    (repo_path / "dirty.txt").write_text("dirty", encoding="utf-8")
+    status_cwds: list[str] = []
+
+    class ParseBoom(LocalTrialWorkspace):
+        def __init__(self) -> None:
+            super().__init__(runner=_workspace_counting_status(status_cwds)._runner)
+
+        def _parse_porcelain_changes(self, raw_status: str):  # type: ignore[override]
+            raise RuntimeError("parse failed")
+
+    with pytest.raises(TrialError) as exc:
+        ParseBoom().discover(str(repo_path))
+    assert exc.value.code == "source_dirty"
+    assert exc.value.message.startswith("Source repository at ")
+    assert "開始元 worktree:" not in exc.value.message
+    assert len(status_cwds) == 1
 
 
 def test_ensure_storage_ignored_and_prepare(tmp_path: Path) -> None:
@@ -346,6 +436,13 @@ def test_prepare_existing_mismatch_and_dirty(tmp_path: Path) -> None:
     with pytest.raises(TrialError) as exc:
         ws_impl.prepare(repo_id, paths)
     assert exc.value.code == "worktree_dirty"
+    message = exc.value.message
+    assert message.startswith(f"Existing worktree {impl_path} is dirty")
+    assert "実装 worktree:" in message
+    assert "- ?? dirty.txt" in message
+    assert "git status --short" in message
+    assert ".gitignore" in message
+    assert "--confirm-worktree" not in message
 
 
 def test_commit_identity_and_path_validation(tmp_path: Path) -> None:
@@ -484,6 +581,46 @@ def test_review_worktree_reuse_and_dirty(tmp_path: Path) -> None:
     with pytest.raises(TrialError) as exc:
         ws_impl.prepare_review(state1)
     assert exc.value.code == "worktree_dirty"
+    message = exc.value.message
+    assert message.startswith("Review worktree is dirty")
+    assert "レビュー worktree:" in message
+    assert str(review_path) in message
+    assert "- ?? dirty.txt" in message
+    assert ".gitignore" in message
+    assert "--confirm-worktree" not in message
+
+
+def test_prepare_dirty_reports_rename_and_bounded_paths(tmp_path: Path) -> None:
+    repo_path = tmp_path / "repo"
+    _init_git_repo(repo_path)
+    ws_impl = LocalTrialWorkspace()
+    repo_id = ws_impl.discover(str(repo_path))
+    ws_impl.ensure_storage_ignored(repo_id)
+    trial_id = "b" * 32
+    paths = ws_impl.paths(repo_id, trial_id)
+    ws_impl.prepare(repo_id, paths)
+    impl_path = Path(paths.implementation_path)
+    run_git(["mv", "README.md", "renamed file.md"], cwd=impl_path)
+    with pytest.raises(TrialError) as renamed:
+        ws_impl.prepare(repo_id, paths)
+    renamed_message = renamed.value.message
+    assert "- R renamed\\ file.md <- README.md" in renamed_message
+    assert ".gitignore" not in renamed_message
+
+    run_git(["mv", "renamed file.md", "README.md"], cwd=impl_path)
+    long_name = "a" + ("p" * 209)
+    (impl_path / long_name).write_text("x", encoding="utf-8")
+    for index in range(20):
+        (impl_path / f"extra-{index:02d}.txt").write_text("x", encoding="utf-8")
+    with pytest.raises(TrialError) as bounded:
+        ws_impl.prepare(repo_id, paths)
+    message = bounded.value.message
+    assert "ほか 1 件は省略しました" in message
+    assert long_name not in message
+    assert ("a" + ("p" * 196) + "...") in message
+    shown = [line for line in message.splitlines() if line.startswith("- ")]
+    assert len(shown) == 20
+    assert message.count(".gitignore") == 1
 
 
 def test_storage_roots_invalid_repo(tmp_path: Path) -> None:
@@ -522,6 +659,12 @@ def test_stage_commit_approved_index_digest(tmp_path: Path) -> None:
     with pytest.raises(TrialError) as exc:
         ws_impl.stage_commit(state_no_approval)
     assert exc.value.code == "worktree_dirty"
+    staged = exc.value.message
+    assert staged.startswith("Unapproved staged changes in index")
+    assert "実装 worktree:" in staged
+    assert "- A foo.py" in staged
+    assert ".gitignore" not in staged
+    assert "git status --short" in staged
 
     # With matching approved_index_digest and approved_worktree_digest, stage_commit accepts
     snap = ws_impl.inspect(repo_id, paths)
