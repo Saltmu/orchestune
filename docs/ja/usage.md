@@ -1381,7 +1381,7 @@ orchestune context export --issue 7
 | 層 | 内容 | 収まらないとき |
 | :--- | :--- | :--- |
 | Tier 1 | 子 Issue の目的、受け入れ、footprint、symbols。親の目的と受け入れ。直接依存の確定した成果 | 検索順位では落とさない。索引を経由せず、正本から読む |
-| Tier 2 | ローカル索引に対する BM25。上位から、予算に入る件数だけ残す | 末尾から落とす。0 件でもよい |
+| Tier 2 | ローカル索引に対する BM25。対象 Issue 自身は除く。上位から、予算に入る件数だけ残す | 末尾から落とす。0 件でもよい |
 | Tier 3 | 残した Tier 2 の出典 URL | 本文と diff は注入しない |
 
 ```text
@@ -1389,8 +1389,14 @@ context_status: ready | over_budget | unavailable
 tier2_status: ready | reduced | unavailable | empty
 reduction_reason: tier1_exceeds_budget | tier2_tail_dropped | null
 Tier 2 missing: tier2_status=unavailable, hits=0, Tier 1 kept
-defaults: tier2_limit=5 local_bytes=32768 cloud_bytes=8192
+defaults: tier2_limit=3 local_bytes=32768 cloud_bytes=8192
+tier2: exclude target issue; min_score=1.0; min_score_ratio=0.5
+acceptance: standard heading, then fallback heading, then checklist outside fences and Footprint
 ```
+
+受け入れは、定型見出し（`受け入れ条件` など）を先に使う。それが空のときは、`期待される挙動` や `設計案・実装アプローチ` などの代替見出しを使う。どちらも無いときは、コードフェンスと `Footprint` を除いた Markdown チェックリスト行を使う。どれも無いときは空のままにし、目的は複製しない。
+
+Tier 2 は対象 Issue 自身を検索前に除く。残ったヒットは絶対スコア 1.0 未満、および最高スコアの 50% 未満を落とす。該当が 0 件のときは `tier2_status` が `empty` であり、索引の欠損とは別です。
 
 ### 縮退
 

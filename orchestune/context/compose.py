@@ -20,6 +20,8 @@ from orchestune.context.budget import (
     DEFAULT_CLOUD_PROMPT_MAX_BYTES,
     DEFAULT_LOCAL_CONTEXT_MAX_BYTES,
     DEFAULT_TIER2_LIMIT,
+    DEFAULT_TIER2_MIN_SCORE,
+    DEFAULT_TIER2_MIN_SCORE_RATIO,
     fit_context_budget,
 )
 from orchestune.context.contracts import (
@@ -73,6 +75,22 @@ _ACCEPTANCE = frozenset(
         "acceptance criteria",
     }
 )
+_ACCEPTANCE_FALLBACK_HEADINGS = frozenset(
+    {
+        "期待される挙動",
+        "期待される動作",
+        "expected behavior",
+        "完了条件",
+        "definition of done",
+        "設計案・実装アプローチ",
+        "実装アプローチ",
+        "変更内容",
+        "proposed changes",
+    }
+)
+_FOOTPRINT_HEADING = frozenset({"footprint"})
+_FENCE = re.compile(r"(```|~~~).*?\1", re.DOTALL)
+_CHECKLIST_LINE = re.compile(r"^\s*[-*]\s+\[[ xX]\]\s+.+$", re.MULTILINE)
 
 
 class _Unavailable(Exception):
@@ -100,6 +118,7 @@ def compose_launch_context(
     max_bytes: int = DEFAULT_LOCAL_CONTEXT_MAX_BYTES,
     repository: str | None = None,
     intro_bytes: int = 0,
+    tier2_min_score: float = DEFAULT_TIER2_MIN_SCORE,
 ) -> LaunchContext:
     """Return Tier 1 plus as many Tier 2 hits as ``max_bytes`` allows.
 
@@ -116,6 +135,7 @@ def compose_launch_context(
             max_bytes=max_bytes,
             repository=repository,
             intro_bytes=intro_bytes,
+            tier2_min_score=tier2_min_score,
         )
     except _Unavailable as exc:
         return _unavailable_context(max_bytes, exc.reason)
@@ -135,6 +155,7 @@ def compose_for_dispatch(
     tier2_limit: int = DEFAULT_TIER2_LIMIT,
     max_bytes: int = DEFAULT_LOCAL_CONTEXT_MAX_BYTES,
     repository: str | None = None,
+    tier2_min_score: float = DEFAULT_TIER2_MIN_SCORE,
 ) -> LaunchContext | None:
     """Return a usable context, or None when Tier 1 could not be fetched."""
     composed = compose_launch_context(
@@ -145,6 +166,7 @@ def compose_for_dispatch(
         tier2_limit=tier2_limit,
         max_bytes=max_bytes,
         repository=repository,
+        tier2_min_score=tier2_min_score,
     )
     if composed.context_status == CONTEXT_UNAVAILABLE:
         return None
@@ -262,6 +284,7 @@ def _compose_checked(
     max_bytes: int,
     repository: str | None,
     intro_bytes: int,
+    tier2_min_score: float,
 ) -> LaunchContext:
     forge_repo = _forge_repository(forge)
     if repository is not None and forge_repo is not None and forge_repo != repository:
@@ -278,7 +301,12 @@ def _compose_checked(
     tier1 = _tier1_from(forge, issue, parent, parent_number)
     repo = repository or forge_repo
     search_state, hits = _search_tier2(
-        issue, tier1, index_path, tier2_limit, repository=repo
+        issue,
+        tier1,
+        index_path,
+        tier2_limit,
+        repository=repo,
+        min_score=tier2_min_score,
     )
     return _fit(tier1, search_state, hits, max_bytes, intro_bytes=intro_bytes)
 
@@ -350,11 +378,11 @@ def _tier1_from(
     parent_body = parent.body if parent is not None else ""
     return Tier1Context(
         purpose=_heading_section(issue.body, _PURPOSE),
-        acceptance=_heading_section(issue.body, _ACCEPTANCE),
+        acceptance=_acceptance_section(issue.body),
         footprint=task.footprint,
         symbols=task.symbols,
         parent_purpose=_heading_section(parent_body, _PURPOSE),
-        parent_acceptance=_heading_section(parent_body, _ACCEPTANCE),
+        parent_acceptance=_acceptance_section(parent_body),
         dependencies=_resolve_dependencies(forge, issue, task, parent_number),
     )
 
@@ -412,6 +440,37 @@ def _ref_tuple(value: object) -> tuple[str, ...]:
         else:
             raise _Unavailable("depends_on contains invalid item")
     return tuple(refs)
+
+
+def _acceptance_section(body: str) -> str:
+    if not isinstance(body, str) or not body:
+        return ""
+    primary = _heading_section(body, _ACCEPTANCE)
+    if primary:
+        return primary
+    fallback = _heading_section(body, _ACCEPTANCE_FALLBACK_HEADINGS)
+    if fallback:
+        return fallback
+    return _checklist_lines(_body_without_fences_and_footprint(body))
+
+
+def _body_without_fences_and_footprint(body: str) -> str:
+    return _drop_heading_section(_FENCE.sub("", body), _FOOTPRINT_HEADING)
+
+
+def _drop_heading_section(body: str, names: frozenset[str]) -> str:
+    matches = list(_HEADING.finditer(body))
+    for index, match in enumerate(matches):
+        if not _heading_matches(_heading_keys(match.group(2)), names):
+            continue
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(body)
+        return body[: match.start()] + body[end:]
+    return body
+
+
+def _checklist_lines(body: str) -> str:
+    lines = (match.group(0).strip() for match in _CHECKLIST_LINE.finditer(body))
+    return "\n".join(lines)
 
 
 def _heading_section(body: str, names: frozenset[str]) -> str:
@@ -615,6 +674,7 @@ def _search_tier2(
     limit: int,
     *,
     repository: str | None,
+    min_score: float,
 ) -> tuple[str, tuple[Tier2Hit, ...]]:
     path = DEFAULT_INDEX_PATH if index_path is None else Path(index_path)
     try:
@@ -624,11 +684,28 @@ def _search_tier2(
         candidates = _filter_by_repository(view.artifacts, repository)
         if candidates is None:
             return TIER2_UNAVAILABLE, ()
-        found = search_artifacts(candidates, _query(issue, tier1), limit=limit)
+        found = search_artifacts(
+            _exclude_self_issue(candidates, issue.number),
+            _query(issue, tier1),
+            limit=limit,
+            min_score=min_score,
+            min_score_ratio=DEFAULT_TIER2_MIN_SCORE_RATIO,
+        )
         return TIER2_READY, tuple(_hit(record) for record in found)
     except Exception as exc:  # noqa: BLE001 - boundary: index search keeps Tier 1
         logger.warning("tier2 search unavailable: %s", type(exc).__name__)
         return TIER2_UNAVAILABLE, ()
+
+
+def _exclude_self_issue(
+    artifacts: tuple[Any, ...], issue_number: int
+) -> tuple[Any, ...]:
+    return tuple(
+        record
+        for record in artifacts
+        if getattr(getattr(record, "artifact", record), "issue_number", None)
+        != issue_number
+    )
 
 
 def _filter_by_repository(

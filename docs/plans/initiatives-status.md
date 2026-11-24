@@ -1,6 +1,6 @@
 # Orchestune 主要施策 ステータス一覧（初期実装・PoC・評価・次アクション）
 
-> **照合基準**: `origin/main` @ `355d6c65`（2026-11-22 JST）
+> **照合基準**: `origin/main` @ `97d0568c`（2026-11-24 JST）。軽量改善 3 点は [#1897](https://github.com/Saltmu/orchestune/issues/1897) で実装。
 >
 > 本ドキュメントは、初期実装・PoC・実測評価・後続設計が分散している **主要 8 施策** の現在地を 1 か所で俯瞰するためのハブである。各施策の詳細な仕様・契約・測定データ本体は、それぞれの正本ドキュメントおよび GitHub Issue を参照する。
 
@@ -10,7 +10,7 @@
 
 | # | 施策 | 主な Issue / PR | 現在ステージ | 評価判定 | 主な未接続・残課題 | 次に決めること／次アクション |
 | :-: | --- | --- | --- | --- | --- | --- |
-| 1 | **限定コンテキスト基盤・起動注入**（ScaleMAS） | [#1841](https://github.com/Saltmu/orchestune/issues/1841) (`CLOSED`, PR #1865), [#1868](https://github.com/Saltmu/orchestune/issues/1868) (PR #1870), [#1869](https://github.com/Saltmu/orchestune/issues/1869) (PR #1871) | 初期実装＋実測完了 | **継続（条件付き）**（Tier 1 `-39.3%`） | Tier 2 自己参照除外、見出し無し Issue の受入条件抽出、Tier 2 過剰探索の抑制（未起票） | 軽量改善 3 点の Issue 起票と Tier 2 上限・閾値調整 |
+| 1 | **限定コンテキスト基盤・起動注入**（ScaleMAS） | [#1841](https://github.com/Saltmu/orchestune/issues/1841) (`CLOSED`, PR #1865), [#1868](https://github.com/Saltmu/orchestune/issues/1868) (PR #1870), [#1869](https://github.com/Saltmu/orchestune/issues/1869) (PR #1871), [#1897](https://github.com/Saltmu/orchestune/issues/1897) | 初期実装＋実測完了。軽量改善 3 点は #1897 で実装 | **継続（条件付き）**（Tier 1 `-39.3%`） | 本番のトークンと抽出結果の追跡 | #1897 マージ後に自己除外・フォールバック・`tier2_limit=3` の実運用を見る |
 | 2 | **実行履歴の分解計画への還元**（WorkflowOps） | [#1842](https://github.com/Saltmu/orchestune/issues/1842) (`CLOSED`, PR #1881), [#1872](https://github.com/Saltmu/orchestune/issues/1872)–[#1874](https://github.com/Saltmu/orchestune/issues/1874), [#1882](https://github.com/Saltmu/orchestune/issues/1882) (PR #1885), [#1883](https://github.com/Saltmu/orchestune/issues/1883) | PoC＋再検証完了（本体未統合） | **再設計／追加観測**（共有索引統合は不採用） | 適格 6 課題すべてカード返却 0 件（空封筒）、`#1730` 品質 -2、`total_tokens` 欠測 6 | 契約変更（類似度・返却条件・トークン計測）を別 Issue で再設計するか見送るかを判断 |
 | 3 | **stale-read（read/write 競合）検出と下流再検証** | [#1230](https://github.com/Saltmu/orchestune/issues/1230) (`CLOSED`, PR #1821) → [#1825](https://github.com/Saltmu/orchestune/issues/1825) (`OPEN`) | ゲート枠組み実装済（既定 `advisory`）・入力接続は設計中 | 未評価（入力自動接続待ち） | 計画の宣言 read と executor の実ツール読取観測が `read-evidence-v1` へ未接続（提出者任せ） | `#1825` の設計承認・子 Issue 分解と実装（`declared_reads` + `adapter_observed` 接続） |
 | 4 | **開発手順ガイド・遵守制御**（`workflow next/check`） | [#1417](https://github.com/Saltmu/orchestune/issues/1417) (`CLOSED`, PR #1525) → [#1834](https://github.com/Saltmu/orchestune/issues/1834) (`OPEN`) | 読取専用 CLI 実装済・遵守比較は未実施 | 未測定 | `workflow-adherence-eval.md` の合意表が空欄のままで、Arm A/B 比較試行が未実行 | `#1834` の合意表（モデル・SHA・反復回数・承認者）を確定して測定を実行し、fail-closed 化を判断 |
@@ -63,7 +63,7 @@ flowchart TD
 ## 3. 各施策の詳細状況
 
 ### 3.1 限定コンテキスト基盤・起動注入（ScaleMAS 企画）
-- **関連 Issue / PR**: 親 EPIC [#1841](https://github.com/Saltmu/orchestune/issues/1841)（`CLOSED`, PR #1865）、子 `#1851`–`#1854`、前提修正 [#1868](https://github.com/Saltmu/orchestune/issues/1868)（PR #1870）、PoC 実測 [#1869](https://github.com/Saltmu/orchestune/issues/1869)（PR #1871）
+- **関連 Issue / PR**: 親 EPIC [#1841](https://github.com/Saltmu/orchestune/issues/1841)（`CLOSED`, PR #1865）、子 `#1851`–`#1854`、前提修正 [#1868](https://github.com/Saltmu/orchestune/issues/1868)（PR #1870）、PoC 実測 [#1869](https://github.com/Saltmu/orchestune/issues/1869)（PR #1871）、軽量改善 [#1897](https://github.com/Saltmu/orchestune/issues/1897)
 - **実装済み範囲**:
   - パッケージ: `orchestune/context/`（`contracts.py`, `extract.py`, `fetch.py`, `storage.py`, `search.py`, `budget.py`, `compose.py`, `cli.py`）
   - CLI: `orchestune context rebuild` / `orchestune context export`
@@ -71,12 +71,12 @@ flowchart TD
 - **評価結果**（正本: [`context-poc-eval.md`](context-poc-eval.md)）:
   - **判定: 継続（条件付き・Tier 1 主軸、Tier 2 は改善のうえ段階適用）**
   - Codex CLI 5 タスク × 3 条件（15 試行）で、計画品質は全試行で `baseline` 同等以上。`input_tokens` は `tier1_only` で **-39.3%**、`tier1_plus_tier2` で **-28.1%**。構成時間は 1.44–5.13 秒（基準 10 秒以下）。
-- **未接続ギャップ・残課題**（すべて Issue 未起票）:
-  1. `compose_launch_context` の Tier 2 検索で対象 `issue_number` 自身を自動除外していない（自己参照・時系列リーク対策が必要）。
-  2. Issue 本文に定型見出しが無い場合（`#1866` 型）に受入条件が空抽出となるため、フォールバック抽出が必要。
-  3. `tier1_plus_tier2` は `tier1_only` 比で `+18.4%` トークン増（`#1852` で無関係ヒットが追加探索を誘発）しており、Tier 2 の返却上限・スコア閾値調整が必要。
+- **#1897 で実装した軽量改善**:
+  1. Tier 2 検索の前に対象 `issue_number` 自身を除く。
+  2. 定型見出しが無い Issue は、代替見出し、次いでコードフェンスと `Footprint` を除いたチェックリストから受入条件を取る。
+  3. `DEFAULT_TIER2_LIMIT = 3`、`DEFAULT_TIER2_MIN_SCORE = 1.0`、`DEFAULT_TIER2_MIN_SCORE_RATIO = 0.5`。
 - **次に決めること／次アクション**:
-  - 上記軽量改善 3 点を 1 本のフォローアップ Issue として起票・実装するか決定する。
+  - #1897 マージ後に、自己除外・フォールバック・上限 3 の実運用トークンを見る。
 
 ---
 
@@ -187,7 +187,7 @@ flowchart TD
 
 | 優先検討テーマ | 性質 | 根拠・インパクト |
 | --- | --- | --- |
-| **A. `#1841` コンテキスト注入の軽量改善 3 点** | 既実証施策の仕上げ（小規模） | `#1869` で既に `input_tokens -39.3%` を確認済み。Tier 2 自己参照除外・見出しフォールバック・返却上限調整だけで実運用の精度が上がる。 |
+| **A. `#1841` コンテキスト注入の軽量改善 3 点** | #1897 で実装済み（マージ待ち） | 自己参照除外、見出しフォールバック、`tier2_limit=3` とスコア閾値を入れた。残る判断はマージ後の実運用トークンの確認。 |
 | **B. `#1825` 宣言 read・executor 観測の接続** | 既存ゲートの片肺解消（中規模） | `#1230` の `stale-read-gate` 本体は実装済みだが、自動入力経路が無く未活用状態。`#1843` の前提にもなる。 |
 | **C. `#1834` `workflow next` 遵守測定 or `#822` 中間評価** | 効果測定の完了 | どちらも仕組みは導入済みで、測定を回さないまま維持コストだけが残っている。継続・強化・撤収の判断材料を早期に確定できる。 |
 | **D. `#1842` 再設計 / `#1843` / `#1844`** | 新規設計・再設計（中〜大規模） | 優先度を明示的に決めてから着手する（`#1842` は再設計前なので本体へ未接続、`#1843`・`#1844` は企画段階）。 |
