@@ -177,3 +177,72 @@ index aae98c0..f0e67e0 100644
 ### 7.2 継続判断
 - **判定**: **継続 (Continue / Adopt)**
 - **根拠**: #1730 の要求仕様である「GitHub 設定不要で 1 件を完走できるローカル初回体験」が実エージェントを用いて証明され、予期せぬ中断や不正な差分も安全にハンドリングできることが確認された。
+
+---
+
+## 8. Claude Code スモーク再検証 (#1903) — 実 Claude スモーク結果は未確認
+
+> **結論**: 実 Claude Code によるスモークは**未確認**である。計画生成の段階で Claude Code CLI が未ログインのため停止した。既存の Codex 成功記録（上記 §2–§7）および fake E2E の成功は、Claude の成功に数えない。
+
+### 8.1 検証日・統合 SHA・バージョン
+
+- **検証日**: 2026-11-25
+- **統合 SHA**: `1471d87e`（`parent/issue-1891` HEAD。#1901 PR #1906 と #1902 PR #1905 の両方がマージ済み）
+- **OS**: Linux (x86_64, Ubuntu 24.04, kernel 7.0.0-44-generic)
+- **Python**: 3.12.3
+- **Orchestune**: 0.5.0（上記統合 SHA の worktree コードで実行）
+- **Claude Code**: `2.1.332 (Claude Code)`（検証当日に公式 npm ルート `npm install -g @anthropic-ai/claude-code` で導入）
+- **認証・権限の前提**: claude.ai サインインまたは API キーが必要。通常権限で実行。認証・権限を回避するフラグは使っていない。
+- **認証状態**: 未サインイン（`claude doctor` で "Not signed in to claude.ai"、"no API key or claude.ai sign-in" を確認。インストール自体に問題なし。API 接続は到達可）
+
+### 8.2 試行先と依頼内容
+
+- **試行先**: workspace 内の Git 管理外領域（相対パス `.orchestune/tmp/trial-smoke-1903-…/sample-repo`）に作った、リモートなし・初期コミット済み・小規模のサンプル（§3 と同一構成: `calc.py` の `add`、`test_calc.py`、`AGENTS.md`、`.gitignore` に `.serena/` を含む）
+- **初期コミット (Base SHA)**: `fa2d615e5f7824510520403d24c507a83ff8999a`
+- **依頼内容**: §3 と同一（`subtract(a: int, b: int) -> int` を `calc.py` に追加し、対応するテストを `test_calc.py` に追加）
+- **CI コマンド**: `python3 -m unittest test_calc.py`
+- **実行コマンド**:
+  ```bash
+  orchestune trial start \
+    --request "Add a subtract function \`subtract(a: int, b: int) -> int\` to calc.py and add corresponding test to test_calc.py." \
+    --repo <sample-repo> \
+    --agent claude \
+    --ci-command "python3 -m unittest test_calc.py"
+  ```
+
+### 8.3 到達した段階と停止理由
+
+- **Trial ID**: `d9340de6b12b48e7a1a9e2067344fbd5`
+- **到達段階**: 計画生成（checkpoint `plan`）で停止。`effective_phase: needs_attention`、`reason: agent_failed`。
+- **エージェントの出力**: Claude Code CLI は起動し、約 4.5 秒で終了コード 1 を返した。出力は `Not logged in · Please run /login`（`terminal_reason: api_error`、`is_error: true`、0 トークン、コスト $0）。
+- **未到達**: 計画・digest の確認、明示承認、実装・ローカルコミット、同一 head の CI、別 worktree レビュー、`result` による採用判断のいずれも未実施（`plan: null`、`approved_plan_digest: null`、budget `cycles=0/3, reviews=0/3`）。
+- **試行の後始末**: `trial result <ID> --decision keep` で試行をクローズ済み（`effective_phase: closed`、`decision: keep`）。
+
+### 8.4 #1901 の機能の副次的確認
+
+本試行の過程で、#1901 で導入された機能が実動作で確認できた（本 Issue の主目的ではないが記録する）:
+
+- **ID 省略**: `trial status --repo <sample-repo>`（ID なし）で active な試行 `d9340de6…` が解決された。
+- **終了後の明示 ID 照会**: クローズ後に `trial result d9340de6… --repo <sample-repo>`（明示 ID）で終了済み試行が再表示された。
+- **クローズ後の ID 省略**: クローズ後に ID なしの `status` は `Error (not_found): No active trial found` で終了コード 2 となった。
+
+### 8.5 計測値
+
+| 指標 | 計測結果 | 備考 |
+|---|---|---|
+| **試行開始〜停止まで** | 約 9 秒 | `trial start` コマンド全体（`uv run` を含む） |
+| **エージェント呼び出し** | 約 4.5 秒 | 計画生成の 1 回の呼び出しで終了コード 1 |
+| **消費サイクル数** | 0 / 3 | 計画が生成されず実装に進まなかった |
+| **消費レビュー回数** | 0 / 3 | レビュー未実施 |
+| **利用トークン・コスト** | 0 トークン / $0 | Claude Code の出力が 0 トークンを報告 |
+| **手数** | 1 手 | 起動コマンド 1 回で停止（承認・採用の操作なし） |
+
+### 8.6 再検証条件
+
+実 Claude スモークを完了させるには、以下を満たしたうえで §8.2 と同一の手順を再実行すること:
+
+1. 実行マシンで Claude Code にサインインする（claude.ai サブスクリプション）か、API キーを用意する。
+2. `parent/issue-1891` が前進していたら、その時点の HEAD を新たな統合 SHA として記録する（本記録の統合 SHA `1471d87e` は 2026-11-25 時点のもの）。
+3. 再実行時は本記録の Trial ID や sample-repo を使い回さず、新規の試行として開始する。
+
+なお、#1754 時点の Claude Code の停止理由はサブスクリプションの支払い未完了エラーだったが、今回は未サインイン（未ログイン）であり、原因は異なる。どちらも「Claude Code が実行できなかった」点では同じだが、混同しないこと。
