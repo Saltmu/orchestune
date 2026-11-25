@@ -554,15 +554,17 @@ python -m unittest test_calc.py
 サンプルのルートで実行します。Codex CLI の場合:
 
 ```bash
-orchestune trial start --repo . --request-file ../trial-request.txt --agent codex --ci-command "python -m unittest test_calc.py"
+orchestune trial start --repo . --request "calc.py に subtract(a: int, b: int) -> int を追加して a - b を返し、test_calc.py に減算のテストを追加する。" --agent codex --ci-command "python -m unittest test_calc.py"
 ```
 
-Claude Code の場合は `--agent claude` にします。標準入力と標準出力の両方が TTY のとき、計画の表示のあと `この計画で開始しますか? (yes/no) [no]:` と聞かれます。表示された `trial_id`、`goal`、`write_paths`、`ci_argv`、`plan_digest` を確認し、同意した時点で `yes` を入力します。計画が更新された場合は、最新の表示を確認してからその版を承認します。
+Claude Code の場合は `--agent claude` にします。依頼文は `--request TEXT` で直接渡すか、`--request-file FILE` でファイルから読むか、両方を省略した場合は対話プロンプトで1行入力します。2つのオプションは同時指定できません。ファイルは UTF-8 strict、空でなく、最大1MiBとし、作業ディレクトリをクリーンに保つためリポジトリ外（例: `../trial-request.txt`）に置きます。空白のみ、UTF-8でない、制限超過の入力は、エージェント起動前に拒否されます。TTY がない状態で両方を省略すると、標準入力を読まずに終了コード2で失敗します。
+
+標準入力と標準出力の両方が TTY のとき、計画の表示のあと `この計画で開始しますか? (yes/no) [no]:` と聞かれます。表示された `trial_id`、`goal`、`write_paths`、`ci_argv`、`plan_digest` を確認し、同意した時点で `yes` を入力します。計画が更新された場合は、最新の表示を確認してからその版を承認します。
 
 TTY がない場合は、同じ start の標準出力をリポジトリ外へリダイレクトします。
 
 ```bash
-orchestune trial start --repo . --request-file ../trial-request.txt --agent codex --ci-command "python -m unittest test_calc.py" > ../trial-start.txt
+orchestune trial start --repo . --request "calc.py に subtract(a: int, b: int) -> int を追加して a - b を返し、test_calc.py に減算のテストを追加する。" --agent codex --ci-command "python -m unittest test_calc.py" > ../trial-start.txt
 ```
 
 `effective_phase: planned` と `reason: approval_required` を確認し、表示された実 ID と digest で再開します。
@@ -571,6 +573,8 @@ orchestune trial start --repo . --request-file ../trial-request.txt --agent code
 orchestune trial resume "$trial_id" --repo . --approve-plan "$digest"
 ```
 
+`resume`、`status`、`result` の試行 ID は省略できます。省略すると `--repo` のアクティブな試行を使います。スクリプトで特定の試行を固定する場合や、終了した試行を再表示する場合（判断の記録でアクティブなポインタは消えます）は、明示の ID を残してください。
+
 ### 結果を見て判断する
 
 ```bash
@@ -578,7 +582,7 @@ orchestune trial status "$trial_id" --repo .
 orchestune trial result "$trial_id" --repo .
 ```
 
-`effective_phase: ready`、`approved_plan_digest`、同じ `head_sha` の CI と別セッションレビューの pass、`result` の `diff:` を確認します。現在の候補であるとき、テキストの phase 行は `effective_phase: ready (ローカルの採用候補)` です。`orchestune trial result "$trial_id" --repo . --json` の `ready_is_current` と、表示された base と head を使う `git diff "$base_sha" "$head_sha"` でも照合できます。`status` と `result` の終了コード 0 は表示できたことを表します。`start` と `resume` の終了コード 0 は、承認待ちの `planned` か、現在の `ready` です。採用するかどうかは、終了コードではなく phase と証跡で判断します。
+`effective_phase: ready`、`approved_plan_digest`、同じ `head_sha` の CI と別セッションレビューの pass、`result` の `diff:` を確認します。現在の候補であるとき、テキストの phase 行は `effective_phase: ready (ローカルの採用候補)` です。`orchestune trial result "$trial_id" --repo . --json` の `ready_is_current` と、表示された base と head を使う `git diff "$base_sha" "$head_sha"` でも照合できます。`status` と `result` の終了コード 0 は表示できたことを表します。`start` と `resume` の終了コード 0 は、承認待ちの `planned` か、現在の `ready` です。採用するかどうかは、終了コードではなく phase と証跡で判断します。ここの例は固定の試行を対象にするため明示の ID を残しています。アクティブな試行が1つだけのときは、`status` と `result` は ID を省略して `--repo` のアクティブな試行を使えます。
 
 止まったときは、表示された reason に従います。開始前から dirty だったものと、計画や CI が作った未追跡ファイルを分けます。想定外の生成物は、内容を確認してから対処します。
 
@@ -588,12 +592,12 @@ orchestune trial result "$trial_id" --repo .
 orchestune trial result "$trial_id" --repo . --decision keep
 ```
 
-採用する場合は、試用元が clean で、開始時のブランチと base SHA にあることを確認します。実 ID の `trial/<ID>` を fast-forward で取り込み、そのあと採用を記録します。
+試行がアクティブな間は `--decision` でも ID を省略できます。採用する場合は、試用元が clean で、開始時のブランチと base SHA にあることを確認します。実 ID の `trial/<ID>` を fast-forward で取り込み、そのあと採用を記録します。
 
 ```bash
 git merge --ff-only "trial/$trial_id"
 orchestune trial result "$trial_id" --repo . --decision adopted
 ```
 
-`effective_phase: closed` と、選んだ decision を確認します。採用の記録は、元のブランチが trial の head を含んでいることを確認します。
+`effective_phase: closed` と、選んだ decision を確認します。採用の記録は、元のブランチが trial の head を含んでいることを確認します。判断を記録するとアクティブなポインタは消えるため、終了した試行の再表示は明示の ID で行います（`orchestune trial result "$trial_id" --repo .`）。
 
