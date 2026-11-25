@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
-from orchestune.local_trial.contracts import plan_digest
-from orchestune.local_trial.models import TrialPhase, TrialState, TrialView
+from orchestune.local_trial.contracts import format_dirty_workspace, plan_digest
+from orchestune.local_trial.models import (
+    TrialPhase,
+    TrialState,
+    TrialView,
+    WorktreeKind,
+)
 from orchestune.operator_guidance import (
     EvidenceState,
     GuidanceAction,
@@ -122,15 +127,23 @@ def _stop_unconfirmed(view: TrialView) -> OperatorGuidance | None:
 def _dirty(view: TrialView, repo: str) -> OperatorGuidance | None:
     if view.reason != "worktree_dirty" or view.state is None:
         return None
-    argv = _dirty_argv(view.state, view.worktree_digest, repo)
-    description = (
-        "表示した作業ツリー digest で変更を確認します"
-        if argv is not None
-        else "作業ツリー digest が無いため確認コマンドは実行できません"
+    detail = view.dirty_workspace
+    implementation = detail is None or detail.kind == WorktreeKind.IMPLEMENTATION
+    argv = (
+        _dirty_argv(view.state, view.worktree_digest, repo) if implementation else None
     )
+    if argv is not None:
+        description = "表示した作業ツリー digest で変更を確認します"
+    elif implementation:
+        description = "作業ツリー digest が無いため確認コマンドは実行できません"
+    else:
+        description = "確認コマンドは実装 worktree の表示 digest にだけ付きます"
+    explanation = "作業ツリーの変更確認が必要です"
+    if detail is not None:
+        explanation = f"{explanation}\n{format_dirty_workspace(detail)}"
     return _guidance(
         view,
-        explanation="作業ツリーの変更確認が必要です",
+        explanation=explanation,
         owner=NextOwner.USER,
         progress=ProgressOutlook.MANUAL,
         actions=(GuidanceAction(description=description, argv=argv),),
