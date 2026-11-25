@@ -165,14 +165,52 @@ def _prepare_mock_tools(tmp_path: Path, *, include_node: bool) -> tuple[Path, Pa
     return mock_bin, mock_tool
 
 
-def _path_hiding_node(mock_bin: Path, inherited: str) -> str:
+_NODE_NAMES = ("node", "node.exe", "npm", "npm.cmd")
+
+
+def _shadow_without_node(directory: Path, shadow: Path) -> Path:
+    """Mirror `directory` without the Node.js binaries.
+
+    Links every entry of `directory` into `shadow` except the Node.js
+    binaries, so `command -v node` / `command -v npm` fail while every
+    other tool in the directory stays visible. Dropping the whole
+    directory instead breaks environments where node shares a directory
+    with the POSIX toolchain (e.g. /usr/bin holds both node and bash).
+    """
+    shadow.mkdir(parents=True, exist_ok=True)
+    for entry in directory.iterdir():
+        if entry.name in _NODE_NAMES:
+            continue
+        link = shadow / entry.name
+        if link.is_symlink() or link.exists():
+            continue
+        try:
+            os.symlink(entry, link, target_is_directory=entry.is_dir())
+        except OSError:
+            # Windows without symlink privilege: copy regular files.
+            if entry.is_file():
+                shutil.copy2(entry, link)
+    return shadow
+
+
+def _path_hiding_node(mock_bin: Path, inherited: str, shadow_root: Path) -> str:
     kept: list[str] = []
+    shadow_index = 0
     for entry in inherited.split(os.pathsep):
         if not entry:
             continue
         directory = Path(entry)
-        names = ("node", "node.exe", "npm", "npm.cmd")
-        if any((directory / name).exists() for name in names):
+        if not directory.is_absolute():
+            directory = Path.cwd() / directory
+        if any((directory / name).exists() for name in _NODE_NAMES):
+            kept.append(
+                str(
+                    _shadow_without_node(
+                        directory, shadow_root / f"shadow-{shadow_index}"
+                    )
+                )
+            )
+            shadow_index += 1
             continue
         kept.append(entry)
     return os.pathsep.join([str(mock_bin), *kept])
@@ -201,6 +239,7 @@ def _command_env(
     mock_tool: Path,
     outputs: tuple[Path, Path, Path],
     options: _CiOptions,
+    shadow_root: Path,
 ) -> dict[str, str]:
     pytest_env, record_env, record_args = outputs
     env = base.copy()
@@ -213,7 +252,7 @@ def _command_env(
         env["CI_FAIL_CODE"] = str(options.fail_code)
     path = env["PATH"]
     if options.hide_node:
-        path = _path_hiding_node(mock_bin, path)
+        path = _path_hiding_node(mock_bin, path, shadow_root)
     else:
         path = f"{mock_bin}{os.pathsep}{path}"
     env.update(
@@ -262,6 +301,7 @@ def _run_ci(
         mock_tool,
         (pytest_env, record_env, record_args),
         _CiOptions(timing, fail_at, fail_code, hide_node),
+        tmp_path / "shadow",
     )
     result = subprocess.run(
         [*command, str(repo / "scripts" / script_name)],
@@ -364,6 +404,30 @@ def test_posix_timing_reports_each_phase_once(tmp_path: Path) -> None:
 def test_powershell_timing_reports_each_phase_once(tmp_path: Path) -> None:
     run = _run_ci(tmp_path, "local-ci.ps1", _powershell_command(), timing="1")
     _assert_timed_success(run)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell CI path")
+def test_path_hiding_node_keeps_other_tools_in_shared_directory(tmp_path: Path) -> None:
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    for name in ("node", "npm", "bash", "dirname"):
+        _write_executable(shared / name, "#!/bin/sh\nexit 0\n")
+    node_only = tmp_path / "node-only"
+    node_only.mkdir()
+    for name in ("node", "npm", "npx"):
+        _write_executable(node_only / name, "#!/bin/sh\nexit 0\n")
+    mock_bin = tmp_path / "bin"
+    mock_bin.mkdir()
+    path = _path_hiding_node(
+        mock_bin,
+        os.pathsep.join([str(shared), str(node_only)]),
+        tmp_path / "shadow",
+    )
+    assert shutil.which("node", path=path) is None
+    assert shutil.which("npm", path=path) is None
+    assert shutil.which("bash", path=path) is not None
+    assert shutil.which("dirname", path=path) is not None
+    assert shutil.which("npx", path=path) is not None
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell CI path")
