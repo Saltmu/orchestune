@@ -1034,7 +1034,9 @@ def test_execute_review_rejects_dirty_review_worktree(tmp_path: Path) -> None:
     ) as caught:
         resume_trial(ResumeRequest(trial_id=trial_id, approve_plan=plan_dig), deps)
     message = caught.value.message
-    detail = DirtyWorkspace(WorktreeKind.REVIEW, view1.state.workspace.review_path, ())
+    detail = DirtyWorkspace(
+        kind=WorktreeKind.REVIEW, root=view1.state.workspace.review_path, changes=()
+    )
     assert format_dirty_workspace(detail).splitlines()[0] in message
     assert "- M review_leak.py" in message
     assert "--confirm-worktree" not in message
