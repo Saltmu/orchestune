@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from collections.abc import Iterator
@@ -39,6 +40,26 @@ class ForgeGraphQLUnavailableError(ForgeError):
 
 
 _LABEL_LIST_LIMIT = 1000
+_REPOSITORY_SLUG = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+
+
+def _repository_args(repository: str | None) -> list[str]:
+    if repository is None:
+        return []
+    if _REPOSITORY_SLUG.fullmatch(repository) is None:
+        raise ValueError(f"リポジトリ指定が不正です: {repository!r}")
+    return ["--repo", repository]
+
+
+def _repository_slug(stdout: str) -> str:
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError as error:
+        raise ForgeError("GitHubの実効リポジトリを照合できません") from error
+    slug = payload.get("nameWithOwner") if isinstance(payload, dict) else None
+    if not isinstance(slug, str) or _REPOSITORY_SLUG.fullmatch(slug) is None:
+        raise ForgeError("GitHubの実効リポジトリを照合できません")
+    return slug
 
 
 @contextmanager
@@ -93,47 +114,79 @@ class GitHubRepoAdminMixin:
                 f"gh認証が未設定です。`gh auth login`を実行してください: {result.stderr.strip()}"
             )
 
-    def ensure_labels(self, labels: tuple[LabelSpec, ...]) -> BootstrapResult:
+    def read_effective_repository(self) -> str:
+        """``gh`` がラベル操作に使う実効リポジトリ (owner/name) を読む。"""
+        with _scoped_gh("repo view") as bound:
+            result = subprocess.run(
+                ["gh", "repo", "view", "--json", "nameWithOwner"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+                **bound,
+            )
+        if result.returncode != 0:
+            raise ForgeError(
+                f"GitHubの実効リポジトリを読み取れません: {result.stderr.strip()}"
+            )
+        return _repository_slug(result.stdout)
+
+    def ensure_labels(
+        self,
+        labels: tuple[LabelSpec, ...],
+        *,
+        repository: str | None = None,
+    ) -> BootstrapResult:
         for label in labels:
             validate_label(label.name)
-        existing_names = self._list_existing_label_names()
+        repo_args = _repository_args(repository)
+        existing_names = self._list_existing_label_names(repo_args)
         created: list[str] = []
         existing: list[str] = []
         for label in labels:
             if label.name in existing_names:
                 existing.append(label.name)
                 continue
-            with _scoped_gh("label create") as bound:
-                subprocess.run(
-                    [
-                        "gh",
-                        "label",
-                        "create",
-                        label.name,
-                        "--color",
-                        label.color,
-                        "--description",
-                        label.description,
-                    ],
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    check=True,
-                    **bound,
-                )
+            self._create_label(label, repo_args)
             created.append(label.name)
         return BootstrapResult(
             created_labels=tuple(created), existing_labels=tuple(existing)
         )
 
-    def _list_existing_label_names(self) -> set[str]:
+    def _create_label(self, label: LabelSpec, repo_args: list[str]) -> None:
+        with _scoped_gh("label create") as bound:
+            subprocess.run(
+                [
+                    "gh",
+                    "label",
+                    "create",
+                    label.name,
+                    *repo_args,
+                    "--color",
+                    label.color,
+                    "--description",
+                    label.description,
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=True,
+                **bound,
+            )
+
+    def _list_existing_label_names(
+        self, repo_args: list[str] | None = None
+    ) -> set[str]:
+        args = [] if repo_args is None else repo_args
         with _scoped_gh("label list") as bound:
             result = subprocess.run(
                 [
                     "gh",
                     "label",
                     "list",
+                    *args,
                     "--json",
                     "name",
                     "--limit",

@@ -1,9 +1,21 @@
+import json
+import subprocess
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from orchestune.bootstrap import main, run_bootstrap
-from orchestune.forge import BootstrapResult, ForgeAuthError, ForgeError
+import orchestune.bootstrap as bootstrap_module
+import orchestune.forge.admin as forge_admin
+from orchestune.bootstrap import main, prepare_github_labels, run_bootstrap
+from orchestune.forge import (
+    REQUIRED_LABELS,
+    BootstrapResult,
+    ForgeAuthError,
+    ForgeError,
+    GitHubRepoAdminMixin,
+    LabelSpec,
+)
 
 
 def _fake_forge(*, auth_error: ForgeAuthError | None = None, result=None):
@@ -60,7 +72,7 @@ class TestRunBootstrap:
         exit_code = run_bootstrap(forge=fake_forge)
 
         fake_forge.check_auth.assert_called_once_with()
-        fake_forge.ensure_labels.assert_called_once()
+        fake_forge.ensure_labels.assert_called_once_with(REQUIRED_LABELS)
         assert exit_code == 0
 
 
@@ -188,3 +200,278 @@ class TestEmptyRepoInit:
         assert (
             "does-not-exist.git" in captured.err or "not found" in captured.err.lower()
         )
+
+
+class _GhScript:
+    """admin.py の gh 呼び出しだけを置き換える。"""
+
+    def __init__(
+        self,
+        *,
+        effective: str = "owner/repo",
+        view_code: int = 0,
+        view_stdout: str | None = None,
+        fail_create: str | None = None,
+    ) -> None:
+        self.effective = effective
+        self.view_code = view_code
+        self.view_stdout = view_stdout
+        self.fail_create = fail_create
+        self.created: list[str] = []
+        self.calls: list[list[str]] = []
+
+    def __call__(
+        self, argv: list[str], **_kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        command = list(argv)
+        self.calls.append(command)
+        if command[:3] == ["gh", "auth", "status"]:
+            return subprocess.CompletedProcess(command, 0, "", "")
+        if command[:3] == ["gh", "repo", "view"]:
+            body = self.view_stdout
+            if body is None:
+                body = json.dumps({"nameWithOwner": self.effective})
+            return subprocess.CompletedProcess(command, self.view_code, body, "no repo")
+        if command[:3] == ["gh", "label", "list"]:
+            body = json.dumps([{"name": name} for name in self.created])
+            return subprocess.CompletedProcess(command, 0, body, "")
+        if command[:3] == ["gh", "label", "create"]:
+            name = command[3]
+            if name == self.fail_create:
+                self.fail_create = None
+                raise subprocess.CalledProcessError(1, command, stderr="create failed")
+            self.created.append(name)
+            return subprocess.CompletedProcess(command, 0, "", "")
+        raise AssertionError(command)
+
+    def label_commands(self) -> list[list[str]]:
+        return [command for command in self.calls if command[1] == "label"]
+
+
+class _AuthOnlyForge:
+    def __init__(self) -> None:
+        self.ensured = False
+
+    def check_auth(self) -> None:
+        return None
+
+    def ensure_labels(
+        self, labels: object, repository: str | None = None
+    ) -> BootstrapResult:
+        self.ensured = True
+        raise AssertionError((labels, repository))
+
+
+class _UnusableRepositoryForge(_AuthOnlyForge):
+    def read_effective_repository(self) -> str:
+        return "not a slug"
+
+
+def _git_with_origin(tmp_path: Path, origin: str) -> Path:
+    local = tmp_path / "local"
+    local.mkdir()
+    subprocess.run(["git", "init"], cwd=local, check=True)
+    subprocess.run(["git", "remote", "add", "origin", origin], cwd=local, check=True)
+    return local
+
+
+def _prepare(cwd: Path, script: _GhScript) -> int:
+    real_run = subprocess.run
+
+    def run(argv, **kwargs):
+        if argv and argv[0] == "git":
+            return real_run(argv, **kwargs)
+        return script(argv, **kwargs)
+
+    with patch.object(forge_admin.subprocess, "run", side_effect=run):
+        return prepare_github_labels(cwd=cwd)
+
+
+@pytest.mark.integration
+class TestPrepareGitHubLabels:
+    def test_does_not_commit_or_push_an_empty_repository(self, tmp_path: Path) -> None:
+        local = _git_with_origin(tmp_path, "git@github.com:owner/repo.git")
+        script = _GhScript()
+        script.created = [label.name for label in REQUIRED_LABELS]
+
+        exit_code = _prepare(local, script)
+
+        assert exit_code == 0
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=local)
+        assert head.returncode != 0
+        assert not (local / "README.md").exists()
+        listed = script.label_commands()
+        assert listed
+        assert all(
+            command[command.index("--repo") + 1] == "owner/repo" for command in listed
+        )
+        assert [command[2] for command in listed] == ["list"]
+
+    def test_refuses_when_effective_repository_differs(
+        self, tmp_path: Path, capsys
+    ) -> None:
+        local = _git_with_origin(tmp_path, "https://github.com/owner/repo.git")
+        script = _GhScript(effective="other/repo")
+
+        exit_code = _prepare(local, script)
+
+        assert exit_code == 1
+        assert script.label_commands() == []
+        captured = capsys.readouterr()
+        assert "owner/repo" in captured.err
+        assert "other/repo" in captured.err
+
+    def test_refuses_when_origin_is_not_a_github_repository(
+        self, tmp_path: Path
+    ) -> None:
+        local = _git_with_origin(tmp_path, "https://gitlab.com/owner/repo.git")
+        script = _GhScript()
+
+        exit_code = _prepare(local, script)
+
+        assert exit_code == 1
+        assert script.calls == []
+
+    def test_refuses_when_effective_repository_cannot_be_read(
+        self, tmp_path: Path
+    ) -> None:
+        local = _git_with_origin(tmp_path, "https://github.com/owner/repo.git")
+        script = _GhScript(view_code=1, view_stdout="")
+
+        exit_code = _prepare(local, script)
+
+        assert exit_code == 1
+        assert script.label_commands() == []
+
+    def test_binds_checkout_spelling_when_only_case_differs(
+        self, tmp_path: Path
+    ) -> None:
+        local = _git_with_origin(tmp_path, "https://github.com/Saltmu/Orchestune.git")
+        script = _GhScript(effective="saltmu/orchestune")
+
+        exit_code = _prepare(local, script)
+
+        assert exit_code == 0
+        listed = script.label_commands()
+        assert listed
+        assert all(
+            command[command.index("--repo") + 1] == "Saltmu/Orchestune"
+            for command in listed
+        )
+
+    def test_retry_creates_only_labels_missing_after_partial_failure(
+        self, tmp_path: Path
+    ) -> None:
+        local = _git_with_origin(tmp_path, "https://github.com/owner/repo.git")
+        failed = REQUIRED_LABELS[1].name
+        script = _GhScript(fail_create=failed)
+
+        first = _prepare(local, script)
+        created_before_retry = list(script.created)
+        second = _prepare(local, script)
+
+        assert first == 1
+        assert second == 0
+        assert created_before_retry == [REQUIRED_LABELS[0].name]
+        assert script.created == [label.name for label in REQUIRED_LABELS]
+        assert script.created.count(REQUIRED_LABELS[0].name) == 1
+
+    def test_refuses_when_origin_is_missing(self, tmp_path: Path) -> None:
+        local = tmp_path / "local"
+        local.mkdir()
+        subprocess.run(["git", "init"], cwd=local, check=True)
+        script = _GhScript()
+
+        exit_code = _prepare(local, script)
+
+        assert exit_code == 1
+        assert script.calls == []
+
+    def test_refuses_when_origin_url_is_not_owner_and_name(
+        self, tmp_path: Path
+    ) -> None:
+        local = _git_with_origin(tmp_path, "https://github.com/owner/repo/extra")
+        script = _GhScript()
+
+        exit_code = _prepare(local, script)
+
+        assert exit_code == 1
+        assert script.calls == []
+
+    def test_accepts_origin_without_git_suffix(self, tmp_path: Path) -> None:
+        local = _git_with_origin(tmp_path, "https://github.com/owner/repo")
+        script = _GhScript()
+        script.created = [label.name for label in REQUIRED_LABELS]
+
+        exit_code = _prepare(local, script)
+
+        assert exit_code == 0
+        assert script.label_commands()
+
+    def test_refuses_when_forge_cannot_report_effective_repository(
+        self, tmp_path: Path
+    ) -> None:
+        local = _git_with_origin(tmp_path, "https://github.com/owner/repo.git")
+        forge = _AuthOnlyForge()
+
+        exit_code = prepare_github_labels(forge=forge, cwd=local)
+
+        assert exit_code == 1
+        assert forge.ensured is False
+
+    def test_refuses_when_reported_repository_is_unusable(self, tmp_path: Path) -> None:
+        local = _git_with_origin(tmp_path, "https://github.com/owner/repo.git")
+        forge = _UnusableRepositoryForge()
+
+        exit_code = prepare_github_labels(forge=forge, cwd=local)
+
+        assert exit_code == 1
+        assert forge.ensured is False
+
+    def test_refuses_when_effective_repository_json_is_unusable(
+        self, tmp_path: Path
+    ) -> None:
+        local = _git_with_origin(tmp_path, "https://github.com/owner/repo.git")
+        script = _GhScript(view_stdout="{")
+
+        exit_code = _prepare(local, script)
+
+        assert exit_code == 1
+        assert script.label_commands() == []
+
+    def test_refuses_when_origin_cannot_be_executed(self, tmp_path: Path) -> None:
+        with patch.object(
+            bootstrap_module, "run_git", side_effect=OSError("git missing")
+        ):
+            exit_code = prepare_github_labels(cwd=tmp_path)
+
+        assert exit_code == 1
+
+    def test_auth_failure_does_not_create_labels(self, tmp_path: Path, capsys) -> None:
+        local = _git_with_origin(tmp_path, "https://github.com/owner/repo.git")
+        forge = MagicMock()
+        forge.check_auth.side_effect = ForgeAuthError("boom")
+
+        exit_code = prepare_github_labels(forge=forge, cwd=local)
+
+        assert exit_code == 1
+        assert "boom" in capsys.readouterr().err
+        forge.ensure_labels.assert_not_called()
+        forge.read_effective_repository.assert_not_called()
+
+
+class TestRepositoryBinding:
+    def test_rejects_repository_before_subprocess(self) -> None:
+        labels = (LabelSpec("status:queued", "0E8A16", "queued"),)
+        with patch.object(forge_admin.subprocess, "run") as run:
+            with pytest.raises(ValueError, match="リポジトリ"):
+                GitHubRepoAdminMixin().ensure_labels(labels, repository="not a repo")
+        run.assert_not_called()
+
+    def test_read_effective_repository_rejects_unusable_slug(self) -> None:
+        with patch.object(forge_admin.subprocess, "run") as run:
+            run.return_value = subprocess.CompletedProcess(
+                [], 0, stdout='{"nameWithOwner": "not a slug"}', stderr=""
+            )
+            with pytest.raises(ForgeError, match="照合"):
+                GitHubRepoAdminMixin().read_effective_repository()
