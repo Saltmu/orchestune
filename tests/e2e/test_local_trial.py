@@ -308,6 +308,73 @@ def test_e2e_normal_flow_keep(e2e_setup):
         assert impl_cwds[0] != rev_cwds[0]
 
 
+def test_e2e_inline_request_and_omitted_id(e2e_setup):
+    """#1901: --request inline start and omitted-id resume/result."""
+    repo = e2e_setup["repo_dir"]
+    req = e2e_setup["req_file"]
+    env = e2e_setup["env"]
+    inline = "Please implement requested sample feature inline."
+
+    # No request source in a non-interactive run is rejected (exit 2).
+    res = _run_cli(["start", "--repo", str(repo)], env, repo)
+    assert res.returncode == 2, res.stderr
+
+    # --request and --request-file are mutually exclusive.
+    res = _run_cli(
+        ["start", "--request", inline, "--request-file", str(req), "--repo", str(repo)],
+        env,
+        repo,
+    )
+    assert res.returncode == 2, res.stderr
+
+    # 1. Start trial with inline request text
+    res = _run_cli(["start", "--request", inline, "--repo", str(repo)], env, repo)
+    assert res.returncode == 0, res.stderr
+    assert "effective_phase: planned" in res.stdout
+
+    # 2. Status inspection without an id resolves the active trial
+    res = _run_cli(["status", "--repo", str(repo), "--json"], env, repo)
+    assert res.returncode == 0, res.stderr
+    status_data = json.loads(res.stdout)
+    trial_id = status_data["trial_id"]
+    assert status_data["effective_phase"] == "planned"
+    assert status_data["state"]["request"]["text"] == inline
+
+    st = status_data["state"]
+    plan_dict = st["plan"]
+    p_obj = TrialPlan(
+        goal=plan_dict["goal"],
+        acceptance_criteria=tuple(plan_dict["acceptance_criteria"]),
+        write_paths=tuple(plan_dict["write_paths"]),
+        discipline_paths=tuple(plan_dict["discipline_paths"]),
+        discipline_notes=tuple(plan_dict["discipline_notes"]),
+        ci_argv=tuple(plan_dict["ci_argv"]),
+        discipline_status=plan_dict["discipline_status"],
+    )
+    p_dig = plan_digest(p_obj, st["request"]["digest"], st["repository"]["base_sha"])
+
+    # 3. Resume without an id approves the plan
+    res = _run_cli(["resume", "--repo", str(repo), "--approve-plan", p_dig], env, repo)
+    assert res.returncode == 0, res.stderr
+    assert "effective_phase: ready" in res.stdout
+
+    # 4. Record decision keep without an id
+    res = _run_cli(["result", "--decision", "keep", "--repo", str(repo)], env, repo)
+    assert res.returncode == 0, res.stderr
+    assert "decision: keep" in res.stdout
+
+    # 5. Re-display the closed trial with the explicit id: closing the
+    # trial clears the active pointer, so the omitted id no longer resolves.
+    res = _run_cli(["result", trial_id, "--repo", str(repo), "--json"], env, repo)
+    assert res.returncode == 0, res.stderr
+    result_data = json.loads(res.stdout)
+    assert result_data["trial_id"] == trial_id
+    assert result_data["state"]["decision"]["value"] == "keep"
+
+    res = _run_cli(["result", "--repo", str(repo), "--json"], env, repo)
+    assert res.returncode == 2, res.stderr
+
+
 def test_e2e_manual_adoption(e2e_setup):
     repo = e2e_setup["repo_dir"]
     req = e2e_setup["req_file"]

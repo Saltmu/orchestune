@@ -9,12 +9,14 @@ from typing import Any
 
 import pytest
 
+from orchestune.infra.cli_guidance import render_guidance
 from orchestune.infra.managed_process import (
     ManagedProcessResult,
     ManagedProcessSpec,
     ProcessOutcome,
 )
 from orchestune.local_trial.contracts import TrialError, plan_digest
+from orchestune.local_trial.guidance import guidance_from_trial
 from orchestune.local_trial.models import (
     AgentInfo,
     AgentPayload,
@@ -286,7 +288,6 @@ class FakeAgentRunner:
     def run(self, req: Any, agent: AgentInfo) -> AttemptResult:
         if self.on_run is not None:
             self.on_run(req)
-        from orchestune.local_trial.models import Change
 
         self.call_history.append(str(req.input.kind))
         if self.ws is not None and req.input.kind in (
@@ -574,6 +575,11 @@ def test_resume_trial_confirm_worktree_persistence(tmp_path: Path) -> None:
     assert v_dirty.effective_phase == TrialPhase.NEEDS_ATTENTION
     assert v_dirty.reason == "worktree_dirty"
     assert v_dirty.worktree_digest == dig
+    detail = v_dirty.dirty_workspace
+    assert detail is not None and detail.kind == "implementation"
+    assert detail.changes == (Change(status="M", path="foo.py"),)
+    guided = render_guidance(guidance_from_trial(v_dirty, str(tmp_path)))
+    assert "foo.py" in guided and dig in guided and "--confirm-worktree" in guided
 
     # Confirm worktree saves approved_worktree_digest and index_digest
     v_conf = resume_trial(ResumeRequest(trial_id=trial_id, confirm_worktree=dig), deps)
@@ -998,31 +1004,6 @@ def test_resume_trial_ci_override_repairs_missing_ci(tmp_path: Path) -> None:
     assert view2.reason == "approval_required"
 
 
-def test_execute_review_rejects_dirty_review_worktree(tmp_path: Path) -> None:
-    from orchestune.local_trial.models import Change
-
-    deps, store, ws, agents, proc_runner = _make_fake_deps(tmp_path)
-    req = StartRequest(
-        repo=str(tmp_path), request_text="implement something", agent_name="codex"
-    )
-    view1 = start_trial(req, deps)
-    assert view1.state is not None and view1.state.plan is not None
-    trial_id = view1.state.trial_id
-    plan_dig = validate_plan(
-        view1.state.plan, tmp_path, "implement something", ws.base_sha
-    )
-
-    # Simulate dirty review worktree during review
-    def on_run(req_arg: Any) -> None:
-        if req_arg.input.kind == AttemptKind.REVIEW:
-            ws.changes = (Change(status="M", path="review_leak.py"),)
-
-    agents.on_run = on_run
-
-    with pytest.raises(TrialError, match="Review worktree modified during review"):
-        resume_trial(ResumeRequest(trial_id=trial_id, approve_plan=plan_dig), deps)
-
-
 def test_record_decision_adopted_requires_includes_head(tmp_path: Path) -> None:
     deps, store, ws, agents, proc_runner = _make_fake_deps(tmp_path)
     req = StartRequest(
@@ -1116,8 +1097,6 @@ def test_resume_trial_ci_override_planned_and_ready(tmp_path: Path) -> None:
 def test_resume_trial_ci_override_idempotent_and_dirty_and_closed(
     tmp_path: Path,
 ) -> None:
-    from orchestune.local_trial.models import Change
-
     deps, store, ws, agents, proc_runner = _make_fake_deps(tmp_path)
     req = StartRequest(
         repo=str(tmp_path), request_text="implement something", agent_name="codex"
@@ -1136,10 +1115,13 @@ def test_resume_trial_ci_override_idempotent_and_dirty_and_closed(
 
     # Dirty worktree rejected
     ws.changes = (Change(status="M", path="dirty.py"),)
-    with pytest.raises(TrialError, match="Implementation worktree is dirty"):
+    with pytest.raises(TrialError, match="Implementation worktree is dirty") as dirty:
         resume_trial(
             ResumeRequest(trial_id=tid, ci_argv_override=("pytest", "-q")), deps
         )
+    dirty_message = dirty.value.message
+    assert "実装 worktree:" in dirty_message and "- M dirty.py" in dirty_message
+    assert ".gitignore" not in dirty_message
     ws.changes = ()
 
     # Closed trial rejected

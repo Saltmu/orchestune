@@ -56,6 +56,18 @@ def _validate_hex_digest(name: str, val: str) -> str:
     return val.lower()
 
 
+def _validate_request_text(text: str, *, label: str = "Request text") -> str:
+    try:
+        encoded = text.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise TrialError("invalid_input", f"{label} is not valid UTF-8") from exc
+    if len(encoded) > _MAX_REQUEST_BYTES:
+        raise TrialError("invalid_input", f"{label} exceeds 1MiB: {len(encoded)} bytes")
+    if not text.strip():
+        raise TrialError("invalid_input", f"{label} is empty")
+    return text
+
+
 def _read_request_file(path_str: str) -> str:
     path = Path(path_str)
     if not path.exists():
@@ -80,9 +92,37 @@ def _read_request_file(path_str: str) -> str:
         raise TrialError(
             "invalid_input", f"Request file is not valid UTF-8: {exc}"
         ) from exc
-    if not text.strip():
-        raise TrialError("invalid_input", "Request file is empty")
-    return text
+    return _validate_request_text(text, label="Request file")
+
+
+def _read_request_interactive() -> str:
+    try:
+        line = input("依頼を入力してください (1行): ")
+    except EOFError:
+        raise TrialError("invalid_input", "Request input aborted") from None
+    return _validate_request_text(line)
+
+
+def _resolve_request_text(args: argparse.Namespace, is_interactive: bool) -> str:
+    if args.request is not None:
+        return _validate_request_text(args.request)
+    if args.request_file is not None:
+        return _read_request_file(args.request_file)
+    if not is_interactive:
+        raise TrialError(
+            "invalid_input",
+            "No request provided: use --request TEXT or --request-file FILE",
+        )
+    return _read_request_interactive()
+
+
+def _resolve_trial_id(raw_id: str | None, deps: TrialDependencies) -> str:
+    if raw_id is not None:
+        return _validate_hex_id("trial_id", raw_id)
+    active = deps.store.active_trial_id()
+    if active is None:
+        raise TrialError("not_found", "No active trial found")
+    return _validate_hex_id("trial_id", active)
 
 
 def _parse_ci_override(ci_str: str | None) -> tuple[str, ...] | None:
@@ -105,8 +145,12 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="subcommand", required=True)
 
     start_p = sub.add_parser("start", help="Start a new local trial")
-    start_p.add_argument(
-        "--request-file", required=True, help="Path to request text file"
+    req_group = start_p.add_mutually_exclusive_group()
+    req_group.add_argument(
+        "--request", default=None, help="Request text (inline, one string)"
+    )
+    req_group.add_argument(
+        "--request-file", default=None, help="Path to request text file"
     )
     start_p.add_argument("--repo", default=None, help="Repository root path")
     start_p.add_argument(
@@ -122,7 +166,7 @@ def _build_parser() -> argparse.ArgumentParser:
     status_p.add_argument("--json", action="store_true", help="Output JSON format")
 
     res_p = sub.add_parser("resume", help="Resume or confirm a local trial")
-    res_p.add_argument("id", help="Trial ID")
+    res_p.add_argument("id", nargs="?", default=None, help="Trial ID (optional)")
     res_p.add_argument("--repo", default=None, help="Repository root path")
     res_p.add_argument(
         "--approve-plan", default=None, help="64-char plan digest to approve"
@@ -139,7 +183,7 @@ def _build_parser() -> argparse.ArgumentParser:
     res_p.add_argument("--ci-command", default=None, help="New CI command string")
 
     ret_p = sub.add_parser("result", help="Inspect result or record adoption decision")
-    ret_p.add_argument("id", help="Trial ID")
+    ret_p.add_argument("id", nargs="?", default=None, help="Trial ID (optional)")
     ret_p.add_argument(
         "--decision", choices=["keep", "adopted"], default=None, help="Decision"
     )
@@ -373,7 +417,7 @@ def _handle_interactive_start(
 
 
 def _cmd_start(args: argparse.Namespace, is_interactive: bool) -> int:
-    req_text = _read_request_file(args.request_file)
+    req_text = _resolve_request_text(args, is_interactive)
     ci_argv = _parse_ci_override(args.ci_command)
     repo = os.path.abspath(args.repo) if args.repo else os.getcwd()
     deps = make_dependencies(repo)
@@ -417,7 +461,6 @@ def _validate_resume_flags(args: argparse.Namespace) -> None:
 
 
 def _cmd_resume(args: argparse.Namespace, is_interactive: bool) -> int:
-    trial_id = _validate_hex_id("trial_id", args.id)
     _validate_resume_flags(args)
     approve_dig = (
         _validate_hex_digest("approve-plan", args.approve_plan)
@@ -439,6 +482,7 @@ def _cmd_resume(args: argparse.Namespace, is_interactive: bool) -> int:
 
     repo = os.path.abspath(args.repo) if args.repo else os.getcwd()
     deps = make_dependencies(repo)
+    trial_id = _resolve_trial_id(args.id, deps)
     res_req = ResumeRequest(
         trial_id=trial_id,
         approve_plan=approve_dig,
@@ -458,10 +502,7 @@ def _cmd_resume(args: argparse.Namespace, is_interactive: bool) -> int:
 def _cmd_status(args: argparse.Namespace) -> int:
     repo = os.path.abspath(args.repo) if args.repo else os.getcwd()
     deps = make_dependencies(repo)
-    trial_id = args.id or deps.store.active_trial_id()
-    if trial_id is None:
-        raise TrialError("not_found", "No active trial found")
-    trial_id = _validate_hex_id("trial_id", trial_id)
+    trial_id = _resolve_trial_id(args.id, deps)
 
     view = inspect_trial(trial_id, deps)
     if view.state is None:
@@ -474,9 +515,9 @@ def _cmd_status(args: argparse.Namespace) -> int:
 
 
 def _cmd_result(args: argparse.Namespace) -> int:
-    trial_id = _validate_hex_id("trial_id", args.id)
     repo = os.path.abspath(args.repo) if args.repo else os.getcwd()
     deps = make_dependencies(repo)
+    trial_id = _resolve_trial_id(args.id, deps)
 
     if args.decision is not None:
         view = record_decision(trial_id, args.decision, deps)

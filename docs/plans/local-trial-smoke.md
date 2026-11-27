@@ -177,3 +177,163 @@ index aae98c0..f0e67e0 100644
 ### 7.2 継続判断
 - **判定**: **継続 (Continue / Adopt)**
 - **根拠**: #1730 の要求仕様である「GitHub 設定不要で 1 件を完走できるローカル初回体験」が実エージェントを用いて証明され、予期せぬ中断や不正な差分も安全にハンドリングできることが確認された。
+
+---
+
+## 8. Claude Code スモーク再検証 (#1903) — 実 Claude スモーク結果は未確認
+
+> **結論**: 実 Claude Code によるスモークは**未確認**である。計画生成の段階で Claude Code CLI が未ログインのため停止した。既存の Codex 成功記録（上記 §2–§7）および fake E2E の成功は、Claude の成功に数えない。
+
+### 8.1 検証日・統合 SHA・バージョン
+
+- **検証日**: 2026-11-25
+- **統合 SHA**: `1471d87e`（`parent/issue-1891` HEAD。#1901 PR #1906 と #1902 PR #1905 の両方がマージ済み）
+- **OS**: Linux (x86_64, Ubuntu 24.04, kernel 7.0.0-44-generic)
+- **Python**: 3.12.3
+- **Orchestune**: 0.5.0（上記統合 SHA の worktree コードで実行）
+- **Claude Code**: `2.1.332 (Claude Code)`（検証当日に公式 npm ルート `npm install -g @anthropic-ai/claude-code` で導入）
+- **認証・権限の前提**: claude.ai サインインまたは API キーが必要。通常権限で実行。認証・権限を回避するフラグは使っていない。
+- **認証状態**: 未サインイン（`claude doctor` で "Not signed in to claude.ai"、"no API key or claude.ai sign-in" を確認。インストール自体に問題なし。API 接続は到達可）
+
+### 8.2 試行先と依頼内容
+
+- **試行先**: workspace 内の Git 管理外領域（相対パス `.orchestune/tmp/trial-smoke-1903-…/sample-repo`）に作った、リモートなし・初期コミット済み・小規模のサンプル（§3 と同一構成: `calc.py` の `add`、`test_calc.py`、`AGENTS.md`、`.gitignore` に `.serena/` を含む）
+- **初期コミット (Base SHA)**: `fa2d615e5f7824510520403d24c507a83ff8999a`
+- **依頼内容**: §3 と同一（`subtract(a: int, b: int) -> int` を `calc.py` に追加し、対応するテストを `test_calc.py` に追加）
+- **CI コマンド**: `python3 -m unittest test_calc.py`
+- **実行コマンド**:
+  ```bash
+  orchestune trial start \
+    --request "Add a subtract function \`subtract(a: int, b: int) -> int\` to calc.py and add corresponding test to test_calc.py." \
+    --repo <sample-repo> \
+    --agent claude \
+    --ci-command "python3 -m unittest test_calc.py"
+  ```
+
+### 8.3 到達した段階と停止理由
+
+- **Trial ID**: `d9340de6b12b48e7a1a9e2067344fbd5`
+- **到達段階**: 計画生成（checkpoint `plan`）で停止。`effective_phase: needs_attention`、`reason: agent_failed`。
+- **エージェントの出力**: Claude Code CLI は起動し、約 4.5 秒で終了コード 1 を返した。出力は `Not logged in · Please run /login`（`terminal_reason: api_error`、`is_error: true`、0 トークン、コスト $0）。
+- **未到達**: 計画・digest の確認、明示承認、実装・ローカルコミット、同一 head の CI、別 worktree レビュー、`result` による採用判断のいずれも未実施（`plan: null`、`approved_plan_digest: null`、budget `cycles=0/3, reviews=0/3`）。
+- **試行の後始末**: `trial result <ID> --decision keep` で試行をクローズ済み（`effective_phase: closed`、`decision: keep`）。
+
+### 8.4 #1901 の機能の副次的確認
+
+本試行の過程で、#1901 で導入された機能が実動作で確認できた（本 Issue の主目的ではないが記録する）:
+
+- **ID 省略**: `trial status --repo <sample-repo>`（ID なし）で active な試行 `d9340de6…` が解決された。
+- **終了後の明示 ID 照会**: クローズ後に `trial result d9340de6… --repo <sample-repo>`（明示 ID）で終了済み試行が再表示された。
+- **クローズ後の ID 省略**: クローズ後に ID なしの `status` は `Error (not_found): No active trial found` で終了コード 2 となった。
+
+### 8.5 計測値
+
+| 指標 | 計測結果 | 備考 |
+|---|---|---|
+| **試行開始〜停止まで** | 約 9 秒 | `trial start` コマンド全体（`uv run` を含む） |
+| **エージェント呼び出し** | 約 4.5 秒 | 計画生成の 1 回の呼び出しで終了コード 1 |
+| **消費サイクル数** | 0 / 3 | 計画が生成されず実装に進まなかった |
+| **消費レビュー回数** | 0 / 3 | レビュー未実施 |
+| **利用トークン・コスト** | 0 トークン / $0 | Claude Code の出力が 0 トークンを報告 |
+| **手数** | 1 手 | 起動コマンド 1 回で停止（承認・採用の操作なし） |
+
+### 8.6 再検証条件
+
+実 Claude スモークを完了させるには、以下を満たしたうえで §8.2 と同一の手順を再実行すること:
+
+1. 実行マシンで Claude Code にサインインする（claude.ai サブスクリプション）か、API キーを用意する。
+2. `parent/issue-1891` が前進していたら、その時点の HEAD を新たな統合 SHA として記録する（本記録の統合 SHA `1471d87e` は 2026-11-25 時点のもの）。
+3. 再実行時は本記録の Trial ID や sample-repo を使い回さず、新規の試行として開始する。
+
+なお、#1754 時点の Claude Code の停止理由はサブスクリプションの支払い未完了エラーだったが、今回は未サインイン（未ログイン）であり、原因は異なる。どちらも「Claude Code が実行できなかった」点では同じだが、混同しないこと。
+
+---
+
+## 9. Codex CLI 実エージェントスモーク検証 (#1910)
+
+> **結論**: `parent/issue-1891`（#1901・#1902 統合済み）において、実 Codex CLI を用いた初回体験（`start --request` → 計画・digest 確認 → `resume --approve-plan` → 実装・ローカルコミット → 同一 head CI → 別 worktree レビュー → `ready` → fast-forward マージ・`result` 採用記録、および ID 省略・終了後明示 ID 照会）が正常に完走した。なお、本記録の成功は #1903（Claude Code スモーク）の成功には数えず、#1903 は引き続き OPEN・未確認のままとする。
+
+### 9.1 検証日・統合 SHA・バージョン・認証前提
+
+- **検証日**: 2026-11-26 JST（UTC: 2026-11-25）
+- **対象統合 SHA**: `1471d87e`（`parent/issue-1891` 上の #1901 PR #1906 と #1902 PR #1905 の統合時点。実行は同一コードに §8 のドキュメント追記 PR #1909 のみを乗せた `parent/issue-1891` HEAD `1b54b044` の worktree で実施）
+- **OS**: Linux (x86_64)
+- **Python**: 3.13.15
+- **Orchestune**: 0.5.0（上記 worktree コードで実行）
+- **Codex CLI**: `codex-cli 0.171.0`（model: `gpt-6-luna`）
+- **認証・権限の前提**: ChatGPT アカウント連携（`codex login`）または API キーが必要。`codex doctor` にて `Logged in using ChatGPT`（認証済み・接続到達可）を確認のうえ、通常権限で `--agent codex` を指定して実行。認証・権限を回避するフラグは使用していない。
+
+### 9.2 試行先と依頼内容
+
+- **試行先**: workspace 内の Git 管理外領域（相対パス `.orchestune/tmp/task-1910-.../sample-repo`）に作成した、リモートなし・初期コミット済み・小規模のサンプル（§3・§8.2 と同一構成: `calc.py` の `add`、`test_calc.py`、`AGENTS.md`、`.gitignore` に `.serena/` を含む）
+- **初期コミット (Base SHA)**: `062eda8def30de6ec40a64cdc75e9e41392cbfab`
+- **依頼内容**: §8.2 と同一（`subtract(a: int, b: int) -> int` を `calc.py` に追加し、対応するテストを `test_calc.py` に追加）
+- **CI コマンド**: `python3 -m unittest test_calc.py`
+
+### 9.3 実行手順と証跡
+
+- **Trial ID**: `e75db459dfdf4080b721fd511db74c50`
+- **Head SHA**: `224ad1c5e5970396c318419df1eb3266500b7083`
+
+1. **Trial Start (`--request`)**:
+   ```bash
+   orchestune trial start \
+     --request 'Add a subtract function `subtract(a: int, b: int) -> int` to calc.py and add corresponding test to test_calc.py.' \
+     --repo <sample-repo> \
+     --agent codex \
+     --ci-command "python3 -m unittest test_calc.py"
+   ```
+   - 計画が生成され、`goal`、`acceptance_criteria`、`write_paths: ['calc.py', 'test_calc.py']`、`discipline_status: compatible`、`plan_digest: efd8482799fed88da2d57451ec460a2f336cffca9bc6092e9ffeefd658960d6e`、`effective_phase: planned`（`reason: approval_required`）が表示された。
+   - 対話プロンプト `この計画で開始しますか? (yes/no) [no]: ` に対して `no` を入力し、`planned` 状態で一旦終了した（終了コード 0）。
+2. **ID 省略での状態確認**:
+   ```bash
+   orchestune trial status --repo <sample-repo>
+   ```
+   - Trial ID を省略して active な試行 `e75db459dfdf4080b721fd511db74c50` と `plan_digest` が解決・表示された（終了コード 0）。
+3. **ID 省略での明示承認・実装・CI・別 worktree レビュー**:
+   ```bash
+   orchestune trial resume \
+     --approve-plan efd8482799fed88da2d57451ec460a2f336cffca9bc6092e9ffeefd658960d6e \
+     --repo <sample-repo>
+   ```
+   - `approved_plan_digest` が記録され、実装 worktree（`trial-e75db459...`）で `calc.py` と `test_calc.py` が更新・コミット（`224ad1c5e5970396c318419df1eb3266500b7083`）された。
+   - **CI 結果**: `ci_evidence: passed (head=224ad1c5e5970396c318419df1eb3266500b7083)`（`python3 -m unittest test_calc.py`）。
+   - **別 worktree・別セッションレビュー結果**: 独立したレビュー用 worktree（`trial-review-e75db459...`）で実行され、`review_evidence: 同一製品の別セッションレビュー passed (head=224ad1c5e5970396c318419df1eb3266500b7083)`。
+   - `budget: cycles=1/3, reviews=1/3`、`effective_phase: ready (ローカルの採用候補)` で終了コード 0。
+4. **採用・ID 省略での完了記録・終了後照会**:
+   - Fast-forward マージ:
+     ```bash
+     git -C <sample-repo> merge --ff-only trial/e75db459dfdf4080b721fd511db74c50
+     ```
+     - マージ後 `python3 -m unittest test_calc.py` で `Ran 2 tests in 0.000s OK` を確認。
+   - ID 省略での採用記録:
+     ```bash
+     orchestune trial result --decision adopted --repo <sample-repo>
+     ```
+     - `effective_phase: closed`、`decision: adopted` で終了コード 0。
+   - 終了後の明示 ID 照会:
+     ```bash
+     orchestune trial result e75db459dfdf4080b721fd511db74c50 --repo <sample-repo>
+     ```
+     - 終了済み試行のサマリ・diff・`decision: adopted` が正常に表示された（終了コード 0）。
+   - 終了後の ID 省略確認:
+     ```bash
+     orchestune trial status --repo <sample-repo>
+     ```
+     - `Error (not_found): No active trial found`（終了コード 2）となった。
+
+### 9.4 計測値と観察事項
+
+| 指標 | 計測結果 | 備考 |
+|---|---|---|
+| **計画生成（`trial start`）** | 約 6 秒（計画出力まで） | プロンプト待機を含めたコマンド全体は 201 秒 |
+| **承認〜実装〜CI〜レビュー（`trial resume`）** | 39 秒 | 実装・コミット・CI・別 worktree レビュー・`ready` 到達まで |
+| **実稼働所要時間 (Active Time)** | 約 45 秒 | 入力待機時間を除いた実処理時間 |
+| **消費サイクル数** | 1 / 3 | 実装 1 回で完了 |
+| **消費レビュー回数** | 1 / 3 | 1 回のレビューで pass |
+| **操作数** | 3 手（`start` + `resume` + `result`、および採用 merge 1 回） | `status`・終了後照会等の確認コマンドを除く主手順 |
+
+- **詰まった点・観察事項**:
+  - PTY 接続環境で `trial start` を実行すると計画表示後に `この計画で開始しますか? (yes/no) [no]: ` で入力待機となる。`resume --approve-plan` を別コマンドとして試す場合はプロンプトに `no` を入力して `planned` で抜ける必要がある。
+  - #1901 で追加された `--request` インライン入力、active trial の ID 省略（`status` / `resume` / `result`）、および終了後の明示 ID 照会がいずれも実 Codex CLI 経路で期待通り動作した。
+

@@ -21,6 +21,8 @@ from orchestune.local_trial.contracts import (
     TrialError,
     TrialStore,
     TrialWorkspace,
+    impl_dirty,
+    impl_dirty_view,
     request_digest,
 )
 from orchestune.local_trial.models import (
@@ -221,6 +223,7 @@ def _make_view(
         worktree_digest=workspace_digest(snapshot),
         ci_candidates=ci_candidates,
         ready_is_current=ready,
+        dirty_workspace=impl_dirty_view(state, snapshot, vr),
     )
 
 
@@ -340,7 +343,8 @@ def _run_plan_stage(
         )
     except TrialError as err:
         state = _handle_plan_error(state, err, deps)
-        snap_curr = deps.workspace.inspect(state.repository, state.workspace)
+        if err.code != "worktree_dirty":
+            snap_curr = deps.workspace.inspect(state.repository, state.workspace)
     return _make_view(state, deps, snap_curr, candidates)
 
 
@@ -466,7 +470,7 @@ def _verify_workspace_state(
             "identity_mismatch", "Repository or workspace identity mismatch"
         )
     if check_dirty and is_workspace_dirty_unapproved(state, snap):
-        raise TrialError("worktree_dirty", "Implementation worktree is dirty")
+        raise impl_dirty(state, snap, "Implementation worktree is dirty")
     return repo_curr, snap
 
 
@@ -678,7 +682,7 @@ def _execute_ci(state: TrialState, deps: TrialDependencies) -> TrialState:
     deps.store.record_attempt(ci_res)
     snap_ci = deps.workspace.inspect(state.repository, state.workspace)
     if snap_ci.head_sha != state.head_sha or snap_ci.changes:
-        raise TrialError("worktree_dirty", "Worktree modified during CI")
+        raise impl_dirty(state, snap_ci, "Worktree modified during CI")
 
     return _handle_ci_result(state, ci_id, proc_rec, deps)
 
@@ -721,7 +725,7 @@ def _finish_review_attempt(
     deps: TrialDependencies,
     attempt_id: str,
 ) -> TrialState:
-    verify_clean_review(deps.workspace.inspect_review(state), state.head_sha)
+    verify_clean_review(deps.workspace.inspect_review(state), state)
     aids = tuple(dict.fromkeys((*state.attempt_ids, attempt_id)))
     try:
         validate_attempt(
@@ -812,9 +816,7 @@ def _reconcile_attempt_by_kind(
     kind, aid = res.input.kind, res.input.attempt_id
     if kind == AttemptKind.PLAN:
         if snap.changes:
-            raise TrialError(
-                "worktree_dirty", "Worktree modified during planning phase"
-            )
+            raise impl_dirty(state, snap, "Worktree modified during planning phase")
         try:
             validate_attempt(res, state, AttemptKind.PLAN, state.head_sha, None)
         except TrialError as err:
@@ -828,7 +830,7 @@ def _reconcile_attempt_by_kind(
         return _finish_implement_attempt(state, res, deps, aid)
     if kind == AttemptKind.CI:
         if snap.changes:
-            raise TrialError("worktree_dirty", "Worktree modified during CI")
+            raise impl_dirty(state, snap, "Worktree modified during CI")
         try:
             validate_attempt(
                 res, state, AttemptKind.CI, state.head_sha, state.approved_plan_digest

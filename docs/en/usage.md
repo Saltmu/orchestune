@@ -1331,16 +1331,18 @@ Text from `status`, `result`, `start`, and `resume` uses the same guidance block
 ### CLI Grammar
 
 ```text
-orchestune trial start --request-file FILE [--repo PATH] [--agent claude|codex] [--ci-command TEXT]
+orchestune trial start [--request TEXT | --request-file FILE] [--repo PATH] [--agent claude|codex] [--ci-command TEXT]
 orchestune trial status [ID] [--repo PATH] [--json]
-orchestune trial resume ID [--repo PATH] [--approve-plan DIGEST] [--confirm-stopped ATTEMPT_ID] [--confirm-worktree DIGEST] [--request-file FILE] [--ci-command TEXT]
-orchestune trial result ID [--repo PATH] [--json]
-orchestune trial result ID --decision keep|adopted [--repo PATH] [--json]
+orchestune trial resume [ID] [--repo PATH] [--approve-plan DIGEST] [--confirm-stopped ATTEMPT_ID] [--confirm-worktree DIGEST] [--request-file FILE] [--ci-command TEXT]
+orchestune trial result [ID] [--repo PATH] [--json]
+orchestune trial result [ID] --decision keep|adopted [--repo PATH] [--json]
 ```
 
 - `--repo`: Target repository root path (defaults to current working directory `cwd`).
-- `--request-file`: Path to task description text file. Must be strict UTF-8, non-empty, and up to 1 MiB. Note: Keep the request file outside the repository worktree (e.g. `../trial-request.txt`) so that the working directory remains clean for `trial start`.
-- `ID`: 32-character hexadecimal string representing the unique trial ID (or attempt ID for `--confirm-stopped`).
+- `--request`: Request text given inline. Cannot be combined with `--request-file`. Blank, non-UTF-8, or over 1 MiB of UTF-8 text is rejected before any agent is launched.
+- `--request-file`: Path to task description text file. Must be strict UTF-8, non-empty, and up to 1 MiB. Cannot be combined with `--request`. Note: Keep the request file outside the repository worktree (e.g. `../trial-request.txt`) so that the working directory remains clean for `trial start`.
+- When both `--request` and `--request-file` are omitted: an interactive TTY prompts for the request as one line (`依頼を入力してください (1行): `); a non-interactive run fails with exit code 2 without reading standard input. EOF at the prompt exits 2; `Ctrl+C` exits 130.
+- `ID`: 32-character hexadecimal string representing the unique trial ID (or attempt ID for `--confirm-stopped`). When omitted, `status`, `resume`, and `result` use the active trial for `--repo` (the store's `active_trial_id()` is read exactly once). No active trial reports `not_found`; a corrupt pointer or unsupported schema reports the store error. Recording a decision clears the active pointer, so a closed trial must be re-displayed with its explicit id.
 - `DIGEST`: 64-character hexadecimal SHA-256 string for plan digest or worktree digest.
 - `--ci-command`: CI verification command parsed without shell syntax evaluation. When specifying paths on Windows, use forward slashes and quotes (e.g. `"./scripts/local-ci.ps1"`).
 - `--confirm-stopped`: Confirm a stopped background attempt ID; cannot be combined with other modification flags.
@@ -1361,10 +1363,12 @@ orchestune trial result ID --decision keep|adopted [--repo PATH] [--json]
 
 ### Interactive vs Non-Interactive Flow
 - **Interactive TTY** (`stdin.isatty() and stdout.isatty()`):
+  If neither `--request` nor `--request-file` is given, the request is read as one line from the prompt `依頼を入力してください (1行): `. EOF at the prompt exits 2; `Ctrl+C` exits 130.
   When a plan is generated with `phase=planned` and `reason=approval_required`, the user is prompted:
   `この計画で開始しますか? (yes/no) [no]: `
   Entering `yes` immediately resumes execution with the plan digest. Entering `no` or sending EOF preserves the planned state and exits with code 0.
 - **Non-Interactive**:
+  Omitting both `--request` and `--request-file` fails with exit code 2 and does not read standard input.
   Outputs the plan and guidance, saves the planned state, and exits with code 0 with the exact command to resume:
   `orchestune trial resume <ID> --repo <PATH> --approve-plan <DIGEST>`
 

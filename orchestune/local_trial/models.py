@@ -249,6 +249,20 @@ class Change:
     old_path: str | None = None
 
 
+class WorktreeKind(StrEnum):
+    SOURCE = "source"
+    PRIMARY = "primary"
+    IMPLEMENTATION = "implementation"
+    REVIEW = "review"
+
+
+@dataclass(frozen=True, kw_only=True)
+class DirtyWorkspace:
+    kind: WorktreeKind
+    root: str
+    changes: tuple[Change, ...]
+
+
 @dataclass(frozen=True, kw_only=True)
 class WorkspaceSnapshot:
     head_sha: str
@@ -354,3 +368,4 @@ class TrialView:
     worktree_digest: str | None
     ci_candidates: tuple[tuple[str, ...], ...]
     ready_is_current: bool
+    dirty_workspace: DirtyWorkspace | None = None
