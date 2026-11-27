@@ -15,7 +15,11 @@ from orchestune.infra.managed_process import (
     ManagedProcessSpec,
     ProcessOutcome,
 )
-from orchestune.local_trial.contracts import TrialError, plan_digest
+from orchestune.local_trial.contracts import (
+    TrialError,
+    format_dirty_workspace,
+    plan_digest,
+)
 from orchestune.local_trial.guidance import guidance_from_trial
 from orchestune.local_trial.models import (
     AgentInfo,
@@ -25,6 +29,7 @@ from orchestune.local_trial.models import (
     AttemptResult,
     Change,
     Checkpoint,
+    DirtyWorkspace,
     DisciplineStatus,
     Finding,
     FindingSeverity,
@@ -41,6 +46,7 @@ from orchestune.local_trial.models import (
     TrialState,
     WorkspaceIdentity,
     WorkspaceSnapshot,
+    WorktreeKind,
 )
 from orchestune.local_trial.planning import resolve_ci_selection, validate_plan
 from orchestune.local_trial.service import (
@@ -1028,8 +1034,10 @@ def test_execute_review_rejects_dirty_review_worktree(tmp_path: Path) -> None:
     ) as caught:
         resume_trial(ResumeRequest(trial_id=trial_id, approve_plan=plan_dig), deps)
     message = caught.value.message
-    assert "review_leak.py" in message and view1.state.workspace.review_path in message
-    assert "レビュー worktree:" in message and "--confirm-worktree" not in message
+    detail = DirtyWorkspace(WorktreeKind.REVIEW, view1.state.workspace.review_path, ())
+    assert format_dirty_workspace(detail).splitlines()[0] in message
+    assert "- M review_leak.py" in message
+    assert "--confirm-worktree" not in message
 
 
 def test_record_decision_adopted_requires_includes_head(tmp_path: Path) -> None:

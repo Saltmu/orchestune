@@ -204,6 +204,11 @@ def test_dirty_guidance_renders_bounds_without_a_confirm_for_review() -> None:
     assert "/work/my\\ dir" in escaped
     assert "--confirm-worktree" not in escaped
 
+    windows = _detail(WorktreeKind.REVIEW, (), root=r"C:\work\trial")
+    assert format_dirty_workspace(windows).splitlines()[0] == (
+        r"レビュー worktree: C:\\work\\trial"
+    )
+
     omitted = tuple(Change(status="M", path=f"f{index:02d}.py") for index in range(20))
     omitted += (Change(status="??", path="gen.out"),)
     many = format_dirty_workspace(_detail(WorktreeKind.PRIMARY, omitted))
@@ -322,12 +327,13 @@ def test_ci_and_review_head_drift_do_not_invent_paths(tmp_path: Path) -> None:
         TrialError, match="Review worktree modified during review"
     ) as review_exc:
         verify_clean_review(snap, state)
-    assert state.workspace.review_path in review_exc.value.message
-    assert "レビュー worktree:" in review_exc.value.message
+    review_detail = _detail(WorktreeKind.REVIEW, (), state.workspace.review_path)
+    review_header = format_dirty_workspace(review_detail).splitlines()[0]
+    assert review_header in review_exc.value.message
     assert (
         "観測した変更パスはありません。パスは断定しません。" in review_exc.value.message
     )
-    assert state.workspace.implementation_path not in review_exc.value.message
+    assert "実装 worktree:" not in review_exc.value.message
 
 
 def test_reconcile_dirty_attempt_uses_the_observed_changes(tmp_path: Path) -> None:
@@ -374,7 +380,11 @@ def test_reconcile_dirty_attempt_uses_the_observed_changes(tmp_path: Path) -> No
     ) as planned:
         _reconcile_attempt_by_kind(state, result, snap, deps)
     assert "- R new.py <- old.py" in planned.value.message
-    assert state.workspace.implementation_path in planned.value.message
+    detail = _detail(
+        WorktreeKind.IMPLEMENTATION, (), state.workspace.implementation_path
+    )
+    implementation_header = format_dirty_workspace(detail).splitlines()[0]
+    assert implementation_header in planned.value.message
 
     ci_result = replace(result, input=replace(attempt, kind=AttemptKind.CI))
     with pytest.raises(TrialError, match="Worktree modified during CI") as ci_exc:

@@ -309,9 +309,14 @@ class TestRequestInputAndActiveId:
         req = mock_start.call_args[0][0]
         assert req.request_text == "  padded request text  "
 
-    def test_start_request_file_preserves_trailing_newline(self, tmp_path):
+    @pytest.mark.parametrize(
+        "request_text", ["task description\n", "task description\r\n"]
+    )
+    def test_start_request_file_preserves_trailing_newline(
+        self, tmp_path, request_text
+    ):
         req_file = tmp_path / "req.txt"
-        req_file.write_text("task description\n")
+        req_file.write_bytes(request_text.encode("utf-8"))
         state = _dummy_state("1" * 32, TrialPhase.PLANNED)
         view = _dummy_view(state)
         fake_deps = _make_fake_deps(state)
@@ -321,7 +326,7 @@ class TestRequestInputAndActiveId:
             patch("sys.stdin.isatty", return_value=False),
         ):
             assert main(["start", "--request-file", str(req_file)]) == 0
-        assert mock_start.call_args[0][0].request_text == "task description\n"
+        assert mock_start.call_args[0][0].request_text == request_text
 
     def test_start_request_and_request_file_mutually_exclusive(self, tmp_path):
         req = tmp_path / "req.txt"

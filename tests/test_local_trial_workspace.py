@@ -13,11 +13,13 @@ from orchestune.infra.git_cli import run_git
 from orchestune.local_trial.contracts import (
     TrialError,
     TrialWorkspace,
+    format_dirty_workspace,
 )
 from orchestune.local_trial.models import (
     AgentInfo,
     Budget,
     Checkpoint,
+    DirtyWorkspace,
     DisciplineStatus,
     GitIntent,
     GitOperation,
@@ -28,6 +30,7 @@ from orchestune.local_trial.models import (
     TrialPlan,
     TrialState,
     WorkspaceIdentity,
+    WorktreeKind,
 )
 from orchestune.local_trial.workspace import LocalTrialWorkspace, workspace_digest
 
@@ -583,8 +586,8 @@ def test_review_worktree_reuse_and_dirty(tmp_path: Path) -> None:
     assert exc.value.code == "worktree_dirty"
     message = exc.value.message
     assert message.startswith("Review worktree is dirty")
-    assert "レビュー worktree:" in message
-    assert str(review_path) in message
+    detail = DirtyWorkspace(WorktreeKind.REVIEW, str(review_path), ())
+    assert format_dirty_workspace(detail).splitlines()[0] in message
     assert "- ?? dirty.txt" in message
     assert ".gitignore" in message
     assert "--confirm-worktree" not in message
