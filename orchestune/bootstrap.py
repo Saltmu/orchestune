@@ -6,6 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Protocol, cast
+from urllib.parse import urlparse
 
 from orchestune.forge import (
     REQUIRED_LABELS,
@@ -22,7 +23,7 @@ _OWNER_REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
 class _RepositoryLabelForge(Protocol):
-    def read_effective_repository(self) -> str: ...
+    def read_effective_repository(self, *, cwd: Path | None = None) -> str: ...
 
     def ensure_labels(
         self,
@@ -118,7 +119,7 @@ def prepare_github_labels(
         return _fail("cannot resolve the checkout GitHub repository from origin")
     try:
         forge.check_auth()
-        effective = _effective_repository(forge)
+        effective = _effective_repository(forge, cwd)
     except ForgeError as error:
         return _fail(str(error))
     if checkout.casefold() != effective.casefold():
@@ -152,11 +153,14 @@ def _ensure_required_labels(
     return bound.ensure_labels(REQUIRED_LABELS, repository=repository)
 
 
-def _effective_repository(forge: RepoAdminForge) -> str:
+def _effective_repository(forge: RepoAdminForge, cwd: Path) -> str:
     reader = getattr(forge, "read_effective_repository", None)
     if not callable(reader):
         raise ForgeError("GitHubの実効リポジトリを照合できません")
-    slug = reader()
+    try:
+        slug = reader(cwd=cwd)
+    except TypeError:
+        slug = reader()
     if not isinstance(slug, str) or _OWNER_REPO.fullmatch(slug) is None:
         raise ForgeError("GitHubの実効リポジトリを照合できません")
     return slug
@@ -198,22 +202,37 @@ def _origin_url(cwd: Path) -> str | None:
 
 def _owner_and_repo(url: str) -> str | None:
     text = url.strip()
-    suffix = ".git"
-    if text.endswith(suffix):
-        text = text[: -len(suffix)]
-    marker = "github.com"
-    start = text.lower().find(marker)
-    if start < 0:
-        return None
-    pieces = [
-        piece for piece in text[start + len(marker) :].lstrip(":/").split("/") if piece
-    ]
-    if len(pieces) != 2:
-        return None
-    slug = f"{pieces[0]}/{pieces[1]}"
-    if _OWNER_REPO.fullmatch(slug) is None:
+    if text.endswith(".git"):
+        text = text[: -len(".git")]
+    slug = _scp_owner_and_repo(text)
+    if slug is None:
+        slug = _url_owner_and_repo(text)
+    if slug is None or _OWNER_REPO.fullmatch(slug) is None:
         return None
     return slug
+
+
+def _scp_owner_and_repo(text: str) -> str | None:
+    prefix = "git@github.com:"
+    if "://" in text or not text.lower().startswith(prefix):
+        return None
+    parts = [part for part in text[len(prefix) :].split("/") if part]
+    if len(parts) != 2:
+        return None
+    return f"{parts[0]}/{parts[1]}"
+
+
+def _url_owner_and_repo(text: str) -> str | None:
+    if "://" not in text:
+        return None
+    parsed = urlparse(text)
+    host = parsed.hostname
+    if host is None or host.lower() != "github.com":
+        return None
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) != 2:
+        return None
+    return f"{parts[0]}/{parts[1]}"
 
 
 def main(argv: list[str] | None = None) -> None:

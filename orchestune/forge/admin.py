@@ -9,6 +9,7 @@ import subprocess
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from orchestune.infra.execution_deadline import (
@@ -114,8 +115,12 @@ class GitHubRepoAdminMixin:
                 f"gh認証が未設定です。`gh auth login`を実行してください: {result.stderr.strip()}"
             )
 
-    def read_effective_repository(self) -> str:
-        """``gh`` がラベル操作に使う実効リポジトリ (owner/name) を読む。"""
+    def read_effective_repository(self, *, cwd: Path | None = None) -> str:
+        """``gh`` がラベル操作に使う実効リポジトリ (owner/name) を読む。
+
+        ``cwd`` は引数なしの ``gh repo view`` が読む checkout です。
+        ``GH_REPO`` などの環境上書きはそのまま残します。
+        """
         with _scoped_gh("repo view") as bound:
             result = subprocess.run(
                 ["gh", "repo", "view", "--json", "nameWithOwner"],
@@ -124,6 +129,7 @@ class GitHubRepoAdminMixin:
                 encoding="utf-8",
                 errors="replace",
                 check=False,
+                cwd=cwd,
                 **bound,
             )
         if result.returncode != 0:
