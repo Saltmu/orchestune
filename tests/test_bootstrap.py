@@ -233,7 +233,12 @@ class _GhScript:
             self.view_cwd = cwd if isinstance(cwd, Path) else None
             body = self.view_stdout
             if body is None:
-                body = json.dumps({"nameWithOwner": self.effective})
+                body = json.dumps(
+                    {
+                        "nameWithOwner": self.effective,
+                        "url": f"https://github.com/{self.effective}",
+                    }
+                )
             return subprocess.CompletedProcess(command, self.view_code, body, "no repo")
         if command[:3] == ["gh", "label", "list"]:
             body = json.dumps([{"name": name} for name in self.created])
@@ -306,7 +311,8 @@ class TestPrepareGitHubLabels:
         listed = script.label_commands()
         assert listed
         assert all(
-            command[command.index("--repo") + 1] == "owner/repo" for command in listed
+            command[command.index("--repo") + 1] == "github.com/owner/repo"
+            for command in listed
         )
         assert [command[2] for command in listed] == ["list"]
         assert script.view_cwd == local
@@ -367,8 +373,27 @@ class TestPrepareGitHubLabels:
         listed = script.label_commands()
         assert listed
         assert all(
-            command[command.index("--repo") + 1] == "owner/repo" for command in listed
+            command[command.index("--repo") + 1] == "github.com/owner/repo"
+            for command in listed
         )
+
+    def test_refuses_when_effective_host_is_not_github_com(
+        self, tmp_path: Path
+    ) -> None:
+        local = _git_with_origin(tmp_path, "https://github.com/owner/repo.git")
+        script = _GhScript(
+            view_stdout=json.dumps(
+                {
+                    "nameWithOwner": "owner/repo",
+                    "url": "https://ghe.example/owner/repo",
+                }
+            )
+        )
+
+        exit_code = _prepare(local, script)
+
+        assert exit_code == 1
+        assert script.label_commands() == []
 
     def test_refuses_when_effective_repository_cannot_be_read(
         self, tmp_path: Path
@@ -393,7 +418,7 @@ class TestPrepareGitHubLabels:
         listed = script.label_commands()
         assert listed
         assert all(
-            command[command.index("--repo") + 1] == "Saltmu/Orchestune"
+            command[command.index("--repo") + 1] == "github.com/Saltmu/Orchestune"
             for command in listed
         )
 
@@ -517,7 +542,13 @@ class TestRepositoryBinding:
     def test_read_effective_repository_views_the_checkout(self, tmp_path: Path) -> None:
         with patch.object(forge_admin.subprocess, "run") as run:
             run.return_value = subprocess.CompletedProcess(
-                [], 0, stdout='{"nameWithOwner": "owner/repo"}', stderr=""
+                [],
+                0,
+                stdout=(
+                    '{"nameWithOwner": "owner/repo",'
+                    ' "url": "https://github.com/owner/repo"}'
+                ),
+                stderr="",
             )
             slug = GitHubRepoAdminMixin().read_effective_repository(cwd=tmp_path)
         assert slug == "owner/repo"

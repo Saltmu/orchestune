@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from orchestune.infra.execution_deadline import (
     command_timeout_signal,
@@ -49,7 +50,7 @@ def _repository_args(repository: str | None) -> list[str]:
         return []
     if _REPOSITORY_SLUG.fullmatch(repository) is None:
         raise ValueError(f"リポジトリ指定が不正です: {repository!r}")
-    return ["--repo", repository]
+    return ["--repo", f"github.com/{repository}"]
 
 
 def _repository_slug(stdout: str) -> str:
@@ -57,8 +58,16 @@ def _repository_slug(stdout: str) -> str:
         payload = json.loads(stdout)
     except json.JSONDecodeError as error:
         raise ForgeError("GitHubの実効リポジトリを照合できません") from error
-    slug = payload.get("nameWithOwner") if isinstance(payload, dict) else None
-    if not isinstance(slug, str) or _REPOSITORY_SLUG.fullmatch(slug) is None:
+    if not isinstance(payload, dict):
+        raise ForgeError("GitHubの実効リポジトリを照合できません")
+    slug = payload.get("nameWithOwner")
+    url = payload.get("url")
+    host = urlparse(url).hostname if isinstance(url, str) else None
+    if (
+        not isinstance(slug, str)
+        or _REPOSITORY_SLUG.fullmatch(slug) is None
+        or host != "github.com"
+    ):
         raise ForgeError("GitHubの実効リポジトリを照合できません")
     return slug
 
@@ -123,7 +132,7 @@ class GitHubRepoAdminMixin:
         """
         with _scoped_gh("repo view") as bound:
             result = subprocess.run(
-                ["gh", "repo", "view", "--json", "nameWithOwner"],
+                ["gh", "repo", "view", "--json", "nameWithOwner,url"],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
