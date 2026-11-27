@@ -2,6 +2,7 @@
 
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -286,6 +287,36 @@ def test_plan_stage_dirty_view_shows_the_judgment_snapshot(tmp_path: Path) -> No
     empty_text = _text(empty, repo=str(tmp_path))
     assert "観測した変更パスはありません。パスは断定しません。" in empty_text
     assert "plan dirty.py" not in empty_text
+
+
+def test_execute_review_rejects_dirty_review_worktree(tmp_path: Path) -> None:
+    deps, _, ws, agents, _ = _make_fake_deps(tmp_path)
+    req = StartRequest(
+        repo=str(tmp_path), request_text="implement something", agent_name="codex"
+    )
+    view1 = start_trial(req, deps)
+    assert view1.state is not None and view1.state.plan is not None
+    trial_id = view1.state.trial_id
+    plan_dig = validate_plan(
+        view1.state.plan, tmp_path, "implement something", ws.base_sha
+    )
+
+    # Simulate dirty review worktree during review
+    def on_run(req_arg: Any) -> None:
+        if req_arg.input.kind == AttemptKind.REVIEW:
+            ws.changes = (Change(status="M", path="review_leak.py"),)
+
+    agents.on_run = on_run
+
+    with pytest.raises(
+        TrialError, match="Review worktree modified during review"
+    ) as caught:
+        resume_trial(ResumeRequest(trial_id=trial_id, approve_plan=plan_dig), deps)
+    message = caught.value.message
+    detail = _detail(WorktreeKind.REVIEW, (), view1.state.workspace.review_path)
+    assert format_dirty_workspace(detail).splitlines()[0] in message
+    assert "- M review_leak.py" in message
+    assert "--confirm-worktree" not in message
 
 
 def test_ci_and_review_head_drift_do_not_invent_paths(tmp_path: Path) -> None:

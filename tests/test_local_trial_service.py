@@ -15,11 +15,7 @@ from orchestune.infra.managed_process import (
     ManagedProcessSpec,
     ProcessOutcome,
 )
-from orchestune.local_trial.contracts import (
-    TrialError,
-    format_dirty_workspace,
-    plan_digest,
-)
+from orchestune.local_trial.contracts import TrialError, plan_digest
 from orchestune.local_trial.guidance import guidance_from_trial
 from orchestune.local_trial.models import (
     AgentInfo,
@@ -29,7 +25,6 @@ from orchestune.local_trial.models import (
     AttemptResult,
     Change,
     Checkpoint,
-    DirtyWorkspace,
     DisciplineStatus,
     Finding,
     FindingSeverity,
@@ -46,7 +41,6 @@ from orchestune.local_trial.models import (
     TrialState,
     WorkspaceIdentity,
     WorkspaceSnapshot,
-    WorktreeKind,
 )
 from orchestune.local_trial.planning import resolve_ci_selection, validate_plan
 from orchestune.local_trial.service import (
@@ -1008,38 +1002,6 @@ def test_resume_trial_ci_override_repairs_missing_ci(tmp_path: Path) -> None:
     assert view2.state.plan is not None
     assert view2.state.plan.ci_argv == ("pytest", "-v")
     assert view2.reason == "approval_required"
-
-
-def test_execute_review_rejects_dirty_review_worktree(tmp_path: Path) -> None:
-    deps, store, ws, agents, proc_runner = _make_fake_deps(tmp_path)
-    req = StartRequest(
-        repo=str(tmp_path), request_text="implement something", agent_name="codex"
-    )
-    view1 = start_trial(req, deps)
-    assert view1.state is not None and view1.state.plan is not None
-    trial_id = view1.state.trial_id
-    plan_dig = validate_plan(
-        view1.state.plan, tmp_path, "implement something", ws.base_sha
-    )
-
-    # Simulate dirty review worktree during review
-    def on_run(req_arg: Any) -> None:
-        if req_arg.input.kind == AttemptKind.REVIEW:
-            ws.changes = (Change(status="M", path="review_leak.py"),)
-
-    agents.on_run = on_run
-
-    with pytest.raises(
-        TrialError, match="Review worktree modified during review"
-    ) as caught:
-        resume_trial(ResumeRequest(trial_id=trial_id, approve_plan=plan_dig), deps)
-    message = caught.value.message
-    detail = DirtyWorkspace(
-        kind=WorktreeKind.REVIEW, root=view1.state.workspace.review_path, changes=()
-    )
-    assert format_dirty_workspace(detail).splitlines()[0] in message
-    assert "- M review_leak.py" in message
-    assert "--confirm-worktree" not in message
 
 
 def test_record_decision_adopted_requires_includes_head(tmp_path: Path) -> None:
