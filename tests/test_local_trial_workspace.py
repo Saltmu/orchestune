@@ -586,9 +586,8 @@ def test_review_worktree_reuse_and_dirty(tmp_path: Path) -> None:
     assert exc.value.code == "worktree_dirty"
     message = exc.value.message
     assert message.startswith("Review worktree is dirty")
-    detail = DirtyWorkspace(
-        kind=WorktreeKind.REVIEW, root=str(review_path), changes=()
-    )
+    root = str(review_path)
+    detail = DirtyWorkspace(kind=WorktreeKind.REVIEW, root=root, changes=())
     assert format_dirty_workspace(detail).splitlines()[0] in message
     assert "- ?? dirty.txt" in message
     assert ".gitignore" in message
