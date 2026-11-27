@@ -251,7 +251,8 @@ def _add_execution_cli_arguments(parser: argparse.ArgumentParser) -> None:
         default=False,
         help=(
             "Explicitly allow approval and sandbox bypass (full permissions) "
-            "for local CLIs (claude, agy, codex, grok)."
+            "for local CLIs (claude, agy, codex, grok) when launching with "
+            "--apply. Preview succeeds without this flag and does not launch."
         ),
     )
 
@@ -426,6 +427,7 @@ def _resolve_and_build_target(
                 local_cmd=_optional_text(toml_data.get("local_cmd")),
                 codex_cloud_env=codex_cloud_env,
                 allow_unsafe_agent_execution=bool(args.allow_unsafe_agent_execution),
+                preview_only=not bool(args.apply),
                 reviewer_bot=cast(
                     ReviewerBotSetting, toml_data.get("reviewer_bot", "auto")
                 ),

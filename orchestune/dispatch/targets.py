@@ -327,6 +327,8 @@ class LocalProcessDispatchTarget(LocalUsageProvider, DispatchTarget):
         target_name: str | None = None,
         *,
         start_process: DetachedProcessStarter = start_detached_process,
+        preview: bool = False,
+        requires_unsafe_opt_in: bool = False,
     ):
         super().__init__(log_dir=log_dir)
         self._command_builder = command_builder
@@ -334,10 +336,20 @@ class LocalProcessDispatchTarget(LocalUsageProvider, DispatchTarget):
         self._reviewer_bot = reviewer_bot
         self.target_name = target_name
         self._start_process = start_process
+        self.preview = preview
+        self.requires_unsafe_opt_in = requires_unsafe_opt_in
 
     @property
     def local_cmd(self) -> str | None:
         return self._local_cmd
+
+    @property
+    def reviewer_bot(self) -> ReviewerBot | None:
+        return self._reviewer_bot
+
+    def _refuse_preview_launch(self) -> None:
+        if self.preview:
+            raise RuntimeError("preview does not launch local CLI agents")
 
     @property
     def semantic_fix_custom_local_cmd(self) -> str | None:
@@ -414,6 +426,7 @@ class LocalProcessDispatchTarget(LocalUsageProvider, DispatchTarget):
         base_branch: str | None = None,
         launch_context: object | None = None,
     ) -> DispatchHandle:
+        self._refuse_preview_launch()
         self.log_dir.mkdir(parents=True, exist_ok=True)
         cmd = self._resolve_command(
             task,
@@ -449,6 +462,7 @@ class LocalProcessDispatchTarget(LocalUsageProvider, DispatchTarget):
         worktree_root: Path | None = None,
         repo_root: Path | None = None,
     ) -> DispatchHandle | None:
+        self._refuse_preview_launch()
         return launch_local_semantic_fix(
             target=self,
             operation_id=operation_id,
@@ -732,6 +746,7 @@ class TargetBuildConfig:
     # #1560: `[reviewer_by_target]` overrides of the `auto` reviewer.
     reviewer_by_target: Mapping[str, ReviewerBot] = field(default_factory=dict)
     installed_review_vendors: frozenset[str] | None = None
+    preview_only: bool = field(default=False, kw_only=True)
 
 
 def _unsafe_execution_error(target_name: str, auto_detected: bool) -> ValueError:
@@ -764,13 +779,18 @@ def _unsafe_execution_error(target_name: str, auto_detected: bool) -> ValueError
             f"実行ターゲット `{target_name}` は `--dispatch-target` または `orchestune.toml` の `dispatch_target` で指定されています。"
         )
     lines.append(
-        "この確認は プレビューを含むすべての実行で必要です。\n"
-        "完全権限実行を避ける場合は `--dispatch-target cloud-routine` または `codex-cloud` を、エージェントを起動しない確認のみの場合は `--dispatch-target local` を指定してください。"
+        "完全権限実行を避ける場合は `--dispatch-target cloud-routine` または `codex-cloud` を、"
+        "エージェントを起動しない確認のみの場合は `--dispatch-target local` を指定してください。"
     )
     return ValueError("\n".join(lines))
 
 
-def _resolve_target_name(dispatch_target_name: str, allow_unsafe: bool) -> str:
+def _resolve_target_name(
+    dispatch_target_name: str,
+    allow_unsafe: bool,
+    *,
+    preview_only: bool = False,
+) -> str:
     is_unsafe = dispatch_target_name in {
         "claude-cli",
         "agy-cli",
@@ -792,7 +812,7 @@ def _resolve_target_name(dispatch_target_name: str, allow_unsafe: bool) -> str:
             )
             dispatch_target_name = "local"
 
-    if is_unsafe and not allow_unsafe:
+    if is_unsafe and not allow_unsafe and not preview_only:
         raise _unsafe_execution_error(dispatch_target_name, auto_detected=auto_detected)
     return dispatch_target_name
 
@@ -877,7 +897,9 @@ def _configured_reviewer(
 
 def _build_dispatch_target(config: TargetBuildConfig) -> DispatchTarget:
     target_name = _resolve_target_name(
-        config.dispatch_target_name, config.allow_unsafe_agent_execution
+        config.dispatch_target_name,
+        config.allow_unsafe_agent_execution,
+        preview_only=config.preview_only,
     )
     reviewer_bot = _configured_reviewer(config, target_name)
     auto_dummy_fallback = (
@@ -909,6 +931,8 @@ def _build_dispatch_target(config: TargetBuildConfig) -> DispatchTarget:
             or _default_local_cmd_template(target_name, reviewer_bot),
             reviewer_bot=reviewer_bot,
             target_name=target_name,
+            preview=config.preview_only,
+            requires_unsafe_opt_in=not config.allow_unsafe_agent_execution,
         )
     return LocalProcessDispatchTarget(
         log_dir=config.log_dir,

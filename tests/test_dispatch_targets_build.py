@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
+import orchestune.dispatch.targets as dispatch_targets
 from orchestune.dispatch.targets import (
     AGY_CLI_LOCAL_CMD_TEMPLATE,
     CLAUDE_CLI_LOCAL_CMD_TEMPLATE,
@@ -598,7 +599,7 @@ class TestBuildDispatchTarget:
         assert "agy" in msg
         assert "--allow-unsafe-agent-execution" in msg
         assert "cloud-routine" in msg
-        assert "プレビュー" in msg
+        assert "プレビューを含むすべての実行" not in msg
 
     def test_auto_detected_claude_unsafe_cli_error_message(self, tmp_path, monkeypatch):
         import shutil
@@ -630,8 +631,80 @@ class TestBuildDispatchTarget:
         msg = str(excinfo.value)
         assert "--dispatch-target" in msg
         assert "dispatch_target" in msg
-        assert "プレビュー" in msg
+        assert "プレビューを含むすべての実行" not in msg
         assert "cloud-routine" in msg
+
+    def test_preview_only_builds_explicit_local_cli_without_allow_flag(self, tmp_path):
+        for target_name in ["claude-cli", "agy-cli", "codex-cli", "grok-cli"]:
+            target = build_dispatch_target(
+                TargetBuildConfig(
+                    target_name,
+                    None,
+                    None,
+                    tmp_path / "logs",
+                    preview_only=True,
+                )
+            )
+            assert isinstance(target, LocalProcessDispatchTarget)
+            assert target.target_name == target_name
+            assert target.preview is True
+            assert target.requires_unsafe_opt_in is True
+
+    def test_preview_with_flag_still_refuses_launch(self, tmp_path):
+        target = build_dispatch_target(
+            TargetBuildConfig(
+                "codex-cli",
+                None,
+                None,
+                tmp_path / "logs",
+                allow_unsafe_agent_execution=True,
+                preview_only=True,
+            )
+        )
+        assert target.requires_unsafe_opt_in is False
+        with pytest.raises(RuntimeError, match="preview"):
+            target.launch(_task(), "codex/issue-1-task-a", tmp_path / "wt")
+        assert not (tmp_path / "logs").exists()
+
+    def test_preview_launch_and_semantic_fix_stop_before_side_effects(self, tmp_path):
+        target = build_dispatch_target(
+            TargetBuildConfig(
+                "claude-cli",
+                None,
+                None,
+                tmp_path / "logs",
+                preview_only=True,
+            )
+        )
+        with (
+            patch.object(target, "_resolve_command") as resolve_command,
+            patch.object(target, "_start_process") as start_process,
+            patch.object(dispatch_targets, "launch_local_semantic_fix") as semantic_fix,
+        ):
+            with pytest.raises(RuntimeError, match="preview"):
+                target.launch(_task(), "claude/issue-1-task-a", tmp_path / "wt")
+            with pytest.raises(RuntimeError, match="preview"):
+                target.launch_semantic_fix("op-1", "fix the tests")
+        resolve_command.assert_not_called()
+        start_process.assert_not_called()
+        semantic_fix.assert_not_called()
+        assert not (tmp_path / "logs").exists()
+
+    def test_auto_preview_resolves_detected_cli_without_allow_flag(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(
+            dispatch_targets.shutil,
+            "which",
+            lambda name: "/usr/bin/agy" if name == "agy" else None,
+        )
+        target = build_dispatch_target(
+            TargetBuildConfig("auto", None, None, tmp_path / "logs", preview_only=True)
+        )
+        assert isinstance(target, LocalProcessDispatchTarget)
+        assert target.target_name == "agy-cli"
+        assert target.preview is True
+        assert target._local_cmd == AGY_CLI_LOCAL_CMD_TEMPLATE
 
     def test_unsafe_cli_with_allow_unsafe_flag_succeeds(self, tmp_path):
         for target_name in ["claude-cli", "agy-cli", "codex-cli", "grok-cli"]:

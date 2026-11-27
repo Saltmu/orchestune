@@ -41,6 +41,8 @@ from orchestune.dispatch.reporting.progress import (
 from orchestune.dispatch.reporting.progress_output import select_progress_sink
 from orchestune.dispatch.reporting.report import (
     _report_to_dict,
+    local_cli_preview_from_target,
+    render_local_cli_preview_lines,
     write_github_step_summary,
 )
 from orchestune.dispatch.reporting.report_output import (
@@ -277,6 +279,9 @@ def _run_post_cycle_phases(
 def _run_dispatcher(config: DispatcherConfig) -> _DispatcherRunResult:
     if not config.apply:
         report = run_dispatch_cycle(config)
+        preview = local_cli_preview_from_target(config.dispatch_target)
+        if preview is not None:
+            report.local_cli_preview = preview
         for name, _call, _enabled in _post_cycle_steps(config, report, False, None):
             config.progress.emit(name, "skipped", reason="dry_run")
         return _DispatcherRunResult(
@@ -333,6 +338,8 @@ def _emit_human_summary(report: CycleReport) -> None:
                 "launches, completion handoff/GC, and integration are skipped. "
                 "Re-run with --apply to apply changes."
             )
+        if report.local_cli_preview is not None:
+            lines.extend(render_local_cli_preview_lines(report.local_cli_preview))
         lines.extend(
             render_skipped_text(merge_skips(report.skips, report.scheduling_decisions))
             + render_forge_warnings_text(report.forge_warnings)

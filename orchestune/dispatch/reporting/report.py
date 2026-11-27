@@ -7,6 +7,7 @@ import os
 import sys
 
 from orchestune.consistency.supervisor import consistency_cycle_to_dict
+from orchestune.dispatch.cycle.report import LocalCliPreview
 from orchestune.dispatch.cycle.run import CycleReport
 from orchestune.dispatch.reporting.summary import (
     merge_skips,
@@ -175,6 +176,53 @@ def _format_lock_changes(cycle_report: CycleReport) -> list[str]:
     return lines
 
 
+_LOCAL_CLI_NAMES = frozenset({"claude-cli", "agy-cli", "codex-cli", "grok-cli"})
+_LOCAL_CLI_APPLY_WARNING = (
+    "Local CLI launch with --apply requires explicit --allow-unsafe-agent-execution."
+)
+
+
+def local_cli_preview_from_target(target: object) -> LocalCliPreview | None:
+    """Build the preview plan from an already constructed target."""
+    if not getattr(target, "preview", False):
+        return None
+    name = getattr(target, "target_name", None)
+    if name not in _LOCAL_CLI_NAMES:
+        return None
+    requires_opt_in = bool(getattr(target, "requires_unsafe_opt_in", False))
+    custom_command = getattr(target, "semantic_fix_custom_local_cmd", None)
+    reviewer = getattr(target, "reviewer_bot", None)
+    return LocalCliPreview(
+        target=str(name),
+        reviewer=reviewer if isinstance(reviewer, str) else None,
+        command_source="custom" if custom_command else "builtin",
+        requires_unsafe_opt_in=requires_opt_in,
+        warning_code=(
+            "unsafe_agent_execution_opt_in_required" if requires_opt_in else None
+        ),
+    )
+
+
+def render_local_cli_preview_lines(plan: LocalCliPreview) -> list[str]:
+    reviewer = plan.reviewer if plan.reviewer is not None else "null"
+    lines = [
+        (
+            "[orchestune:preview] local CLI "
+            f"target={plan.target} reviewer={reviewer} "
+            f"command_source={plan.command_source}"
+        )
+    ]
+    if plan.command_source == "builtin":
+        lines.append(
+            "[orchestune:preview] builtin CLI=" + plan.target.removesuffix("-cli")
+        )
+    else:
+        lines.append("[orchestune:preview] custom command configured")
+    if plan.requires_unsafe_opt_in:
+        lines.append(_LOCAL_CLI_APPLY_WARNING)
+    return lines
+
+
 def _format_cycle_report_summary(cycle_report: CycleReport) -> list[str]:
     lines = ["### 🚀 新規起動タスク"]
     if not cycle_report.selected:
@@ -206,6 +254,8 @@ def _format_cycle_report_summary(cycle_report: CycleReport) -> list[str]:
         lines.append("")
 
     lines.extend(_format_lock_changes(cycle_report))
+    if cycle_report.local_cli_preview is not None:
+        lines.extend(render_local_cli_preview_lines(cycle_report.local_cli_preview))
     return (
         lines
         + render_skipped_markdown(
@@ -284,4 +334,7 @@ def _report_to_dict(report: CycleReport) -> dict:
     }
     if getattr(report, "scheduling_deferred_reason", None) is not None:
         d["scheduling_deferred_reason"] = report.scheduling_deferred_reason
+    preview = getattr(report, "local_cli_preview", None)
+    if preview is not None:
+        d["local_cli_preview"] = preview.to_dict()
     return d

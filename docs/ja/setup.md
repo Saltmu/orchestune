@@ -276,14 +276,14 @@ PATH 上の `claude` と `codex` が片方だけの場合、上書きのない `
 > [!IMPORTANT]
 > **信頼モデルとセキュリティ上の危険性について**
 > 
-> これらのローカルCLIターゲットは、承認やサンドボックスをバイパスする完全権限で起動されます。暗黙的な完全権限実行を防ぐため、実行の際は明示的に `--allow-unsafe-agent-execution` CLIオプションを指定してオプトインする必要があります（安全のため設定ファイルでの指定は禁止されています）。オプトインがない場合は、起動時に設定エラーとなり実行が拒否されます（Fail-Closed）。
+> これらのローカルCLIターゲットは、承認やサンドボックスをバイパスする完全権限で起動されます。暗黙的な完全権限実行を防ぐため、`--apply` で起動するときは明示的に `--allow-unsafe-agent-execution` CLIオプションを指定してオプトインする必要があります（安全のため設定ファイルでの指定は禁止されています）。プレビューはフラグなしでも成功し、エージェントは起動しません。フラグ未指定のプレビューは、apply にはこのフラグが必要だと警告します。プレビューの成功は後続の apply を許可しません。`--apply` でオプトインがない場合は、起動前に設定エラーとなり実行が拒否されます（Fail-Closed）。
 > 
 > また、サブタスクごとの `git worktree` はソースコードの差分を分離するための境界であり、OSレベルのセキュリティ境界（サンドボックス）ではありません。完全権限で起動されたCLIプロセスは、実行ユーザーがアクセス可能な範囲のホームディレクトリ、認証情報、他のプロジェクトフォルダ、ネットワーク等に自由にアクセスできます。信頼できないリポジトリやIssueを処理する場合、または本番・共有環境で実行する場合は、コンテナや仮想マシン（VM）などのOSレベルの隔離層を併用することを強く推奨します。
 
 ### `grok-cli`（Grok Build）を使う場合
 
 - **認証**: Orchestuneは資格情報を扱いません。事前に `grok login`（ヘッドレス環境では `--device-auth` を併用）を実行するか、ディスパッチャを動かす環境に `XAI_API_KEY` を設定してください。
-- **権限**: `--always-approve` は承認をバイパスするため、他のローカルCLIと同様に `--allow-unsafe-agent-execution` が必須です。`~/.grok/config.toml` やプロジェクトの `.grok/config.toml` にある deny ルールと `PreToolUse` フックは引き続き有効で、Orchestuneは上書きしません。承認待ちで止まったタスクは、既存の `task_timeout_seconds` によるゾンビGCで回収されます。
+- **権限**: `--always-approve` は承認をバイパスするため、他のローカルCLIと同様に `--apply` では `--allow-unsafe-agent-execution` が必須です。プレビューはフラグなしで起動計画を確認でき、プロセスは起動しません。`~/.grok/config.toml` やプロジェクトの `.grok/config.toml` にある deny ルールと `PreToolUse` フックは引き続き有効で、Orchestuneは上書きしません。承認待ちで止まったタスクは、既存の `task_timeout_seconds` によるゾンビGCで回収されます。
 - **plan review**: `--always-approve` でも plan review はスキップされないため、プリセットは無人実行で停止しないよう `--no-plan` を付けます。
 - **プロファイル**: `[execution_profiles.<name>.grok-cli]` で `model` と `reasoning_effort` を指定でき、それぞれ `--model` / `--effort` として渡されます。`--effort` の受理値は公開されていないため、Orchestuneは値を検証しません。不正な値ではGrokがエラー終了し、既存の early-death 経路で扱われます。`grok-cli` のテーブルがなければGrokの既定モデルで動きますが、`--profile X` を明示した場合に `X` に `grok-cli` のエントリがなければ、これまでどおり検証エラーになります。
 - **ログと usage**: 出力はNDJSON（`--output-format streaming-json`）として `logs/<branch-slug>.log` に追記されます。JSONスキーマが公開されていないため、汎用の usage パーサだけが適用されます。`usage.input_tokens` / `output_tokens` が見つからなければ usage は取得できず、`max_tokens_per_task` を設定していても判定は `unknown`（`allowed` ではない）になります。モデル名や料金を推測で埋めることはありません。
