@@ -225,15 +225,17 @@ def _overflow_block(
     table: RenderableType,
     attention: str,
     footer: str | None,
+    notice: str | None = None,
 ) -> Block:
     """Overflow frame without the blank lines that push the footer off a short TTY."""
-    block = _packed_overflow(out, plain, heading, table, attention, footer)
+    shown = _OVERFLOW_NOTICE if notice is None else notice
+    block = _packed_overflow(out, plain, heading, table, attention, footer, shown)
     if _fits_screen(out, block.rich):
         return block
     clipped = _clip_attention(out, attention)
     if clipped == attention:
         return block
-    return _packed_overflow(out, plain, heading, table, clipped, footer)
+    return _packed_overflow(out, plain, heading, table, clipped, footer, shown)
 
 
 def _packed_overflow(
@@ -243,8 +245,9 @@ def _packed_overflow(
     table: RenderableType,
     text: str,
     footer: str | None,
+    notice: str,
 ) -> Block:
-    parts: list[str | RenderableType] = [heading, table, text, _OVERFLOW_NOTICE]
+    parts: list[str | RenderableType] = [heading, table, text, notice]
     if footer is not None:
         parts.append(footer)
     return _rich_block(plain, parts, out, None)
@@ -308,6 +311,56 @@ def _summary_rows(snapshot: ParentStatusSnapshot) -> tuple[tuple[str, str], ...]
     return tuple(rows)
 
 
+def _fitted_parent_attention(out: CliOutput, snapshot: ParentStatusSnapshot) -> str:
+    """Keep ``orchestune status -p N`` when the attention line is wider than the TTY."""
+    attention = compact_parent_attention(snapshot)
+    console = out.console
+    width = 80 if console is None else console.width
+    suffix = f" orchestune status -p {snapshot.parent_issue}"
+    if cell_len(attention) <= width or cell_len(suffix) >= width:
+        return attention
+    head = chop_cells(attention, width - cell_len(suffix))
+    prefix = head[0].rstrip() if head else ""
+    return f"{prefix}{suffix}"
+
+
+def _parent_overflow_notice(parent_issue: int) -> str:
+    return (
+        "タスク詳細は表示領域に収まらないため省略しています。"
+        f"`orchestune status -p {parent_issue}` で全体を表示できます。"
+    )
+
+
+def _summary_table(out: CliOutput, rows: tuple[tuple[str, str], ...]) -> RenderableType:
+    return out.table_block(("項目", "値"), rows, title="親 Issue サマリー").rich
+
+
+def _fitting_parent_overflow(
+    out: CliOutput,
+    plain: Block,
+    heading: str,
+    rows: tuple[tuple[str, str], ...],
+    attention: str,
+    footer: str,
+    notice: str,
+) -> Block:
+    """Drop trailing summary rows until the watch footer stays inside the TTY."""
+    kept = rows
+    while True:
+        block = _overflow_block(
+            out,
+            plain,
+            heading,
+            _summary_table(out, kept),
+            attention,
+            footer,
+            notice,
+        )
+        if _fits_screen(out, block.rich) or len(kept) == 1:
+            return block
+        kept = kept[:-1]
+
+
 def _parent_sections(report: str) -> tuple[str, ...]:
     lines = report.splitlines()
     indexes = [
@@ -345,8 +398,14 @@ def parent_status_block(
     full = _rich_block(plain, parts, out, footer)
     if footer is None or _fits_screen(out, full.rich):
         return full
-    return _overflow_block(
-        out, plain, heading, summary, compact_parent_attention(snapshot), footer
+    return _fitting_parent_overflow(
+        out,
+        plain,
+        heading,
+        _summary_rows(snapshot),
+        _fitted_parent_attention(out, snapshot),
+        footer,
+        _parent_overflow_notice(snapshot.parent_issue),
     )
 
 

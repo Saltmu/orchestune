@@ -11,6 +11,7 @@ import json
 import os
 import re
 import time
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
@@ -259,9 +260,9 @@ class FakeStream(io.StringIO):
         return "utf-8"
 
 
-def _output(*, tty: bool, env: dict[str, str] | None = None):
+def _output(*, tty: bool, env: dict[str, str] | None = None, width: int = 140):
     stream = FakeStream(tty=tty)
-    out: CliOutput = make_output(stream, env=env or {}, width=140)
+    out: CliOutput = make_output(stream, env=env or {}, width=width)
     return out, stream
 
 
@@ -1001,3 +1002,87 @@ class TestParentDashboard:
         full = ANSI.sub("", one_stream.getvalue())
         assert "表示領域に収まらない" not in full
         assert "log-136-c" in full
+
+    def test_short_overflow_keeps_footer_and_parent_command(self):
+        from orchestune.operator_guidance import (
+            EvidenceState,
+            NextOwner,
+            OperatorGuidance,
+            ProgressOutlook,
+        )
+        from orchestune.parent_status import (
+            AttemptRollup,
+            ChildRollup,
+            IntegrationRollup,
+            ParentStatusSnapshot,
+            SessionRollup,
+        )
+
+        def snapshot(statuses: tuple[str, ...], codes: tuple[str, ...]):
+            guidance = OperatorGuidance(
+                target="parent",
+                stage="review",
+                reason_codes=codes,
+                explanation="observed",
+                next_owner=NextOwner.USER,
+                progress=ProgressOutlook.MANUAL,
+                progress_condition=None,
+                actions=(),
+                references=(),
+                evidence_state=EvidenceState.CURRENT,
+                evidence_note="",
+            )
+            return ParentStatusSnapshot(
+                parent_issue=100,
+                now=NOW,
+                children=ChildRollup(
+                    tuple((name, 1) for name in statuses),
+                    0,
+                    len(statuses),
+                    0,
+                    EvidenceState.CURRENT,
+                    None,
+                ),
+                sessions=SessionRollup((), None, True, EvidenceState.CURRENT, None),
+                integration=IntegrationRollup("確認済み", None, (), False),
+                attempts=AttemptRollup((), EvidenceState.CURRENT, None),
+                next_actions=guidance,
+                report_dir=Path("."),
+                report_dir_note=None,
+            )
+
+        footer = "3秒ごとに自動更新します。Ctrl+Cで終了してください。"
+
+        def shown(out, statuses, codes):
+            block = monitor.parent_status_block(
+                out, snapshot(statuses, codes), NOW, footer
+            )
+            assert out.console is not None
+            rendered = out.console.render_lines(
+                block.rich, out.console.options, pad=False
+            )
+            text = "\n".join("".join(seg.text for seg in line) for line in rendered)
+            return rendered, text
+
+        wide, _wide_stream = _output(tty=True, env={"LINES": "14"})
+        wide_lines, wide_text = shown(
+            wide,
+            (
+                "status:queued",
+                "status:in-progress",
+                "status:done",
+                "status:blocked-human-review",
+            ),
+            (),
+        )
+        assert len(wide_lines) < wide.console.height
+        assert "OPEN" in wide_text
+        assert "orchestune status -p 100" in wide_text
+        assert footer in wide_text
+
+        narrow, _narrow_stream = _output(tty=True, env={"LINES": "14"}, width=80)
+        codes = tuple(f"review-status:{number}" for number in range(1, 7))
+        narrow_lines, narrow_text = shown(narrow, ("status:in-progress",), codes)
+        assert len(narrow_lines) < narrow.console.height
+        assert "orchestune status -p 100" in narrow_text
+        assert footer in narrow_text
