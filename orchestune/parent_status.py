@@ -386,7 +386,7 @@ def _sessions(
 def _ledger_readable(path: Path) -> bool:
     try:
         load_run_state_readonly(path)
-    except ValueError:
+    except Exception:  # noqa: BLE001 - boundary: an unreadable ledger stays unknown and is not quarantined
         return False
     return True
 

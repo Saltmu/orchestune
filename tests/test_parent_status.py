@@ -525,6 +525,20 @@ def test_corrupt_run_state_degrades_without_crashing(
     assert ledger.read_text(encoding="utf-8") == "{"
 
 
+def test_schema_invalid_run_state_stays_unknown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_readers(monkeypatch, _children(_issue(4, (StatusLabel.QUEUED.value,))), [])
+    ledger = tmp_path / "run_state.json"
+    text = '{"launch_history": null}'
+    ledger.write_text(text, encoding="utf-8")
+    snapshot = build_parent_status_snapshot(_request(tmp_path), _forge())
+    assert snapshot.sessions.membership_known is False
+    assert snapshot.next_actions.actions == ()
+    assert snapshot.next_actions.progress is ProgressOutlook.UNKNOWN
+    assert ledger.read_text(encoding="utf-8") == text
+
+
 def test_missing_and_corrupt_reports_are_visible(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
