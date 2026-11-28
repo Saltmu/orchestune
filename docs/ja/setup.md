@@ -291,6 +291,26 @@ PATH 上の `claude` と `codex` が片方だけの場合、上書きのない `
 
 別途、許可設定ファイルを準備するステップは不要です。`orchestune bootstrap`は必須のGitHubラベルの起票のみを行います。
 
+### CLIを持たないエージェントへの橋渡し（Muse bridge、実験的）
+
+エージェントの中にはCLIの入口を持たないものがあります。たとえばClaude CodeのようなCLIではなく、Museはアプリやチャットのランタイム経由で動作し、プロンプトを受けて作業が終わると終了するようなローカルバイナリを提供しません。`scripts/muse_bridge.py` のブリッジ用スーパーバイザは、`local` ターゲットのカスタム `local-cmd` を使って、そうしたエージェントをディスパッチにつなぎます。
+
+```toml
+# orchestune.toml
+dispatch-target = "local"
+local-cmd = "python3 scripts/muse_bridge.py --issue {issue_number} --branch {branch_name} --worktree {worktree_path} --context {context_json}"
+task-timeout-seconds = 0
+```
+
+動作の流れ:
+
+1. ディスパッチャがタスクをclaimしてworktreeを作成し、ローカルCLIとまったく同じようにスーパーバイザをデタッチドプロセスとして起動します。
+2. スーパーバイザは `request-<issue>.json`（Issue、ブランチ、worktree、コンテキストのパス、自PID）をinboxディレクトリ（既定は `~/.orchestune-muse/inbox`、`--inbox-dir` または環境変数 `ORCHESTUNE_MUSE_INBOX_DIR` で変更可）へ原子的に書き、待機中は `heartbeat-<issue>.txt` を更新し続けます。
+3. 外部エージェントがinboxを監視し、指定されたworktreeで作業して、プルリクエストを作成し、そのworktreeから `orchestune complete` を実行します。その後に初めて、マーカー `done-<issue>.json` に `{"status": "done"}`（続けられない場合は `{"status": "blocked", "reason": "..."}`）を書きます。
+4. スーパーバイザは `done` で終了コード0、`blocked` で1、タイムアウト（`--timeout-seconds`、既定 `0` = 無期限に待つ）で2を返します。
+
+成立の鍵は2つの契約です。第一に、タスク完了はスーパーバイザの終了ではなく `orchestune complete`（Outcome Recordと `status:done` ラベル）で捕捉されます。マーカーはスーパーバイザへの終了合図にすぎません。第二に、エージェントの作業中、スーパーバイザは生き続けます。`early-death-window-seconds` 以内にコミットなしで終了したローカルプロセスは起動失敗として再キューされるため、「ファイルを書いて即終了する」橋渡しは成立しません。同じ理由で `task-timeout-seconds = 0`（またはエージェントの想定作業時間より長い値）を設定してください。ディスパッチャとエージェントはinboxディレクトリを共有する必要があるため、実運用では両方を同じホストで動かします。ローカルCLIディスパッチと同じ構図で、自分のVMがワーカーになる形です。
+
 ---
 
 ## 6. GitHub Actions上での定期実行とcross-runner直列化

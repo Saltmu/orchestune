@@ -291,6 +291,26 @@ When both or neither review CLI is on PATH, the resolved execution target determ
 
 There is no separate permission-file setup step required; `orchestune bootstrap` only ensures the required GitHub labels exist.
 
+### Bridging to an agent without a CLI (Muse bridge, experimental)
+
+Some agents have no CLI entry point: Muse, for example, runs through its app/chat runtime and offers no local binary that takes a prompt and exits when the work is done. The bridge supervisor in `scripts/muse_bridge.py` connects such an agent to dispatch through the `local` target's custom `local-cmd`:
+
+```toml
+# orchestune.toml
+dispatch-target = "local"
+local-cmd = "python3 scripts/muse_bridge.py --issue {issue_number} --branch {branch_name} --worktree {worktree_path} --context {context_json}"
+task-timeout-seconds = 0
+```
+
+How it works:
+
+1. The dispatcher claims the task, creates the worktree and launches the supervisor as a detached process, exactly like a local CLI.
+2. The supervisor atomically writes `request-<issue>.json` (issue, branch, worktree, context path, its PID) into the inbox directory — `~/.orchestune-muse/inbox` by default, or `--inbox-dir` / the `ORCHESTUNE_MUSE_INBOX_DIR` environment variable — and refreshes `heartbeat-<issue>.txt` while it waits.
+3. The external agent watches the inbox, does the work in the given worktree, opens the pull request and runs `orchestune complete` from that worktree. Only then does it write the marker `done-<issue>.json` containing `{"status": "done"}` (or `{"status": "blocked", "reason": "..."}` when it cannot continue).
+4. The supervisor exits 0 on `done`, 1 on `blocked`, and 2 on timeout (`--timeout-seconds`, default `0` = wait indefinitely).
+
+Two contracts make this work. First, task completion is captured by `orchestune complete` (the Outcome Record and the `status:done` label), never by the supervisor exiting — the marker is only the supervisor's cue to exit. Second, the supervisor stays alive while the agent works: a local process that exits with no commits inside `early-death-window-seconds` is treated as a startup failure and requeued, so a "write a file and exit immediately" bridge does not work. Set `task-timeout-seconds = 0` (or a value longer than the agent's expected work) for the same reason. The dispatcher and the agent must share the inbox directory, so in practice both run on the same host — the same arrangement as a local CLI dispatch, with your own VM as the worker.
+
 ---
 
 ## 6. Scheduled Runs on GitHub Actions and Cross-Runner Serialization
