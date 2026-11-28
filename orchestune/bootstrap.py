@@ -1,13 +1,36 @@
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Protocol, cast
+from urllib.parse import urlparse
 
-from orchestune.forge import REQUIRED_LABELS, ForgeError, GitHubForge, RepoAdminForge
+from orchestune.forge import (
+    REQUIRED_LABELS,
+    BootstrapResult,
+    ForgeError,
+    GitHubForge,
+    LabelSpec,
+    RepoAdminForge,
+)
 from orchestune.infra.cli_output import Level, make_output
 from orchestune.infra.git_cli import run_git
+
+_OWNER_REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+
+
+class _RepositoryLabelForge(Protocol):
+    def read_effective_repository(self, *, cwd: Path | None = None) -> str: ...
+
+    def ensure_labels(
+        self,
+        labels: tuple[LabelSpec, ...],
+        *,
+        repository: str | None = None,
+    ) -> BootstrapResult: ...
 
 
 def _is_git_repo_empty(cwd: Path) -> bool:
@@ -83,13 +106,68 @@ def run_bootstrap(forge: RepoAdminForge | None = None, cwd: Path = Path(".")) ->
             )
             return 1
 
-    stdout = make_output(sys.stdout)
+    return _apply_required_labels(forge)
+
+
+def prepare_github_labels(
+    forge: RepoAdminForge | None = None, *, cwd: Path = Path(".")
+) -> int:
+    """必須ラベルだけを用意する。初回コミットと push は行わない。"""
+    forge = forge or GitHubForge()
+    checkout = _checkout_github_repository(cwd)
+    if checkout is None:
+        return _fail("cannot resolve the checkout GitHub repository from origin")
     try:
         forge.check_auth()
-        result = forge.ensure_labels(REQUIRED_LABELS)
-    except ForgeError as e:
-        make_output(sys.stderr).message(Level.FAILURE, f"Error: {e}")
-        return 1
+        effective = _effective_repository(forge, cwd)
+    except ForgeError as error:
+        return _fail(str(error))
+    if checkout.casefold() != effective.casefold():
+        return _fail(
+            f"GitHub target mismatch: checkout {checkout}, effective {effective}"
+        )
+    return _apply_required_labels(forge, repository=checkout)
+
+
+def _apply_required_labels(
+    forge: RepoAdminForge, *, repository: str | None = None
+) -> int:
+    try:
+        forge.check_auth()
+        result = _ensure_required_labels(forge, repository)
+    except ForgeError as error:
+        return _fail(str(error))
+    except subprocess.CalledProcessError as error:
+        detail = error.stderr.strip() if isinstance(error.stderr, str) else ""
+        return _fail(detail or str(error))
+    _report_labels(result)
+    return 0
+
+
+def _ensure_required_labels(
+    forge: RepoAdminForge, repository: str | None
+) -> BootstrapResult:
+    if repository is None:
+        return forge.ensure_labels(REQUIRED_LABELS)
+    bound = cast(_RepositoryLabelForge, forge)
+    return bound.ensure_labels(REQUIRED_LABELS, repository=repository)
+
+
+def _effective_repository(forge: RepoAdminForge, cwd: Path) -> str:
+    reader = getattr(forge, "read_effective_repository", None)
+    if not callable(reader):
+        raise ForgeError("GitHubの実効リポジトリを照合できません")
+    try:
+        slug = reader(cwd=cwd)
+    except TypeError:
+        slug = reader()
+    if not isinstance(slug, str) or _OWNER_REPO.fullmatch(slug) is None:
+        raise ForgeError("GitHubの実効リポジトリを照合できません")
+    return slug
+
+
+def _report_labels(result: BootstrapResult) -> None:
+    stdout = make_output(sys.stdout)
     created = result.created_labels
     stdout.message(
         Level.SUCCESS if created else Level.INFO,
@@ -98,7 +176,63 @@ def run_bootstrap(forge: RepoAdminForge | None = None, cwd: Path = Path(".")) ->
     for name in created:
         stdout.message(Level.SUCCESS, f"created label {name}")
     stdout.message(Level.INFO, f"Labels already present: {len(result.existing_labels)}")
-    return 0
+
+
+def _fail(message: str) -> int:
+    make_output(sys.stderr).message(Level.FAILURE, f"Error: {message}")
+    return 1
+
+
+def _checkout_github_repository(cwd: Path) -> str | None:
+    url = _origin_url(cwd)
+    if url is None:
+        return None
+    return _owner_and_repo(url)
+
+
+def _origin_url(cwd: Path) -> str | None:
+    try:
+        completed = run_git(["remote", "get-url", "origin"], cwd=cwd, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    return completed.stdout.strip()
+
+
+def _owner_and_repo(url: str) -> str | None:
+    text = url.strip()
+    if text.endswith(".git"):
+        text = text[: -len(".git")]
+    slug = _scp_owner_and_repo(text)
+    if slug is None:
+        slug = _url_owner_and_repo(text)
+    if slug is None or _OWNER_REPO.fullmatch(slug) is None:
+        return None
+    return slug
+
+
+def _scp_owner_and_repo(text: str) -> str | None:
+    prefix = "git@github.com:"
+    if "://" in text or not text.lower().startswith(prefix):
+        return None
+    parts = [part for part in text[len(prefix) :].split("/") if part]
+    if len(parts) != 2:
+        return None
+    return f"{parts[0]}/{parts[1]}"
+
+
+def _url_owner_and_repo(text: str) -> str | None:
+    if "://" not in text:
+        return None
+    parsed = urlparse(text)
+    host = parsed.hostname
+    if host is None or host.lower() != "github.com":
+        return None
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) != 2:
+        return None
+    return f"{parts[0]}/{parts[1]}"
 
 
 def main(argv: list[str] | None = None) -> None:
