@@ -631,3 +631,114 @@ def is_git_ignored(cwd: Path | str, target_path: str) -> bool:
         return res.returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
+
+
+@dataclass(frozen=True)
+class CheckoutInspection:
+    """Read-only classification of the checkout that contains ``cwd``."""
+
+    kind: str
+    toplevel: Path | None = None
+    status_text: str = ""
+
+
+@dataclass(frozen=True)
+class IgnoreQuery:
+    """Ignore and index facts for one path. ``None`` means the read failed."""
+
+    ignored: bool | None
+    tracked: bool | None
+    pattern: str | None
+
+
+def inspect_checkout(cwd: Path) -> CheckoutInspection:
+    """Classify a checkout without staging, committing, or switching branches."""
+    try:
+        inside = run_git(["rev-parse", "--is-inside-work-tree"], cwd=cwd, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return CheckoutInspection("not_git")
+    if inside.returncode != 0:
+        return CheckoutInspection("not_git")
+    bare = _git_text(["rev-parse", "--is-bare-repository"], cwd)
+    if bare is None:
+        return CheckoutInspection("unreadable")
+    if bare == "true":
+        return CheckoutInspection("bare")
+    if inside.stdout.strip() != "true":
+        return CheckoutInspection("not_git")
+    try:
+        toplevel, _common = get_git_repository_paths(cwd)
+    except (OSError, subprocess.SubprocessError, RuntimeError):
+        return CheckoutInspection("unreadable")
+    if (toplevel / ".git").is_file():
+        return CheckoutInspection("linked_worktree", toplevel)
+    if _git_text(["rev-parse", "HEAD"], cwd) is None:
+        return CheckoutInspection("no_head", toplevel)
+    status = _git_ok(["status", "--porcelain=v1", "--untracked-files=all"], toplevel)
+    if status is None:
+        return CheckoutInspection("unreadable", toplevel)
+    return CheckoutInspection("ok", toplevel, status)
+
+
+def read_origin_url(cwd: Path) -> str | None:
+    """Return ``origin``'s URL, or ``None`` when it cannot be read."""
+    return _git_text(["remote", "get-url", "origin"], cwd)
+
+
+def query_path_ignore(cwd: Path, relative: str) -> IgnoreQuery:
+    """Read ignore, negation, and index state. Errors stay ``None``."""
+    try:
+        quiet = run_git(["check-ignore", "-q", "--", relative], cwd=cwd, check=False)
+        verbose = run_git(
+            ["check-ignore", "-v", "--non-matching", "--", relative],
+            cwd=cwd,
+            check=False,
+        )
+        listed = run_git(
+            ["ls-files", "--full-name", "-z", "--", relative],
+            cwd=cwd,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return IgnoreQuery(None, None, None)
+    ignored = _exit_flag(quiet.returncode)
+    tracked = None if listed.returncode != 0 else bool(listed.stdout.strip())
+    pattern = _ignore_pattern(verbose) if verbose.returncode in {0, 1} else None
+    if verbose.returncode not in {0, 1}:
+        ignored = None
+    return IgnoreQuery(ignored, tracked, pattern)
+
+
+def _git_text(args: list[str], cwd: Path) -> str | None:
+    result = _git_ok(args, cwd)
+    if result is None:
+        return None
+    return result.strip()
+
+
+def _git_ok(args: list[str], cwd: Path) -> str | None:
+    try:
+        result = run_git(args, cwd=cwd, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout
+
+
+def _exit_flag(code: int) -> bool | None:
+    if code == 0:
+        return True
+    if code == 1:
+        return False
+    return None
+
+
+def _ignore_pattern(result: GitResult) -> str | None:
+    line = result.stdout.splitlines()[0] if result.stdout.splitlines() else ""
+    left, _tab, _path = line.partition("\t")
+    _source, _sep, pattern = left.partition(":")
+    _line, sep, pattern = pattern.partition(":")
+    if sep != ":":
+        return None
+    return pattern

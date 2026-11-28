@@ -383,6 +383,15 @@ def _resolve_paths(
     }
 
 
+def read_resolved_runtime_paths(
+    primary_root: Path, toml_data: TomlTable | None = None
+) -> ResolvedPaths:
+    """Resolve runtime paths from config without building a dispatch target."""
+    data = find_and_load_config_file(primary_root) if toml_data is None else toml_data
+    normalized = validate_toml_config(data) if data else {}
+    return _resolve_paths(normalized, primary_root, primary_root)
+
+
 def _resolve_cloud_settings(
     toml_data: TomlTable,
 ) -> tuple[str | None, str | None, str | None]:

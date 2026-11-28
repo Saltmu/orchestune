@@ -870,6 +870,7 @@ _QUICK_REFERENCE_COMMANDS = {
     "skills install",
     "skills update",
     "skills uninstall",
+    "init",
     "replan",
     "remediate",
     "recover",

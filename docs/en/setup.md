@@ -17,6 +17,18 @@ Orchestune is designed around the assumption that an agent implements according 
 
 Pre-adoption readiness ((a)–(c), execution target, reviewer, gitignore, and auth) can be checked in one go with `orchestune doctor --execution-mode local` (add `--online` to include GitHub authentication). If any item is missing, remediation guidance and examples are shown as warnings.
 
+### Existing repositories (orchestune init)
+
+In an existing Git repository, `orchestune init` walks through skills, configuration, ignore rules, labels, and doctor. `--dry-run` asks no questions and takes no lock, network call, or write; it prints the planned diff and marks interactive or online steps as not performed. `--offline` skips GitHub authentication and label creation.
+
+Normal mode runs only when both stdin and stdout are TTYs. Otherwise it exits 2 and points to `orchestune init --dry-run` and the individual `skills`, `config`, `bootstrap`, and `doctor` commands. Each write confirmation defaults to No on an empty answer.
+
+Exit codes are 0 for success, including doctor warnings alone; 1 for an operation failure or a doctor error; 2 for a failed precondition or rejected input; 3 when `.gitignore` changes after approval or a config conflict is found; and 130 for wizard cancel, Ctrl+C, or EOF. After 130 or a `.gitignore` conflict, later steps do not run.
+
+A non-Git directory, a bare repository, a repository with no HEAD, and a linked worktree are rejected with exit 2 before side effects. A subdirectory still targets the Git root. The command does not change directory, run `git init`, commit, or push. Existing uncommitted work stays in place, and `git status` is only displayed.
+
+The order is preconditions, base ignores (`/orchestune.toml`, `/.orchestune/`, `/.orchestune-installer/`), project-scoped skill install, the config wizard, effective runtime-path ignores, label preparation, then local doctor. Declining the base ignores skips skill install and config save and records the reason. Completed ignore or label changes are reread on the next run and are not rolled back.
+
 To skip the pre-flight readiness check in the `orchestune-readiness` skill before task decomposition, set `skip-readiness-check = true` (default: `false`) in the configuration file (also configurable via the advanced wizard menu). This setting only skips the pre-flight check in `orchestune-readiness`; standalone `orchestune doctor` and dispatch preflight checks remain active.
 
 ### Creating and Editing the Configuration File
