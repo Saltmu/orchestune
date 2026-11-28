@@ -1297,6 +1297,17 @@ use the operator-confirmed external recovery procedure above.
 
 When `--watch` cannot fit the details, the frame keeps each target, whether attention is needed, and `orchestune status` as the way to read the rest. TTY and plain output carry the same meaning. Status does not gain a JSON mode.
 
+### Parent dashboard
+
+`orchestune status -p <N>` or `orchestune status --parent-issue <N>` without `--dispatch-report` shows that parent's latest report, child progress, active sessions, integration state, and next actions. `--report-dir` is optional. When it is omitted, the command uses the configured report directory, or `.orchestune/reports/dispatch` when the configuration has none. `--watch` is allowed.
+
+```text
+orchestune status -p 100
+orchestune status -p 100 --watch
+```
+
+When `--watch` cannot fit the details, the frame keeps the parent summary, what needs attention, `orchestune status -p <N>`, and the refresh footer. The command is read-only. Status does not gain a JSON mode.
+
 ### Last observation of a parent integration
 
 `orchestune status --parent-issue <N> --dispatch-report <result.json>` reads one result file that dispatch saved and shows why that parent's integration stopped and what to do next. The result file is the absolute path printed as `report saved:` on dispatch stdout. When `--report-path` is omitted, the default is `.orchestune/reports/dispatch/parent-<N>/<run-id>/result.json`.
@@ -1305,7 +1316,7 @@ When `--watch` cannot fit the details, the frame keeps each target, whether atte
 orchestune status --parent-issue 100 --dispatch-report .orchestune/reports/dispatch/parent-100/<run-id>/result.json
 ```
 
-`--parent-issue` and `--dispatch-report` are a pair. Passing only one, or combining either with `--watch`, is an argument error. Plain `orchestune status` and `orchestune status --watch` still show active worktrees.
+`--dispatch-report` requires `--parent-issue` and cannot be combined with `--watch`. `--parent-issue` alone, or with `--watch`, shows the parent dashboard. `orchestune status` and `orchestune status --watch` without a parent flag still show active worktrees.
 
 The text is the last observation. Elapsed time alone does not mean a retry already ran or the block is cleared. The file is enough when no worktree is active. A child Issue number, target SHA, integration PR, or next retry time that is absent from the record is left off the screen. Preview, another parent, another repository, an old file, an unknown version, a corrupt file, an integration that did not run, and a reason outside this view all say the current state is unknown and point at that parent's apply result. The read does not update Issues, recover state, start workers, or save state.
 

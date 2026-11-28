@@ -12,9 +12,18 @@ from pathlib import Path
 from rich.cells import cell_len, chop_cells
 from rich.console import Group, RenderableType
 
-from orchestune.forge import Forge
+from orchestune.forge import Forge, GitHubForge
 from orchestune.infra.cli_output import Block, CliOutput, make_output
 from orchestune.infra.cli_progress import progress
+from orchestune.operator_guidance import EvidenceState
+from orchestune.parent_status import (
+    ParentObservationCache,
+    ParentStatusRequest,
+    ParentStatusSnapshot,
+    build_parent_status_snapshot,
+    compact_parent_attention,
+    format_parent_status_report,
+)
 from orchestune.status_snapshot import (
     StatusSnapshot,
     WorktreeStatus,
@@ -33,6 +42,16 @@ _NO_DISPATCH = "現在アクティブなディスパッチはありません。"
 _OVERFLOW_NOTICE = (
     "タスク詳細は表示領域に収まらないため省略しています。"
     "`orchestune status` で全体を表示できます。"
+)
+_PARENT_SECTION_TITLES = (
+    "親 Issue サマリー",
+    "稼働中セッション",
+    "統合・レビュー状態",
+    "次の操作案内",
+)
+_CHILD_MEMBERSHIP_UNKNOWN = "子 Issue の所属は不明です。"
+_DISPATCH_REPORT_ERROR = (
+    "--dispatch-report は --parent-issue と同時に指定し、--watch とは併用できません"
 )
 
 
@@ -86,16 +105,26 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Refresh interval in seconds when --watch is set (default 3, integer >= 1).",
     )
     parser.add_argument(
+        "-p",
         "--parent-issue",
         type=_positive_int,
         default=None,
-        help="Parent Issue number whose latest integration observation is shown.",
+        help=(
+            "Parent Issue to show. With --dispatch-report, show that saved file. "
+            "Without it, show the parent dashboard."
+        ),
     )
     parser.add_argument(
         "--dispatch-report",
         type=Path,
         default=None,
         help="Result JSON saved by dispatch. Pass it together with --parent-issue.",
+    )
+    parser.add_argument(
+        "--report-dir",
+        type=Path,
+        default=None,
+        help="Dispatch report directory for the parent dashboard.",
     )
     return parser
 
@@ -240,6 +269,125 @@ def _fits_screen(out: CliOutput, renderable: RenderableType) -> bool:
     return len(lines) < console.height
 
 
+def _reject_dispatch_report_args(
+    parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> None:
+    """`--dispatch-report` is only valid with a parent and without `--watch`."""
+    if args.dispatch_report is None:
+        return
+    if args.parent_issue is not None and not args.watch:
+        return
+    parser.error(_DISPATCH_REPORT_ERROR)
+
+
+def _parent_request(args: argparse.Namespace, now: float) -> ParentStatusRequest:
+    return ParentStatusRequest(
+        parent_issue=args.parent_issue,
+        repo_root=Path.cwd(),
+        run_state_path=args.run_state_path,
+        log_dir=args.log_dir,
+        now=now,
+        report_dir=args.report_dir,
+        tail_lines=args.tail_lines,
+    )
+
+
+def _summary_rows(snapshot: ParentStatusSnapshot) -> tuple[tuple[str, str], ...]:
+    children = snapshot.children
+    if children.evidence == EvidenceState.UNAVAILABLE:
+        return (("状態", children.note or _CHILD_MEMBERSHIP_UNKNOWN),)
+    rows = [
+        ("OPEN", str(children.open_count)),
+        ("CLOSED", str(children.closed_count)),
+    ]
+    rows.extend((name, str(count)) for name, count in children.by_status)
+    if children.other:
+        rows.append(("other", str(children.other)))
+    if children.note:
+        rows.append(("注意", children.note))
+    return tuple(rows)
+
+
+def _parent_sections(report: str) -> tuple[str, ...]:
+    lines = report.splitlines()
+    indexes = [
+        index for index, line in enumerate(lines) if line in _PARENT_SECTION_TITLES
+    ]
+    sections: list[str] = []
+    for position, start in enumerate(indexes):
+        end = indexes[position + 1] if position + 1 < len(indexes) else len(lines)
+        sections.append("\n".join(lines[start:end]).rstrip())
+    return tuple(sections)
+
+
+def parent_status_block(
+    out: CliOutput,
+    snapshot: ParentStatusSnapshot,
+    now: float,
+    footer: str | None = None,
+) -> Block:
+    """Parent dashboard: the plain report, or tables plus the same sections."""
+    report = format_parent_status_report(snapshot, now)
+    plain = out.text_block(report if footer is None else f"{report}\n{footer}")
+    if not out.policy.rich:
+        return plain
+    heading = report.splitlines()[0]
+    summary = out.table_block(
+        ("項目", "値"), _summary_rows(snapshot), title="親 Issue サマリー"
+    ).rich
+    parts: list[str | RenderableType] = [heading, summary]
+    if snapshot.sessions.worktrees:
+        rows = tuple(_status_row(status) for status in snapshot.sessions.worktrees)
+        parts.append(
+            out.table_block(_STATUS_HEADERS, rows, title="稼働中セッション").rich
+        )
+    parts.extend(_parent_sections(report))
+    full = _rich_block(plain, parts, out, footer)
+    if footer is None or _fits_screen(out, full.rich):
+        return full
+    return _overflow_block(
+        out, plain, heading, summary, compact_parent_attention(snapshot), footer
+    )
+
+
+def _emit_parent_dashboard(
+    args: argparse.Namespace,
+    out: CliOutput,
+    forge: Forge | None,
+    clock: Callable[[], float] | None,
+    sleep: Callable[[float], None] | None,
+) -> int:
+    """Show the parent dashboard once, or until Ctrl+C when `--watch` is set."""
+    now_fn = clock if clock is not None else time.time
+    sleep_fn = sleep if sleep is not None else time.sleep
+    resolved = forge if forge is not None else GitHubForge()
+    label_cache: dict[int, tuple[float, tuple[str, ...]]] = {}
+    cache = ParentObservationCache()
+
+    def take_snapshot(now: float) -> ParentStatusSnapshot:
+        return build_parent_status_snapshot(
+            _parent_request(args, now),
+            resolved,
+            cache=cache,
+            label_cache=label_cache,
+        )
+
+    if not args.watch:
+        now = now_fn()
+        out.emit(parent_status_block(out, take_snapshot(now), now))
+        return 0
+    footer = f"{args.interval}秒ごとに自動更新します。Ctrl+Cで終了してください。"
+    try:
+        with progress(out) as handle:
+            while True:
+                now = now_fn()
+                handle.update(parent_status_block(out, take_snapshot(now), now, footer))
+                sleep_fn(args.interval)
+    except KeyboardInterrupt:
+        out.emit(out.text_block("\n監視を終了しました。"))
+    return 0
+
+
 def _emit_parent_integration(args: argparse.Namespace, out: CliOutput) -> int:
     """Print one saved parent observation. This path does not write or launch work."""
     path = args.dispatch_report
@@ -267,16 +415,12 @@ def main(
 ) -> int:
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
-    if (args.parent_issue is None) != (args.dispatch_report is None) or (
-        args.parent_issue is not None and args.watch
-    ):
-        parser.error(
-            "--parent-issue と --dispatch-report は同時に指定してください。"
-            "--watch とは併用できません"
-        )
+    _reject_dispatch_report_args(parser, args)
     out = output if output is not None else make_output()
-    if args.parent_issue is not None:
+    if args.dispatch_report is not None:
         return _emit_parent_integration(args, out)
+    if args.parent_issue is not None:
+        return _emit_parent_dashboard(args, out, forge, clock, sleep)
     now_fn = clock if clock is not None else time.time
     sleep_fn = sleep if sleep is not None else time.sleep
     label_cache: dict[int, tuple[float, tuple[str, ...]]] = {}
