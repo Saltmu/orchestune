@@ -21,6 +21,7 @@ from orchestune.infra.repository_config import find_and_load_config_file
 from orchestune.integrator.attempt import OpenAttempt, find_open_attempts
 from orchestune.issue_parsing import ChildDiscoveryResult, find_children_by_parent
 from orchestune.labels import StatusLabel
+from orchestune.ledger.run_state import load_run_state_readonly
 from orchestune.operator_guidance import (
     EvidenceState,
     GuidanceAction,
@@ -366,6 +367,8 @@ def _sessions(
 ) -> SessionRollup:
     if children is None:
         return _unknown_sessions(_CHILD_UNKNOWN)
+    if not _ledger_readable(request.run_state_path):
+        return _unknown_sessions(_RUN_STATE_UNKNOWN)
     try:
         snapshot = build_status_snapshot(
             request.run_state_path,
@@ -378,6 +381,14 @@ def _sessions(
     except (OSError, ValueError, UnicodeError):
         return _unknown_sessions(_RUN_STATE_UNKNOWN)
     return _known_sessions(snapshot.worktrees, children)
+
+
+def _ledger_readable(path: Path) -> bool:
+    try:
+        load_run_state_readonly(path)
+    except ValueError:
+        return False
+    return True
 
 
 def _unknown_sessions(note: str) -> SessionRollup:

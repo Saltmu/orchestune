@@ -509,12 +509,20 @@ def test_corrupt_run_state_degrades_without_crashing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _install_readers(monkeypatch, _children(_issue(4, (StatusLabel.QUEUED.value,))), [])
-    (tmp_path / "run_state.json").write_text("{", encoding="utf-8")
+    ledger = tmp_path / "run_state.json"
+    ledger.write_text("{", encoding="utf-8")
     snapshot = build_parent_status_snapshot(_request(tmp_path), _forge())
     assert snapshot.sessions.membership_known is False
     assert "run_state" in (snapshot.sessions.note or "")
     assert snapshot.next_actions.actions == ()
     assert snapshot.next_actions.progress is ProgressOutlook.UNKNOWN
+    assert ledger.read_text(encoding="utf-8") == "{"
+    assert list(tmp_path.glob("run_state.json.corrupt.*")) == []
+    again = build_parent_status_snapshot(_request(tmp_path), _forge())
+    assert again.sessions.membership_known is False
+    assert again.next_actions.actions == ()
+    assert again.next_actions.progress is ProgressOutlook.UNKNOWN
+    assert ledger.read_text(encoding="utf-8") == "{"
 
 
 def test_missing_and_corrupt_reports_are_visible(
