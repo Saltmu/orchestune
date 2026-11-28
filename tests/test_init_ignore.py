@@ -220,6 +220,48 @@ def test_hyphenated_runtime_keys_follow_the_validated_config(tmp_path: Path) -> 
     assert "custom/worktrees" in names
 
 
+def test_existing_temp_symlink_is_not_overwritten(tmp_path: Path) -> None:
+    root = _repo(tmp_path / "repo")
+    keep = root / "keep.txt"
+    keep.write_text("safe\n", encoding="utf-8")
+    link = root / "..gitignore.orchestune-tmp"
+    link.symlink_to(keep)
+    gitignore = root / ".gitignore"
+    gitignore.write_text("# old\n", encoding="utf-8")
+    mode = gitignore.stat().st_mode & 0o777
+    apply_ignore_plan(root, build_ignore_plan(root, base_candidates(root)))
+    assert keep.read_text(encoding="utf-8") == "safe\n"
+    assert link.is_symlink()
+    assert b"/orchestune.toml\n" in gitignore.read_bytes()
+    assert gitignore.stat().st_mode & 0o777 == mode
+    assert not list(root.glob(".gitignore.orchestune-*"))
+
+
+def test_directory_negation_stays_manual(tmp_path: Path) -> None:
+    root = _repo(tmp_path / "repo")
+    (root / ".gitignore").write_text("/logs/*.log\n!/logs/keep.log\n", encoding="utf-8")
+    plan = build_ignore_plan(root, ((root / "logs", True),))
+    assert plan.decisions[0].action == "manual"
+    assert plan.decisions[0].rule is None
+
+
+def test_unscoped_negation_blocks_every_directory(tmp_path: Path) -> None:
+    root = _repo(tmp_path / "repo")
+    (root / ".gitignore").write_text("!keep.log\n", encoding="utf-8")
+    plan = build_ignore_plan(root, ((root / "logs", True),))
+    assert plan.decisions[0].action == "manual"
+
+
+def test_root_file_negation_does_not_block_other_directories(
+    tmp_path: Path,
+) -> None:
+    root = _repo(tmp_path / "repo")
+    (root / ".gitignore").write_text("!/keep.log\n", encoding="utf-8")
+    plan = build_ignore_plan(root, ((root / ".orchestune", True),))
+    assert plan.decisions[0].action == "append"
+    assert plan.decisions[0].rule == "/.orchestune/"
+
+
 def test_unreadable_config_returns_no_runtime_candidates(tmp_path: Path) -> None:
     root = _repo(tmp_path / "repo")
     (root / "orchestune.toml").write_text("[\n", encoding="utf-8")

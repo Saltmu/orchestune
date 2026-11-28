@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -84,7 +85,8 @@ def build_ignore_plan(
 ) -> IgnorePlan:
     kind, original = _gitignore_state(root / ".gitignore")
     decisions = tuple(
-        _decide(root, path, directory, kind) for path, directory in candidates
+        _guard_directory(_decide(root, path, directory, kind), original)
+        for path, directory in candidates
     )
     return IgnorePlan(decisions, original, kind)
 
@@ -146,6 +148,44 @@ def _from_query(
     return IgnoreDecision(
         shown, "append", "missing from .gitignore", _rule(relative, directory)
     )
+
+
+def _guard_directory(
+    decision: IgnoreDecision, original: bytes | None
+) -> IgnoreDecision:
+    rule = decision.rule or ""
+    if decision.action != "append" or not rule.endswith("/"):
+        return decision
+    if _negation_blocks(original, decision.path):
+        return IgnoreDecision(
+            decision.path, "manual", "a negation rule matches this path"
+        )
+    return decision
+
+
+def _negation_blocks(original: bytes | None, directory: str) -> bool:
+    if not original:
+        return False
+    prefix = directory.strip("/")
+    if not prefix:
+        return False
+    for raw in original.splitlines():
+        text = raw.decode("utf-8", errors="replace").strip()
+        if not text.startswith("!"):
+            continue
+        body = text[1:].strip()
+        if not body:
+            continue
+        anchored = body.startswith("/")
+        if anchored:
+            body = body[1:]
+        if not body:
+            continue
+        if not anchored and "/" not in body.rstrip("/"):
+            return True
+        if body == prefix or body.startswith(f"{prefix}/"):
+            return True
+    return False
 
 
 def _contained(root: Path, candidate: Path) -> Path | None:
@@ -239,6 +279,30 @@ def _create_exclusive(path: Path, payload: bytes) -> None:
 
 
 def _replace(path: Path, payload: bytes) -> None:
-    temporary = path.with_name(f".{path.name}.orchestune-tmp")
-    temporary.write_bytes(payload)
-    os.replace(temporary, path)
+    mode = path.stat().st_mode & 0o777
+    descriptor, name = tempfile.mkstemp(
+        prefix=".gitignore.orchestune-", dir=path.parent
+    )
+    temporary = Path(name)
+    try:
+        _write_all(descriptor, payload)
+        os.fchmod(descriptor, mode)
+    except OSError:
+        os.close(descriptor)
+        temporary.unlink(missing_ok=True)
+        raise
+    os.close(descriptor)
+    try:
+        os.replace(temporary, path)
+    except OSError:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def _write_all(descriptor: int, payload: bytes) -> None:
+    view = memoryview(payload)
+    while view:
+        written = os.write(descriptor, view)
+        if written <= 0:
+            raise OSError("incomplete write")
+        view = view[written:]
