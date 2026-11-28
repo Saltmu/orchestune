@@ -40,6 +40,7 @@ from orchestune.read_dependencies.contracts import (
 )
 from orchestune.read_dependencies.detection import detect_stale_reads
 from orchestune.read_dependencies.storage import read_snapshot
+from tests.conftest import require_git_receive_advertise_atomic
 
 PARENT_REF = "refs/heads/parent/issue-1230"
 SNAPSHOT_REF = parent_read_snapshot_ref(1230)
@@ -240,6 +241,7 @@ def test_claim_and_backend_failures_preserve_parent_and_snapshot(publication, fa
         ):
             result = publish_parent_under_claim(p.ctx)
     else:
+        require_git_receive_advertise_atomic()
         git(p.remote, "config", "receive.advertiseAtomic", "false")
         result = publish_parent_under_claim(p.ctx)
     assert not result.pushed

@@ -306,7 +306,7 @@ def test_setup_git_hooks_sh_execution_in_worktree(tmp_path: Path):
     import shutil
     import sys
 
-    from tests.conftest import get_clean_git_env
+    from tests.conftest import get_clean_git_env, require_git_hooks_path
 
     if sys.platform == "win32":
         pytest.skip(
@@ -317,6 +317,8 @@ def test_setup_git_hooks_sh_execution_in_worktree(tmp_path: Path):
     bash_path = shutil.which("bash")
     if not bash_path:
         pytest.skip("bash not found on PATH")
+
+    require_git_hooks_path()
 
     clean_env = get_clean_git_env()
     main_repo = tmp_path / "repo_sh"
@@ -401,7 +403,7 @@ def test_setup_git_hooks_sh_cleans_up_existing_pre_push_hook(tmp_path: Path):
     import shutil
     import sys
 
-    from tests.conftest import get_clean_git_env
+    from tests.conftest import get_clean_git_env, require_git_hooks_path
 
     if sys.platform == "win32":
         pytest.skip(
@@ -411,6 +413,8 @@ def test_setup_git_hooks_sh_cleans_up_existing_pre_push_hook(tmp_path: Path):
     bash_path = shutil.which("bash")
     if not bash_path:
         pytest.skip("bash not found on PATH")
+
+    require_git_hooks_path()
 
     clean_env = get_clean_git_env()
     main_repo = tmp_path / "repo_sh_cleanup"
