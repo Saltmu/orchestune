@@ -61,7 +61,7 @@ def test_main_writes_request_with_expected_fields(
     assert request["status"] == "pending"
     assert request["issue_number"] == 42
     assert request["branch_name"] == "claude/issue-42-example"
-    assert request["worktree_path"] == "/tmp/worktree-42"
+    assert request["worktree_path"] == str(Path("/tmp/worktree-42").expanduser())
     assert request["context_json"] == ".orchestune/context.json"
     assert request["pid"] > 0
     assert request["created_at"].endswith("Z")
