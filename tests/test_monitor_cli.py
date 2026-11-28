@@ -11,14 +11,19 @@ import json
 import os
 import re
 import time
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
 
 import orchestune.monitor as monitor
+import orchestune.parent_status as parent_status
 from orchestune.infra.cli_output import CliOutput, make_output
 from orchestune.infra.cli_progress import progress
+from orchestune.issue_parsing import ChildDiscoveryResult
+from orchestune.labels import StatusLabel
 from orchestune.ledger.run_state import RunState
+from orchestune.models import IssueRecord
 from orchestune.monitor import main
 from tests.dispatch_test_support import make_test_active_worktree
 from tests.dispatch_test_support import save_locked_run_state as save_run_state
@@ -255,9 +260,9 @@ class FakeStream(io.StringIO):
         return "utf-8"
 
 
-def _output(*, tty: bool, env: dict[str, str] | None = None):
+def _output(*, tty: bool, env: dict[str, str] | None = None, width: int = 140):
     stream = FakeStream(tty=tty)
-    out: CliOutput = make_output(stream, env=env or {}, width=140)
+    out: CliOutput = make_output(stream, env=env or {}, width=width)
     return out, stream
 
 
@@ -690,12 +695,12 @@ class TestParentIntegrationCli:
     def test_flags_must_be_paired_and_cannot_watch(self, tmp_path):
         path = tmp_path / "result.json"
         path.write_text("{}", encoding="utf-8")
-        with pytest.raises(SystemExit) as alone:
-            main(["--parent-issue", "100"])
-        assert alone.value.code == 2
         with pytest.raises(SystemExit) as report_only:
             main(["--dispatch-report", str(path)])
         assert report_only.value.code == 2
+        with pytest.raises(SystemExit) as watched_report:
+            main(["--dispatch-report", str(path), "--watch"])
+        assert watched_report.value.code == 2
         with pytest.raises(SystemExit) as watched:
             main(
                 [
@@ -707,6 +712,12 @@ class TestParentIntegrationCli:
                 ]
             )
         assert watched.value.code == 2
+        with pytest.raises(SystemExit) as short:
+            main(["-p", "100", "--dispatch-report", str(path), "--watch"])
+        assert short.value.code == 2
+        with pytest.raises(SystemExit) as zero:
+            main(["-p", "0"])
+        assert zero.value.code == 2
 
     def test_tty_and_plain_print_the_same_observation(
         self, tmp_path, _stub_get_issue_labels
@@ -796,3 +807,282 @@ class TestParentIntegrationCli:
         assert "確認済みの子 Issue: #10" in text
         assert "対象 SHA: abc" in text
         assert json.loads(output.path.read_text(encoding="utf-8")) == saved
+
+
+def _parent_child(number: int) -> IssueRecord:
+    return IssueRecord(
+        number,
+        f"child {number}",
+        "",
+        (StatusLabel.IN_PROGRESS.value,),
+        "2020-01-01T00:00:00Z",
+    )
+
+
+def _install_parent_readers(monkeypatch, numbers: tuple[int, ...]) -> dict[str, int]:
+    calls = {"children": 0, "attempts": 0}
+    issues = [_parent_child(number) for number in numbers]
+
+    def children_reader(forge: object, parent: int) -> ChildDiscoveryResult:
+        calls["children"] += 1
+        return ChildDiscoveryResult(issues=issues, metadata_search_supported=True)
+
+    def attempts_reader(forge: object, parent: int) -> list[object]:
+        calls["attempts"] += 1
+        return []
+
+    monkeypatch.setattr(parent_status, "find_children_by_parent", children_reader)
+    monkeypatch.setattr(parent_status, "find_open_attempts", attempts_reader)
+    return calls
+
+
+def _parent_dashboard_args(
+    tmp_path, numbers: tuple[int, ...], logs: dict[int, str]
+) -> tuple[list[str], object, object]:
+    from orchestune.status_snapshot import observe_repository_id
+
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    active = {}
+    for number in numbers:
+        branch = f"claude/issue-{number}-monitor-cli"
+        slug = branch.replace("/", "-")
+        (log_dir / f"{slug}.log").write_text(
+            logs.get(number, "log-line\n"), encoding="utf-8"
+        )
+        active[str(number)] = _active(issue_number=number, branch=branch)
+    run_state = tmp_path / "run_state.json"
+    save_run_state(RunState(active_worktrees=active), run_state)
+    report_dir = tmp_path / "reports"
+    report = report_dir / "parent-100" / "run-1" / "result.json"
+    report.parent.mkdir(parents=True)
+    _saved_parent_report(report, observe_repository_id())
+    args = [
+        "-p",
+        "100",
+        "--run-state-path",
+        str(run_state),
+        "--log-dir",
+        str(log_dir),
+        "--report-dir",
+        str(report_dir),
+    ]
+    return args, report, run_state
+
+
+class TestParentDashboard:
+    def test_one_shot_shows_sections_and_sanitizes_control_characters(
+        self, tmp_path, monkeypatch, _stub_get_issue_labels
+    ):
+        _install_parent_readers(monkeypatch, (133,))
+        args, report, _run_state = _parent_dashboard_args(
+            tmp_path,
+            (133,),
+            {133: "evil\x1b[2Jtext\x1b]0;title\x07\n"},
+        )
+        before = report.read_bytes()
+        plain, plain_stream = _output(tty=False)
+        rich, rich_stream = _output(tty=True)
+        forced_plain, forced_stream = _output(
+            tty=True, env={"ORCHESTUNE_CLI_PLAIN": "1"}
+        )
+
+        assert (
+            main(args, forge=_stub_get_issue_labels, output=plain, clock=lambda: NOW)
+            == 0
+        )
+        assert (
+            main(args, forge=_stub_get_issue_labels, output=rich, clock=lambda: NOW)
+            == 0
+        )
+        assert (
+            main(
+                args,
+                forge=_stub_get_issue_labels,
+                output=forced_plain,
+                clock=lambda: NOW,
+            )
+            == 0
+        )
+
+        plain_text = plain_stream.getvalue()
+        rich_text = ANSI.sub("", rich_stream.getvalue())
+        forced_text = forced_stream.getvalue()
+        for text in (plain_text, rich_text, forced_text):
+            assert "Orchestune parent status (#100," in text
+            assert "親 Issue サマリー" in text
+            assert "OPEN: 1" in text
+            assert "[RUNNING] Issue #133" in text
+            assert "統合・レビュー状態" in text
+            assert "確認済みの子 Issue: #10" in text
+            assert "次の操作案内" in text
+            assert "案内:" in text
+            assert "eviltext" in text
+        assert "\x1b" not in plain_text and "\x1b" not in forced_text
+        assert "\x1b[2J" not in rich_stream.getvalue()
+        assert "\x1b]0;" not in rich_stream.getvalue()
+        assert "項目" in rich_text and "State" in rich_text
+        assert report.read_bytes() == before
+        _stub_get_issue_labels.add_comment.assert_not_called()
+        _stub_get_issue_labels.add_label.assert_not_called()
+
+    def test_watch_reuses_observation_and_label_caches(
+        self, tmp_path, monkeypatch, _stub_get_issue_labels
+    ):
+        calls = _install_parent_readers(monkeypatch, (133,))
+        args, report, run_state = _parent_dashboard_args(
+            tmp_path, (133, 999), {133: "kept-log\n", 999: "outside-log\n"}
+        )
+        before_state = run_state.read_bytes()
+        flips = {"n": 0}
+
+        def sleep(_interval: float) -> None:
+            flips["n"] += 1
+            if flips["n"] == 1:
+                report.write_text("{", encoding="utf-8")
+                return None
+            if flips["n"] == 2:
+                return None
+            raise KeyboardInterrupt
+
+        out, stream = _output(tty=False)
+        exit_code = main(
+            [*args, "--watch", "--interval", "2"],
+            forge=_stub_get_issue_labels,
+            output=out,
+            clock=lambda: NOW,
+            sleep=sleep,
+        )
+
+        text = stream.getvalue()
+        assert exit_code == 0
+        assert calls == {"children": 1, "attempts": 1}
+        assert _stub_get_issue_labels.get_issue_labels.call_count == 1
+        assert "確認済みの子 Issue: #10" in text
+        assert "現在の状態は不明" in text
+        assert text.count("2秒ごとに自動更新します。Ctrl+Cで終了してください。") == 3
+        assert "\x1b" not in text
+        assert text.rstrip().endswith(STOPPED)
+        assert run_state.read_bytes() == before_state
+
+    def test_short_watch_keeps_summary_and_one_shot_stays_full(
+        self, tmp_path, monkeypatch, _stub_get_issue_labels
+    ):
+        _install_parent_readers(monkeypatch, (134, 135, 136))
+        logs = {
+            number: "".join(f"log-{number}-{name}\n" for name in ("a", "b", "c"))
+            for number in (134, 135, 136)
+        }
+        args, _report, _run_state = _parent_dashboard_args(
+            tmp_path, (134, 135, 136), logs
+        )
+        footer = "3秒ごとに自動更新します。Ctrl+Cで終了してください。"
+        out, stream = _output(tty=True, env={"LINES": "14"})
+        exit_code = main(
+            [*args, "--watch", "--interval", "3"],
+            forge=_stub_get_issue_labels,
+            output=out,
+            clock=lambda: NOW,
+            sleep=_fake_sleep(KeyboardInterrupt),
+        )
+        watched = ANSI.sub("", stream.getvalue())
+        assert exit_code == 0
+        assert "表示領域に収まらない" in watched
+        assert "要対応" in watched
+        assert "orchestune status -p 100" in watched
+        assert footer in watched
+        assert "log-136-c" not in watched
+        assert watched.rstrip().endswith(STOPPED)
+
+        one_shot, one_stream = _output(tty=True, env={"LINES": "14"})
+        assert (
+            main(args, forge=_stub_get_issue_labels, output=one_shot, clock=lambda: NOW)
+            == 0
+        )
+        full = ANSI.sub("", one_stream.getvalue())
+        assert "表示領域に収まらない" not in full
+        assert "log-136-c" in full
+
+    def test_short_overflow_keeps_footer_and_parent_command(self):
+        from orchestune.operator_guidance import (
+            EvidenceState,
+            NextOwner,
+            OperatorGuidance,
+            ProgressOutlook,
+        )
+        from orchestune.parent_status import (
+            AttemptRollup,
+            ChildRollup,
+            IntegrationRollup,
+            ParentStatusSnapshot,
+            SessionRollup,
+        )
+
+        def snapshot(statuses: tuple[str, ...], codes: tuple[str, ...]):
+            guidance = OperatorGuidance(
+                target="parent",
+                stage="review",
+                reason_codes=codes,
+                explanation="observed",
+                next_owner=NextOwner.USER,
+                progress=ProgressOutlook.MANUAL,
+                progress_condition=None,
+                actions=(),
+                references=(),
+                evidence_state=EvidenceState.CURRENT,
+                evidence_note="",
+            )
+            return ParentStatusSnapshot(
+                parent_issue=100,
+                now=NOW,
+                children=ChildRollup(
+                    tuple((name, 1) for name in statuses),
+                    0,
+                    len(statuses),
+                    0,
+                    EvidenceState.CURRENT,
+                    None,
+                ),
+                sessions=SessionRollup((), None, True, EvidenceState.CURRENT, None),
+                integration=IntegrationRollup("確認済み", None, (), False),
+                attempts=AttemptRollup((), EvidenceState.CURRENT, None),
+                next_actions=guidance,
+                report_dir=Path("."),
+                report_dir_note=None,
+            )
+
+        footer = "3秒ごとに自動更新します。Ctrl+Cで終了してください。"
+
+        def shown(out, statuses, codes):
+            block = monitor.parent_status_block(
+                out, snapshot(statuses, codes), NOW, footer
+            )
+            assert out.console is not None
+            rendered = out.console.render_lines(
+                block.rich, out.console.options, pad=False
+            )
+            text = "\n".join("".join(seg.text for seg in line) for line in rendered)
+            return rendered, text
+
+        wide, _wide_stream = _output(tty=True, env={"LINES": "14"})
+        wide_lines, wide_text = shown(
+            wide,
+            (
+                "status:queued",
+                "status:in-progress",
+                "status:done",
+                "status:blocked-human-review",
+            ),
+            (),
+        )
+        assert len(wide_lines) < wide.console.height
+        assert "OPEN" in wide_text
+        assert "orchestune status -p 100" in wide_text
+        assert footer in wide_text
+
+        narrow, _narrow_stream = _output(tty=True, env={"LINES": "14"}, width=80)
+        codes = tuple(f"review-status:{number}" for number in range(1, 7))
+        narrow_lines, narrow_text = shown(narrow, ("status:in-progress",), codes)
+        assert len(narrow_lines) < narrow.console.height
+        assert "orchestune status -p 100" in narrow_text
+        assert footer in narrow_text

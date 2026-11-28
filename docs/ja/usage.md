@@ -1243,6 +1243,17 @@ PR/Outcomeの完了判定（MERGED/closed PR、handoff-ready）は成果物の�
 
 `--watch` で詳細が画面に収まらないときは、対象と要対応の有無を残し、詳細の入口として `orchestune status` を示します。TTY でも plain でも案内の意味は同じです。status に JSON 出力は追加しません。
 
+### 親ダッシュボード
+
+`orchestune status -p <N>` または `orchestune status --parent-issue <N>` は、`--dispatch-report` を付けないとき、その親の最新レポート、子 Issue の進捗、稼働中セッション、統合状態、次の操作を表示します。`--report-dir` は任意です。省略すると設定のレポートディレクトリを使い、設定が無ければ `.orchestune/reports/dispatch` を使います。`--watch` と併用できます。
+
+```text
+orchestune status -p 100
+orchestune status -p 100 --watch
+```
+
+`--watch` で詳細が画面に収まらないときは、親の要約、要対応、詳細の入口 `orchestune status -p <N>`、更新フッターを残します。読み取り専用です。status に JSON 出力は追加しません。
+
 ### 親統合の最後の観測
 
 `orchestune status --parent-issue <N> --dispatch-report <result.json>` は、dispatch が保存した一つの結果ファイルから、その親の統合停止理由と次の操作を表示します。結果ファイルは dispatch の stdout に出る `report saved:` の絶対パスです。`--report-path` を省略したときの既定は `.orchestune/reports/dispatch/parent-<N>/<run-id>/result.json` です。
@@ -1251,7 +1262,7 @@ PR/Outcomeの完了判定（MERGED/closed PR、handoff-ready）は成果物の�
 orchestune status --parent-issue 100 --dispatch-report .orchestune/reports/dispatch/parent-100/<run-id>/result.json
 ```
 
-`--parent-issue` と `--dispatch-report` はセットです。片方だけ、または `--watch` との併用は引数エラーです。従来の `orchestune status` と `orchestune status --watch` は active worktree の表示のままです。
+`--dispatch-report` は `--parent-issue` と同時に指定し、`--watch` とは併用できません。`--parent-issue` だけ、または `--parent-issue` と `--watch` は親ダッシュボードです。親を指定しない `orchestune status` と `orchestune status --watch` は active worktree の表示のままです。
 
 この表示は最後の観測です。経過時間だけでは再試行済みや解消済みとは判断しません。active worktree が無くても結果ファイルだけで判断します。子 Issue 番号、対象 SHA、統合 PR、次回可能日時が記録に無ければ、表示もしません。preview、別の親、別のリポジトリ、旧形式、未知の版、破損、統合未実行、対象外の理由は「現在の状態は不明」とし、その親の apply 結果を確認するよう案内します。読み取りは Issue を更新せず、復旧もワーカー起動も状態保存もしません。
 
