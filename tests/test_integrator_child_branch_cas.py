@@ -33,7 +33,11 @@ from orchestune.integrator.steps import (
 )
 from orchestune.integrator.types import IntegrationContext, IntegratorConfig
 from orchestune.task_branch_resolution import ResolutionSource
-from tests.conftest import make_task
+from tests.conftest import (
+    make_task,
+    require_git_hooks,
+    require_git_receive_deny_deletes,
+)
 from tests.forge_event_support import install_receipt_lookup_adapter
 
 
@@ -421,6 +425,7 @@ def _origin_with_child(tmp_path: Path) -> tuple[Path, Path, str]:
 
 
 def test_a_remote_that_forbids_deletions_is_classified_as_denied(tmp_path: Path):
+    require_git_receive_deny_deletes()
     remote, integrator, commit_a = _origin_with_child(tmp_path)
     _git(remote, "config", "receive.denyDeletes", "true")
 
@@ -432,6 +437,7 @@ def test_a_remote_that_forbids_deletions_is_classified_as_denied(tmp_path: Path)
 
 def test_a_declining_pre_receive_hook_is_classified_as_denied(tmp_path: Path):
     """GitHub rulesets reject through the same `[remote rejected]` path."""
+    require_git_hooks()
     remote, integrator, commit_a = _origin_with_child(tmp_path)
     hook = remote / "hooks" / "pre-receive"
     hook.write_text(

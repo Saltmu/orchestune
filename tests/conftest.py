@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import contextlib
+import functools
 import subprocess
 import sys
+import tempfile
 import threading
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
@@ -54,6 +56,194 @@ def __getattr__(name: str) -> Any:
 
         return _github_isolation_workspace
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+# ---------------------------------------------------------------------------
+# Git environment capability probes
+#
+# Some environments harden git so that repository hooks never execute and
+# repository-local receive configuration is ignored (for example a wrapper
+# that forces core.hooksPath=/dev/null). Tests that depend on those
+# capabilities skip with a reason in such environments and run unchanged
+# everywhere else. Each probe checks the behaviour against scratch
+# repositories under the same clean git env the tests use, and is cached
+# for the whole test session.
+# ---------------------------------------------------------------------------
+
+
+def _probe_git(
+    env: dict[str, str], cwd: Path, *args: str
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _scratch_origin_and_worker(root: Path, env: dict[str, str]) -> tuple[Path, Path]:
+    """Create a bare origin and a worker clone with one commit on main."""
+    origin = root / "origin.git"
+    worker = root / "worker"
+    setup = [
+        (root, ["init", "--bare", str(origin)]),
+        (root, ["init", "-b", "main", str(worker)]),
+        (worker, ["config", "user.name", "Probe User"]),
+        (worker, ["config", "user.email", "probe@example.com"]),
+        (worker, ["remote", "add", "origin", str(origin)]),
+    ]
+    for cwd, args in setup:
+        if _probe_git(env, cwd, *args).returncode != 0:
+            raise RuntimeError(f"probe setup failed: git {' '.join(args)}")
+    (worker / "probe.txt").write_text("probe\n", encoding="utf-8")
+    for args in (
+        ["add", "probe.txt"],
+        ["commit", "-m", "probe"],
+        ["push", "-u", "origin", "main"],
+    ):
+        if _probe_git(env, worker, *args).returncode != 0:
+            raise RuntimeError(f"probe setup failed: git {' '.join(args)}")
+    return origin, worker
+
+
+def _probe_push_rejected(mutate: Callable[[Path, Path, dict[str, str]], None]) -> bool:
+    """True when a push that ``mutate`` arms the remote to refuse is refused."""
+    env = get_clean_git_env()
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            origin, worker = _scratch_origin_and_worker(Path(td), env)
+            mutate(origin, worker, env)
+            (worker / "probe2.txt").write_text("probe2\n", encoding="utf-8")
+            if _probe_git(env, worker, "add", "probe2.txt").returncode != 0:
+                return False
+            if _probe_git(env, worker, "commit", "-m", "probe2").returncode != 0:
+                return False
+            return _probe_git(env, worker, "push", "origin", "main").returncode != 0
+    except (OSError, RuntimeError):
+        return False
+
+
+@functools.lru_cache(maxsize=1)
+def git_hooks_execute() -> bool:
+    """True when a pre-receive hook installed in a bare repo rejects a push."""
+
+    def install_rejecting_hook(origin: Path, worker: Path, env: dict[str, str]) -> None:
+        del worker, env
+        hook = origin / "hooks" / "pre-receive"
+        hook.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        hook.chmod(0o755)
+
+    return _probe_push_rejected(install_rejecting_hook)
+
+
+@functools.lru_cache(maxsize=1)
+def git_receive_deny_deletes_honored() -> bool:
+    """True when receive.denyDeletes=true on the remote refuses a deletion."""
+    env = get_clean_git_env()
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            origin, worker = _scratch_origin_and_worker(Path(td), env)
+            if _probe_git(env, worker, "checkout", "-b", "side").returncode != 0:
+                return False
+            if _probe_git(env, worker, "push", "origin", "side").returncode != 0:
+                return False
+            if (
+                _probe_git(
+                    env, origin, "config", "receive.denyDeletes", "true"
+                ).returncode
+                != 0
+            ):
+                return False
+            return _probe_git(env, worker, "push", "origin", ":side").returncode != 0
+    except (OSError, RuntimeError):
+        return False
+
+
+@functools.lru_cache(maxsize=1)
+def git_receive_advertise_atomic_honored() -> bool:
+    """True when receive.advertiseAtomic=false makes --atomic pushes fail."""
+
+    def disable_atomic(origin: Path, worker: Path, env: dict[str, str]) -> None:
+        del worker
+        _probe_git(env, origin, "config", "receive.advertiseAtomic", "false")
+
+    env = get_clean_git_env()
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            origin, worker = _scratch_origin_and_worker(Path(td), env)
+            disable_atomic(origin, worker, env)
+            (worker / "probe2.txt").write_text("probe2\n", encoding="utf-8")
+            if _probe_git(env, worker, "add", "probe2.txt").returncode != 0:
+                return False
+            if _probe_git(env, worker, "commit", "-m", "probe2").returncode != 0:
+                return False
+            result = _probe_git(
+                env,
+                worker,
+                "push",
+                "--atomic",
+                "origin",
+                "main:refs/heads/probe-a",
+                "main:refs/heads/probe-b",
+            )
+            return result.returncode != 0
+    except (OSError, RuntimeError):
+        return False
+
+
+@functools.lru_cache(maxsize=1)
+def git_hooks_path_usable() -> bool:
+    """True when the resolved hooks dir is a writable directory."""
+    env = get_clean_git_env()
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / "repo"
+            if _probe_git(env, Path(td), "init", str(repo)).returncode != 0:
+                return False
+            result = _probe_git(env, repo, "rev-parse", "--git-path", "hooks")
+            if result.returncode != 0:
+                return False
+            hooks_dir = Path(result.stdout.strip())
+            if not hooks_dir.is_absolute():
+                hooks_dir = repo / hooks_dir
+            if hooks_dir.exists() and not hooks_dir.is_dir():
+                return False
+            hooks_dir.mkdir(parents=True, exist_ok=True)
+            probe_file = hooks_dir / ".orchestune-probe"
+            probe_file.write_text("", encoding="utf-8")
+            probe_file.unlink()
+            return True
+    except OSError:
+        return False
+
+
+def require_git_hooks() -> None:
+    if not git_hooks_execute():
+        pytest.skip(
+            "git hooks do not execute in this environment "
+            "(e.g. core.hooksPath is forced elsewhere)"
+        )
+
+
+def require_git_receive_deny_deletes() -> None:
+    if not git_receive_deny_deletes_honored():
+        pytest.skip("receive.denyDeletes is not honored in this git environment")
+
+
+def require_git_receive_advertise_atomic() -> None:
+    if not git_receive_advertise_atomic_honored():
+        pytest.skip("receive.advertiseAtomic is not honored in this git environment")
+
+
+def require_git_hooks_path() -> None:
+    if not git_hooks_path_usable():
+        pytest.skip(
+            "the git hooks path is not a usable directory in this environment "
+            "(e.g. core.hooksPath points at /dev/null)"
+        )
 
 
 @pytest.fixture(autouse=True)

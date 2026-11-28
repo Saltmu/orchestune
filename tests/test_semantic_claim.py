@@ -38,6 +38,7 @@ from orchestune.integrator.semantic_claim import (
     renew_semantic_claim,
     semantic_claim_ref,
 )
+from tests.conftest import require_git_hooks, require_git_receive_advertise_atomic
 
 PARENT = 1033
 NOW = datetime(2026, 10, 18, 9, 0, tzinfo=UTC)
@@ -898,6 +899,7 @@ class TestDeleteAttemptFixBranches:
 
 
 def _install_pre_receive(origin: Path, rejected_prefix: str) -> None:
+    require_git_hooks()
     hook = origin / "hooks" / "pre-receive"
     hook.write_text(
         "#!/bin/sh\n"
@@ -925,10 +927,12 @@ class TestProbeClaimBackend:
         assert probe_claim_backend(remote.worker("w1")) == CLAIM_BACKEND_UNSUPPORTED
 
     def test_remote_without_atomic_push_is_unsupported(self, remote: Remote) -> None:
+        require_git_receive_advertise_atomic()
         _git(remote.origin, "config", "receive.advertiseAtomic", "false")
         assert probe_claim_backend(remote.worker("w1")) == CLAIM_BACKEND_UNSUPPORTED
 
     def test_denied_deletion_is_unsupported(self, remote: Remote) -> None:
+        require_git_hooks()
         hook = remote.origin / "hooks" / "pre-receive"
         hook.write_text(
             "#!/bin/sh\n"
