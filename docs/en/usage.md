@@ -1299,14 +1299,14 @@ When `--watch` cannot fit the details, the frame keeps each target, whether atte
 
 ### Parent dashboard
 
-`orchestune status -p <N>` or `orchestune status --parent-issue <N>` without `--dispatch-report` shows that parent's latest report, child progress, active sessions, integration state, and next actions. `--report-dir` is optional. When it is omitted, the command uses the configured report directory, or `.orchestune/reports/dispatch` when the configuration has none. `--watch` is allowed.
+`orchestune status -p <N>` or `orchestune status --parent-issue <N>` without `--dispatch-report` auto-detects that parent's latest `result.json` and shows child progress, active sessions, integration state, and next actions. `--report-dir` is optional. When it is omitted, the command uses the configured report directory, or `.orchestune/reports/dispatch` when the configuration has none. `--watch` (or `-w`) is allowed; child issue and integration-attempt data fetched from the GitHub API use a 30-second TTL cache, showing `stale` when a fetch fails with an expired cache or `unavailable` when no cache exists.
 
 ```text
 orchestune status -p 100
 orchestune status -p 100 --watch
 ```
 
-When `--watch` cannot fit the details, the frame keeps the parent summary, what needs attention, `orchestune status -p <N>`, and the refresh footer. The command is read-only. Status does not gain a JSON mode.
+When `--watch` cannot fit the details, the frame keeps the parent summary, what needs attention, `orchestune status -p <N>`, and the refresh footer. The command is read-only. Status has no JSON output (`--json`).
 
 ### Last observation of a parent integration
 
@@ -1326,10 +1326,12 @@ The text is the last observation. Elapsed time alone does not mean a retry alrea
 
 ```bash
 orchestune blocked
+orchestune blocked --detail
+orchestune blocked -d -p 100
 orchestune blocked --json
 ```
 
-Human output is limited to issue numbers, category names, and counts. An issue with no comments is shown as having no comments and is not added to the counts. When no issue matches, the text says so. `--json` prints only category names and counts, with every category set to 0 when nothing matches. A failed list or comment read, a comment body of the wrong type, or a list that reaches 1,000 issues exits 1 and prints no partial counts.
+Default non-TTY output and `--json` remain fully backward-compatible. Default human output is limited to issue numbers, category names, and counts, without exposing comment bodies. `--detail` (`-d`) prints a Rich TTY triage table (or plain-text table when not a TTY) with titles and next commands. `-p` (`--parent-issue`) limits the census to children of that parent issue. An issue with no comments is shown as having no comments and is not added to the counts. When no issue matches, the text says so. `--json` prints only category names and counts, with every category set to 0 when nothing matches. A failed list or comment read, a comment body of the wrong type, or a list that reaches 1,000 issues exits 1 and prints no partial counts.
 
 ---
 

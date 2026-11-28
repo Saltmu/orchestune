@@ -1245,14 +1245,14 @@ PR/Outcomeの完了判定（MERGED/closed PR、handoff-ready）は成果物の�
 
 ### 親ダッシュボード
 
-`orchestune status -p <N>` または `orchestune status --parent-issue <N>` は、`--dispatch-report` を付けないとき、その親の最新レポート、子 Issue の進捗、稼働中セッション、統合状態、次の操作を表示します。`--report-dir` は任意です。省略すると設定のレポートディレクトリを使い、設定が無ければ `.orchestune/reports/dispatch` を使います。`--watch` と併用できます。
+`orchestune status -p <N>` または `orchestune status --parent-issue <N>` は、`--dispatch-report` を付けないとき、その親の最新 `result.json` を自動検出し、子 Issue の進捗、稼働中セッション、統合状態、次の操作を表示します。`--report-dir` は任意です。省略すると設定のレポートディレクトリを使い、設定が無ければ `.orchestune/reports/dispatch` を使います。`--watch`（または `-w`）と併用でき、GitHub API から取得する子 Issue と統合試行の情報は 30 秒 TTL キャッシュで更新します。取得に失敗して期限切れキャッシュを使った場合は `stale`、キャッシュも無い場合は `unavailable` として表示します。
 
 ```text
 orchestune status -p 100
 orchestune status -p 100 --watch
 ```
 
-`--watch` で詳細が画面に収まらないときは、親の要約、要対応、詳細の入口 `orchestune status -p <N>`、更新フッターを残します。読み取り専用です。status に JSON 出力は追加しません。
+`--watch` で詳細が画面に収まらないときは、親の要約、要対応、詳細の入口 `orchestune status -p <N>`、更新フッターを残します。読み取り専用です。status に JSON 出力（`--json`）はありません。
 
 ### 親統合の最後の観測
 
@@ -1272,10 +1272,12 @@ orchestune status --parent-issue 100 --dispatch-report .orchestune/reports/dispa
 
 ```bash
 orchestune blocked
+orchestune blocked --detail
+orchestune blocked -d -p 100
 orchestune blocked --json
 ```
 
-人向けの表示は Issue 番号、分類名、件数だけです。コメントが無い Issue は「コメントなし」と出し、件数には加えません。対象の Issue が無いときはその旨を出します。`--json` は分類名と件数だけのオブジェクトで、対象が無くても全分類を 0 で返します。一覧やコメントの取得失敗、コメント本文の型の異常、一覧が 1,000 件に達したときは終了コード 1 で、途中の件数は出しません。
+既定の非 TTY 出力および `--json` は完全な後方互換を保ちます。人向けの既定表示は Issue 番号、分類名、件数だけで、コメント本文は露出しません。`--detail`（`-d`）を付けると、タイトルと次の操作コマンドを含む Rich TTY トリアージ表（非 TTY ではプレーンテキスト表）を表示します。`-p`（`--parent-issue`）を付けると、その親 Issue の子 Issue だけに集計対象を絞ります。コメントが無い Issue は「コメントなし」と出し、件数には加えません。対象の Issue が無いときはその旨を出します。`--json` は分類名と件数だけのオブジェクトで、対象が無くても全分類を 0 で返します。一覧やコメントの取得失敗、コメント本文の型の異常、一覧が 1,000 件に達したときは終了コード 1 で、途中の件数は出しません。
 
 ---
 
