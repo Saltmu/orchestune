@@ -621,6 +621,7 @@ Usage: orchestune <command> [<args>]
 Available commands:
 Getting started
   trial      Local autonomous trial without GitHub setup
+  init       Guide setup of an existing Git repository
   config     Create or edit orchestune.toml interactively
   skills     Install and manage Orchestune skills for AI assistants
   bootstrap  Verify gh auth and ensure required GitHub labels exist

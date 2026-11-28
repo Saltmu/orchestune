@@ -14,6 +14,7 @@ The behavior of a command run with no extra option, and the option that switches
 | `orchestune skills install` | Applies | `--dry-run` to preview |
 | `orchestune skills update` | Applies | `--dry-run` to preview |
 | `orchestune skills uninstall` | Applies | `--dry-run` to preview |
+| `orchestune init` | Applies | `--dry-run` to preview |
 | `orchestune replan` | Preview | `--apply` to apply (`--confirm-preview <token>` is also required) |
 | `orchestune remediate` | Preview | `--apply` to apply (`--confirm-preview <token>` is also required) |
 | `orchestune recover` | Preview | `--apply` to apply |
@@ -22,7 +23,7 @@ The behavior of a command run with no extra option, and the option that switches
 
 - A preview shows the result without changing Git refs, GitHub, or the ledger. Dispatch preview also saves local results and creates a report directory and lock (section 4).
 - The `orchestune-dispatch` command takes the same options as `orchestune dispatch`.
-- Only `skills` uses `--dry-run`. The commands that preview by default use `--apply` to make changes.
+- `skills` and `init` use `--dry-run`. The commands that preview by default use `--apply` to make changes.
 - A command not in this table has no option that switches between preview and apply.
 
 Add `--apply` to mutating calls in existing Actions workflows and scripts. Remove the former `--no-apply` flag from preview calls. You can remove the legacy TOML `apply` key. The CLI flag determines whether to apply.

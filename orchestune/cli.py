@@ -90,6 +90,13 @@ _COMMAND_SPECS: tuple[_Command, ...] = (
         exit_with_return=True,
     ),
     _Command(
+        "init",
+        "Guide setup of an existing Git repository",
+        "Getting started",
+        "orchestune.init_cli",
+        exit_with_return=True,
+    ),
+    _Command(
         "config",
         "Create or edit orchestune.toml interactively",
         "Getting started",

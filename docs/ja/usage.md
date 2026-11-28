@@ -14,6 +14,7 @@
 | `orchestune skills install` | 適用 | `--dry-run` でプレビュー |
 | `orchestune skills update` | 適用 | `--dry-run` でプレビュー |
 | `orchestune skills uninstall` | 適用 | `--dry-run` でプレビュー |
+| `orchestune init` | 適用 | `--dry-run` でプレビュー |
 | `orchestune replan` | プレビュー | `--apply` で適用（`--confirm-preview <token>` も必要） |
 | `orchestune remediate` | プレビュー | `--apply` で適用（`--confirm-preview <token>` も必要） |
 | `orchestune recover` | プレビュー | `--apply` で適用 |
@@ -22,7 +23,7 @@
 
 - 「プレビュー」は、Git・GitHub・台帳を変更せずに結果を表示するモードです。dispatch のプレビューは、ローカルの結果と報告用のディレクトリ・lockも作ります（4節）。
 - `orchestune-dispatch` コマンドは `orchestune dispatch` と同じオプションです。
-- `--dry-run` を使うのは `skills` だけです。プレビューが既定のコマンドは `--apply` で変更を適用します。
+- `--dry-run` を使うのは `skills` と `init` です。プレビューが既定のコマンドは `--apply` で変更を適用します。
 - この表に載っていないコマンドには、プレビューと適用を切り替えるオプションはありません。
 
 既存の Actions ワークフローやスクリプトで適用する呼び出しには `--apply` を追加してください。プレビューでは旧 `--no-apply` を削除してください。TOML の旧 `apply` キーは削除でき、適用は CLI の `--apply` で決まります。

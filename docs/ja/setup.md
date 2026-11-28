@@ -17,6 +17,18 @@ Orchestuneは「エージェントが標準開発ワークフローに従って�
 
 導入前の準備状況（(a)〜(c)、実行先、レビュー担当、gitignore、認証）は、`orchestune doctor --execution-mode local`（認証確認を含む場合は `--online`）で一括診断できます。不足項目がある場合は warning として直すコマンドや設定例が提示されます。
 
+### 既存リポジトリへの導入（orchestune init）
+
+既存の Git リポジトリでは、`orchestune init` がスキル、設定、除外、ラベル、doctor を順に案内します。`--dry-run` は質問、ロック、通信、書き込みを行わず、予定する差分と未実施の手順を表示します。`--offline` は GitHub 認証とラベル作成を省きます。
+
+通常モードは、標準入力と標準出力の両方が端末のときだけ動きます。端末でないときは終了コード 2 で止まり、`orchestune init --dry-run` と、`skills` / `config` / `bootstrap` / `doctor` の個別実行を案内します。書き込み前の確認は、空入力では No です。
+
+終了コードは次のとおりです。成功は 0 で、doctor の warning だけなら 0 のままです。操作の失敗または doctor の error は 1、前提不足や入力の拒否は 2、承認後に `.gitignore` が変わった場合や設定の競合は 3、ウィザードの取消、Ctrl+C、EOF は 130 です。130 と `.gitignore` の競合のあとは、後続の手順を実行しません。
+
+Git 管理外、bare、HEAD がない、linked worktree は、副作用の前に終了コード 2 で拒否します。サブディレクトリから実行しても Git ルートを対象にし、ディレクトリ移動、`git init`、commit、push は行いません。未コミットの変更はそのまま残し、`git status` は表示だけです。
+
+手順は、前提確認、基本の除外（`/orchestune.toml`、`/.orchestune/`、`/.orchestune-installer/`）、プロジェクトスコープのスキル導入、設定ウィザード、実効ランタイムパスの除外、ラベル準備、ローカル doctor です。基本の除外を断ると、スキル導入と設定保存は理由を示して見送ります。保存済みの除外やラベルは再実行時に読み直し、自動では戻しません。
+
 タスク分解前の事前診断スキル `orchestune-readiness` を省略する場合は、設定ファイルで `skip-readiness-check = true`（既定値: `false`）を設定できます（ウィザード詳細設定でも変更可能）。この設定は `orchestune-readiness` による事前診断のみを省略し、単独の `orchestune doctor` やディスパッチ前の事前チェックは無効化されません。
 
 ### 設定ファイルの作成と編集
