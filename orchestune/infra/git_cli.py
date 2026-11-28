@@ -674,7 +674,10 @@ def inspect_checkout(cwd: Path) -> CheckoutInspection:
         return CheckoutInspection("linked_worktree", toplevel)
     if _git_text(["rev-parse", "HEAD"], cwd) is None:
         return CheckoutInspection("no_head", toplevel)
-    status = _git_ok(["status", "--porcelain=v1", "--untracked-files=all"], toplevel)
+    status = _git_ok(
+        ["--no-optional-locks", "status", "--porcelain=v1", "--untracked-files=all"],
+        toplevel,
+    )
     if status is None:
         return CheckoutInspection("unreadable", toplevel)
     return CheckoutInspection("ok", toplevel, status)

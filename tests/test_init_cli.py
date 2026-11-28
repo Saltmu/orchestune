@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -47,6 +49,7 @@ def _repo(path: Path) -> Path:
 
 @dataclass
 class _Calls:
+    label_checks: list[Path] = field(default_factory=list)
     labels: list[Path] = field(default_factory=list)
     install: list[list[str]] = field(default_factory=list)
     wizard: list[tuple[str, Path]] = field(default_factory=list)
@@ -57,8 +60,10 @@ class _Calls:
 def _isolate_side_effects(monkeypatch: pytest.MonkeyPatch) -> _Calls:
     calls = _Calls()
 
-    def labels(*_args: object, cwd: Path = Path(), **_kwargs: object) -> int:
-        calls.labels.append(cwd)
+    def labels(*, cwd: Path, confirm: Callable[[str], bool] | None = None) -> int:
+        calls.label_checks.append(cwd)
+        if confirm is None or confirm("acme/widgets"):
+            calls.labels.append(cwd)
         return 0
 
     def install(argv: list[str]) -> int:
@@ -115,13 +120,22 @@ def test_dry_run_performs_no_write_lock_or_network(
     _isolate_side_effects: _Calls,
 ) -> None:
     root = _repo(tmp_path / "repo")
+    _git(root, "remote", "add", "origin", "https://github.com/acme/widgets.git")
     (root / "dirty.txt").write_text("keep\n", encoding="utf-8")
+    tracked = root / "README"
+    stat = tracked.stat()
+    os.utime(tracked, ns=(stat.st_atime_ns, stat.st_mtime_ns - 5_000_000_000))
+    index = root / ".git" / "index"
+    before = index.read_bytes()
+
     assert _run(root, monkeypatch, ["--dry-run"]) == 0
+    assert index.read_bytes() == before
     output = capsys.readouterr().out
     assert "未実施" in output
     assert "/orchestune.toml" in output
     assert not (root / ".gitignore").exists()
     assert not (root / ".git" / "orchestune-init-gitignore.lock").exists()
+    assert _isolate_side_effects.label_checks == []
     assert _isolate_side_effects.labels == []
     assert _isolate_side_effects.install == []
     assert _isolate_side_effects.wizard == []
@@ -181,6 +195,21 @@ def test_declining_base_ignores_skips_skill_and_config(
     assert not (root / ".gitignore").exists()
     assert _isolate_side_effects.install == []
     assert _isolate_side_effects.wizard == []
+
+
+def test_existing_base_rules_allow_install_and_config_without_confirmation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _isolate_side_effects: _Calls
+) -> None:
+    root = _repo(tmp_path / "repo")
+    gitignore = root / ".gitignore"
+    original = ("\n".join(_BASE_RULES) + "\n").encode("utf-8")
+    gitignore.write_bytes(original)
+    _interactive(monkeypatch, ["codex", "y", "y", "n"])
+
+    assert _run(root, monkeypatch, ["--offline"]) == 0
+    assert gitignore.read_bytes() == original
+    assert len(_isolate_side_effects.install) == 2
+    assert _isolate_side_effects.wizard == [("init", root)]
 
 
 def test_gitignore_conflict_stops_later_steps(
@@ -247,22 +276,35 @@ def test_offline_skips_labels_and_online_doctor(
     _git(root, "remote", "add", "origin", "git@github.com:acme/widgets.git")
     _interactive(monkeypatch, ["n", "n"])
     assert _run(root, monkeypatch, ["--offline"]) == 0
+    assert _isolate_side_effects.label_checks == []
     assert _isolate_side_effects.labels == []
     assert _isolate_side_effects.doctor[0].online is False
 
 
-def test_online_confirmation_prepares_labels_for_the_checkout(
+@pytest.mark.parametrize("approval", ["y", "n"])
+def test_online_confirmation_follows_target_check(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     _isolate_side_effects: _Calls,
+    approval: str,
 ) -> None:
     root = _repo(tmp_path / "repo")
     _git(root, "remote", "add", "origin", "https://github.com/acme/widgets.git")
-    _interactive(monkeypatch, ["n", "n", "y"])
+
+    def answer(prompt: str) -> str:
+        if "必須ラベル" not in prompt:
+            return "n"
+        assert _isolate_side_effects.label_checks == [root]
+        assert _isolate_side_effects.labels == []
+        assert "acme/widgets" in capsys.readouterr().out
+        return approval
+
+    monkeypatch.setattr(init_command, "_interactive", lambda: True)
+    monkeypatch.setattr("builtins.input", answer)
+
     assert _run(root, monkeypatch, []) == 0
-    assert "acme/widgets" in capsys.readouterr().out
-    assert _isolate_side_effects.labels == [root]
+    assert _isolate_side_effects.labels == ([root] if approval == "y" else [])
 
 
 def test_unresolvable_origin_skips_label_creation(
@@ -288,7 +330,8 @@ def test_label_failure_still_runs_doctor_and_exits_1(
     root = _repo(tmp_path / "repo")
     _git(root, "remote", "add", "origin", "git@github.com:acme/widgets.git")
 
-    def failed(*_args: object, cwd: Path = Path(), **_kwargs: object) -> int:
+    def failed(*, cwd: Path, confirm: Callable[[str], bool]) -> int:
+        assert confirm("acme/widgets")
         _isolate_side_effects.labels.append(cwd)
         return 1
 

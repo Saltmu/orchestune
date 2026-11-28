@@ -15,7 +15,7 @@ from orchestune.dispatch.config.model import DispatcherConfig
 from orchestune.dispatch.reporting.promotion import promotion_report_journal_path
 from orchestune.dispatch.status_repair import status_intent_journal_path
 from orchestune.infra.git_cli import query_path_ignore
-from orchestune.infra.process_utils import FileLock
+from orchestune.infra.process_utils import FileLock, FileLockContentionError
 
 FileKind = Literal["absent", "regular", "symlink", "other", "unreadable"]
 Action = Literal["append", "present", "manual", "held"]
@@ -106,8 +106,11 @@ def apply_ignore_plan(root: Path, plan: IgnorePlan) -> None:
             raise IgnoreApplyError(1, "gitignore cannot be updated automatically")
         return
     lock = FileLock(root / ".git" / "orchestune-init-gitignore.lock", timeout=5)
-    with lock:
-        _apply_locked(root / ".gitignore", plan, [rule for rule in rules if rule])
+    try:
+        with lock:
+            _apply_locked(root / ".gitignore", plan, [rule for rule in rules if rule])
+    except (OSError, FileLockContentionError) as exc:
+        raise IgnoreApplyError(1, f"Could not update .gitignore: {exc}") from exc
 
 
 def _decide(
@@ -269,13 +272,12 @@ def _newline(existing: bytes) -> bytes:
 
 def _create_exclusive(path: Path, payload: bytes) -> None:
     try:
-        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0)
+        fd = os.open(path, flags, 0o644)
     except FileExistsError as exc:
         raise IgnoreApplyError(3, ".gitignore appeared after the diff") from exc
-    try:
-        os.write(fd, payload)
-    finally:
-        os.close(fd)
+    with os.fdopen(fd, "wb") as stream:
+        stream.write(payload)
 
 
 def _replace(path: Path, payload: bytes) -> None:
@@ -285,24 +287,11 @@ def _replace(path: Path, payload: bytes) -> None:
     )
     temporary = Path(name)
     try:
-        _write_all(descriptor, payload)
-        os.fchmod(descriptor, mode)
-    except OSError:
-        os.close(descriptor)
-        temporary.unlink(missing_ok=True)
-        raise
-    os.close(descriptor)
-    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(payload)
+        # Windows only supports toggling the read-only flag via chmod.
+        if os.name != "nt":
+            os.chmod(temporary, mode)
         os.replace(temporary, path)
-    except OSError:
+    finally:
         temporary.unlink(missing_ok=True)
-        raise
-
-
-def _write_all(descriptor: int, payload: bytes) -> None:
-    view = memoryview(payload)
-    while view:
-        written = os.write(descriptor, view)
-        if written <= 0:
-            raise OSError("incomplete write")
-        view = view[written:]

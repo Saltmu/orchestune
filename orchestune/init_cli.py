@@ -135,13 +135,26 @@ def _base_step(progress: _Progress) -> int | None:
     if progress.dry_run:
         progress.notes.append("基本の除外は dry-run のため未実施")
         return None
-    if not _confirm("基本の除外を .gitignore に反映しますか?"):
-        progress.skip_save = True
-        progress.notes.append(
-            "除外を承認しなかったため、スキル導入と設定保存を見送ります。"
-        )
+    if all(item.action == "present" for item in plan.decisions):
         return None
-    return _commit_plan(progress, plan)
+    has_changes = any(item.action == "append" for item in plan.decisions)
+    if not has_changes or not _confirm("基本の除外を .gitignore に反映しますか?"):
+        _skip_base_writes(progress)
+        return None
+    stopped = _commit_plan(progress, plan)
+    if stopped is None and (
+        progress.failure
+        or any(item.action in {"manual", "held"} for item in plan.decisions)
+    ):
+        _skip_base_writes(progress)
+    return stopped
+
+
+def _skip_base_writes(progress: _Progress) -> None:
+    progress.skip_save = True
+    progress.notes.append(
+        "必要な除外が揃っていないため、スキル導入と設定保存を見送ります。"
+    )
 
 
 def _runtime_step(progress: _Progress) -> int | None:
@@ -297,18 +310,26 @@ def _label_step(progress: _Progress) -> int | None:
             "checkout の GitHub リポジトリを照合できないため、ラベルは作りません。"
         )
         return None
-    _say(Level.INFO, f"GitHub ラベルの対象: {slug}")
-    if not _confirm("このリポジトリの必須ラベルを準備しますか?"):
-        progress.notes.append("ラベル準備をスキップしました。")
-        return None
-    if prepare_github_labels(cwd=progress.root) != 0:
+    approved = False
+
+    def confirm(repository: str) -> bool:
+        nonlocal approved
+        _say(Level.INFO, f"GitHub ラベルの対象: {repository}")
+        approved = _confirm("このリポジトリの必須ラベルを準備しますか?")
+        return approved
+
+    if prepare_github_labels(cwd=progress.root, confirm=confirm) != 0:
         progress.failure = True
         progress.notes.append(
             "ラベル準備に失敗したか、対象が一致しないため作成を見送りました。"
         )
         _say(Level.INFO, "再実行すると既存ラベルを確認し、不足分だけを作成します。")
         return None
-    progress.notes.append("GitHub ラベルを確認しました。")
+    progress.notes.append(
+        "GitHub ラベルを確認しました。"
+        if approved
+        else "ラベル準備をスキップしました。"
+    )
     return None
 
 

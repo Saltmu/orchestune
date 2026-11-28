@@ -4,6 +4,7 @@ import argparse
 import re
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol, cast
 from urllib.parse import urlparse
@@ -110,9 +111,12 @@ def run_bootstrap(forge: RepoAdminForge | None = None, cwd: Path = Path(".")) ->
 
 
 def prepare_github_labels(
-    forge: RepoAdminForge | None = None, *, cwd: Path = Path(".")
+    forge: RepoAdminForge | None = None,
+    *,
+    cwd: Path = Path("."),
+    confirm: Callable[[str], bool] | None = None,
 ) -> int:
-    """必須ラベルだけを用意する。初回コミットと push は行わない。"""
+    """照合済みの対象を確認してから、不足する必須ラベルを作成する。"""
     forge = forge or GitHubForge()
     checkout = _checkout_github_repository(cwd)
     if checkout is None:
@@ -126,6 +130,8 @@ def prepare_github_labels(
         return _fail(
             f"GitHub target mismatch: checkout {checkout}, effective {effective}"
         )
+    if confirm is not None and not confirm(checkout):
+        return 0
     return _apply_required_labels(forge, repository=checkout)
 
 
@@ -133,7 +139,8 @@ def _apply_required_labels(
     forge: RepoAdminForge, *, repository: str | None = None
 ) -> int:
     try:
-        forge.check_auth()
+        if repository is None:
+            forge.check_auth()
         result = _ensure_required_labels(forge, repository)
     except ForgeError as error:
         return _fail(str(error))

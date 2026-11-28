@@ -17,6 +17,7 @@ from orchestune.init_ignore import (
     plan_diff,
     runtime_candidates,
 )
+from tests.symlink_support import create_test_symlink
 
 _RUNTIME_PATHS = {
     "run_state.json",
@@ -73,6 +74,28 @@ def test_preserves_crlf_and_existing_bytes(tmp_path: Path) -> None:
     )
 
 
+def test_failed_replace_preserves_gitignore_and_cleans_up(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _repo(tmp_path / "repo")
+    path = root / ".gitignore"
+    original = b"# keep\n"
+    path.write_bytes(original)
+    plan = build_ignore_plan(root, base_candidates(root))
+
+    def refuse_replace(_source: Path, _destination: Path) -> None:
+        raise PermissionError("cannot replace file")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(init_ignore.os, "replace", refuse_replace)
+        with pytest.raises(IgnoreApplyError) as caught:
+            apply_ignore_plan(root, plan)
+
+    assert caught.value.code == 1
+    assert path.read_bytes() == original
+    assert list(root.glob(".gitignore.orchestune-*")) == []
+
+
 def test_already_ignored_paths_stay_present(tmp_path: Path) -> None:
     root = _repo(tmp_path / "repo")
     path = root / ".gitignore"
@@ -116,7 +139,7 @@ def test_symlink_outside_the_repository_is_manual(tmp_path: Path) -> None:
     outside = tmp_path / "outside"
     outside.mkdir()
     link = root / "linked-out"
-    link.symlink_to(outside, target_is_directory=True)
+    create_test_symlink(link, outside, target_is_directory=True)
     plan = build_ignore_plan(root, ((link, True),))
     assert plan.decisions[0].action == "manual"
     assert plan.decisions[0].reason == "path leaves the repository"
@@ -155,7 +178,7 @@ def test_symlink_gitignore_is_not_replaced(tmp_path: Path) -> None:
     root = _repo(tmp_path / "repo")
     target = tmp_path / "elsewhere"
     target.write_text("leave\n", encoding="utf-8")
-    (root / ".gitignore").symlink_to(target)
+    create_test_symlink(root / ".gitignore", target)
     plan = build_ignore_plan(root, base_candidates(root))
     assert plan.file_kind == "symlink"
     apply_ignore_plan(root, plan)
@@ -225,7 +248,7 @@ def test_existing_temp_symlink_is_not_overwritten(tmp_path: Path) -> None:
     keep = root / "keep.txt"
     keep.write_text("safe\n", encoding="utf-8")
     link = root / "..gitignore.orchestune-tmp"
-    link.symlink_to(keep)
+    create_test_symlink(link, keep)
     gitignore = root / ".gitignore"
     gitignore.write_text("# old\n", encoding="utf-8")
     mode = gitignore.stat().st_mode & 0o777

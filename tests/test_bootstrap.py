@@ -510,15 +510,40 @@ class TestPrepareGitHubLabels:
 
         assert exit_code == 1
 
+    @pytest.mark.parametrize("approved", [True, False])
+    def test_confirms_verified_repository_before_label_writes(
+        self, tmp_path: Path, approved: bool
+    ) -> None:
+        local = _git_with_origin(tmp_path, "https://github.com/Owner/Repo.git")
+        forge = MagicMock()
+        forge.read_effective_repository.return_value = "owner/repo"
+
+        def confirm(repository: str) -> bool:
+            assert repository == "Owner/Repo"
+            forge.check_auth.assert_called_once_with()
+            forge.read_effective_repository.assert_called_once_with(cwd=local)
+            forge.ensure_labels.assert_not_called()
+            return approved
+
+        assert prepare_github_labels(forge=forge, cwd=local, confirm=confirm) == 0
+        if approved:
+            forge.ensure_labels.assert_called_once_with(
+                REQUIRED_LABELS, repository="Owner/Repo"
+            )
+        else:
+            forge.ensure_labels.assert_not_called()
+
     def test_auth_failure_does_not_create_labels(self, tmp_path: Path, capsys) -> None:
         local = _git_with_origin(tmp_path, "https://github.com/owner/repo.git")
         forge = MagicMock()
         forge.check_auth.side_effect = ForgeAuthError("boom")
 
-        exit_code = prepare_github_labels(forge=forge, cwd=local)
+        confirm = MagicMock()
+        exit_code = prepare_github_labels(forge=forge, cwd=local, confirm=confirm)
 
         assert exit_code == 1
         assert "boom" in capsys.readouterr().err
+        confirm.assert_not_called()
         forge.ensure_labels.assert_not_called()
         forge.read_effective_repository.assert_not_called()
 
