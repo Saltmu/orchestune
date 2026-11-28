@@ -59,6 +59,8 @@ reviewer-bot = "auto"                       # per-target vendor mapping: see [re
 # Never commit credentials. For cloud routine tokens, use the
 # ORCHESTUNE_ROUTINE_TOKEN environment variable (prohibited in TOML).
 # local-cmd = "codex exec ..."
+# Muse bridge (agent without a CLI, see docs setup section 5):
+# local-cmd = "python3 scripts/muse_bridge.py --issue {issue_number} --branch {branch_name} --worktree {worktree_path} --context {context_json}"
 # routine-id = "your-routine-id"
 # codex-cloud-env = "your-environment-id"
 
