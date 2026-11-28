@@ -196,6 +196,30 @@ def test_runtime_paths_use_loader_and_base_covers_report_dir(tmp_path: Path) -> 
     assert by_path["events.jsonl"] == "append"
 
 
+def test_hyphenated_runtime_keys_follow_the_validated_config(tmp_path: Path) -> None:
+    root = _repo(tmp_path / "repo")
+    (root / "orchestune.toml").write_text(
+        "\n".join(
+            (
+                'run-state-path = "custom/state.json"',
+                'events-log-path = "custom/events.jsonl"',
+                'worktree-root = "custom/worktrees"',
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    candidates = runtime_candidates(root)
+    assert candidates is not None
+    names = {path.relative_to(root).as_posix() for path, _directory in candidates}
+    assert "custom/state.json" in names
+    assert "custom/state.lock" in names
+    assert "custom/state.status-intents.json" in names
+    assert "custom/state.promotion-reports.json" in names
+    assert "custom/events.jsonl" in names
+    assert "custom/worktrees" in names
+
+
 def test_unreadable_config_returns_no_runtime_candidates(tmp_path: Path) -> None:
     root = _repo(tmp_path / "repo")
     (root / "orchestune.toml").write_text("[\n", encoding="utf-8")

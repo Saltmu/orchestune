@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 
 import orchestune.init_cli as init_command
+from orchestune.config_contracts import ConfigError
+from orchestune.config_wizard.storage import ConfigConflictError, ConfigStorageError
 from orchestune.config_wizard.wizard import WizardResult
 from orchestune.dispatch.doctor.check import DoctorRequest
 from orchestune.dispatch.doctor.models import Diagnostic, DiagnosticStatus, DoctorReport
@@ -345,6 +347,50 @@ def test_subdirectory_writes_the_root_gitignore(
     assert main([]) == 0
     assert Path.cwd() == nested
     assert (root / ".gitignore").is_file()
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (ConfigConflictError("changed"), 3),
+        (ConfigError("bad"), 2),
+        (ConfigStorageError("io"), 1),
+        (RuntimeError("boom"), 1),
+    ],
+)
+def test_wizard_boundary_errors_stop_later_steps(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _isolate_side_effects: _Calls,
+    error: Exception,
+    expected: int,
+) -> None:
+    root = _repo(tmp_path / "repo")
+
+    def wizard(_mode: str, _project_dir: Path, _prompt: object) -> WizardResult:
+        raise error
+
+    monkeypatch.setattr(init_command, "run_config_wizard", wizard)
+    _interactive(monkeypatch, ["y", "skip", "y"])
+    assert _run(root, monkeypatch, []) == expected
+    assert _isolate_side_effects.doctor == []
+    assert _isolate_side_effects.labels == []
+
+
+def test_wizard_eof_returns_130(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _isolate_side_effects: _Calls,
+) -> None:
+    root = _repo(tmp_path / "repo")
+
+    def wizard(_mode: str, _project_dir: Path, _prompt: object) -> WizardResult:
+        raise EOFError
+
+    monkeypatch.setattr(init_command, "run_config_wizard", wizard)
+    _interactive(monkeypatch, ["y", "skip", "y"])
+    assert _run(root, monkeypatch, []) == 130
+    assert _isolate_side_effects.doctor == []
 
 
 def test_help_lists_dry_run_and_offline(capsys: pytest.CaptureFixture[str]) -> None:

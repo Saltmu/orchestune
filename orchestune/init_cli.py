@@ -11,8 +11,10 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from orchestune.bootstrap import prepare_github_labels
+from orchestune.config_contracts import ConfigError
 from orchestune.config_wizard.ci_candidates import suggest_ci_commands
 from orchestune.config_wizard.cli import TerminalPromptPort
+from orchestune.config_wizard.storage import ConfigConflictError, ConfigStorageError
 from orchestune.config_wizard.wizard import WizardResult, run_config_wizard
 from orchestune.dispatch.doctor.check import DoctorRequest, run_doctor
 from orchestune.dispatch.doctor.cli import render_report
@@ -242,10 +244,33 @@ def _config_step(progress: _Progress) -> int | None:
     if not _confirm(question):
         progress.notes.append("設定の保存をスキップしました。")
         return None
-    result = run_config_wizard(
-        "edit" if exists else "init", progress.root, TerminalPromptPort()
-    )
+    try:
+        result = _run_wizard(progress, exists)
+    except (KeyboardInterrupt, EOFError):
+        raise
+    except Exception as exc:  # noqa: BLE001 - boundary: map wizard failures to init exits
+        return _wizard_failure(exc)
     return _wizard_result(progress, result)
+
+
+def _run_wizard(progress: _Progress, exists: bool) -> WizardResult:
+    if exists:
+        return run_config_wizard("edit", progress.root, TerminalPromptPort())
+    return run_config_wizard("init", progress.root, TerminalPromptPort())
+
+
+def _wizard_failure(exc: Exception) -> int:
+    if isinstance(exc, ConfigConflictError):
+        _say(Level.FAILURE, f"設定が競合しました: {exc}")
+        return 3
+    if isinstance(exc, ConfigError):
+        _say(Level.FAILURE, f"設定エラー: {exc}")
+        return 2
+    if isinstance(exc, ConfigStorageError):
+        _say(Level.FAILURE, f"設定を保存できません: {exc}")
+        return 1
+    _say(Level.FAILURE, f"設定ウィザードが失敗しました: {exc}")
+    return 1
 
 
 def _wizard_result(progress: _Progress, result: WizardResult) -> int | None:
