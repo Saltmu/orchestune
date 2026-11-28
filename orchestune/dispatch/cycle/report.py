@@ -27,6 +27,28 @@ if TYPE_CHECKING:
     from orchestune.dispatch.execution_profiles import ExecutionSelection
 
 
+@dataclass(frozen=True)
+class LocalCliPreview:
+    """Launch plan for a local CLI preview. It does not include argv or prompts."""
+
+    target: str
+    reviewer: str | None
+    command_source: str
+    requires_unsafe_opt_in: bool
+    warning_code: str | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "target": self.target,
+            "reviewer": self.reviewer,
+            "command_source": self.command_source,
+            "requires_unsafe_opt_in": self.requires_unsafe_opt_in,
+        }
+        if self.warning_code is not None:
+            payload["warning_code"] = self.warning_code
+        return payload
+
+
 @dataclass
 class CycleReport:
     selected: list[TaskMetadata]
@@ -55,6 +77,7 @@ class CycleReport:
     )
     stage: str = "scheduling"
     scheduling_deferred_reason: str | None = None
+    local_cli_preview: LocalCliPreview | None = None
 
 
 def build_event_log_entry(report: CycleReport, now: float) -> dict[str, object]:

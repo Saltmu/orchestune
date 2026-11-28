@@ -983,7 +983,13 @@ class TestDispatcherConfigLoading:
     ):
         with pytest.raises(SystemExit) as excinfo:
             main(
-                ["--parent-issue", "100", "--dispatch-target", "claude-cli"],
+                [
+                    "--parent-issue",
+                    "100",
+                    "--apply",
+                    "--dispatch-target",
+                    "claude-cli",
+                ],
                 cwd=tmp_path,
             )
         assert excinfo.value.code == 2
@@ -997,10 +1003,14 @@ class TestDispatcherConfigLoading:
             autospec=True,
             return_value=self._empty_report(),
         ):
+            (tmp_path / "orchestune.toml").write_text(
+                'ci-command = "pytest"\n', encoding="utf-8"
+            )
             code = main(
                 [
                     "--parent-issue",
                     "100",
+                    "--apply",
                     "--dispatch-target",
                     "claude-cli",
                     "--allow-unsafe-agent-execution",
